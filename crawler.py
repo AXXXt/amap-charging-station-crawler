@@ -452,8 +452,12 @@ class AmapCrawler:
         self.visual_checker = visual_checker  # 可选视觉自检器
     
 
-    def search_stations(self, city, query=None):
-        """搜索指定区县的重卡充电站"""
+    def search_stations(self, city, query=None, recenter_only=False):
+        """搜索指定区县的重卡充电站
+        
+        Args:
+            recenter_only: 仅切换城市定位，不解析站点列表
+        """
         if query is None:
             query = f"{city}{SEARCH_KEYWORD}"
         print(f"\n  [搜索] {query}")
@@ -513,6 +517,10 @@ class AmapCrawler:
         
         # Parse search results
         xml = self.d.dump_hierarchy()
+        
+        # recenter_only: 不解析站点，直接返回空列表
+        if recenter_only:
+            return []
         stations = []
         for m in re.finditer(r'<node[^>]*>', xml):
             node_str = m.group()
@@ -651,6 +659,11 @@ class AmapCrawler:
         print(f"\n{'='*50}")
         print(f"  城市: {city}")
         print(f"{'='*50}")
+        
+        # === 先搜索城市名切换地图中心 ===
+        # 跨城市搜索前必须先定位到目标城市，否则高德只搜当前地图范围
+        print(f"  [定位] 切换到 {city}...")
+        self.search_stations(city, query=f"{city}市", recenter_only=True)
         
         # 生成该城市的所有搜索query
         districts = CITY_DISTRICTS.get(city, [city])

@@ -460,41 +460,40 @@ def _run_crawl_task(cities, use_visual=False):
             task_state["current_city"] = city
             _log(f"开始采集: {city}")
             
-            # 按区县遍历
-            districts = CITY_DISTRICTS.get(city, [city])
-            
-            for di, district in enumerate(districts):
-                if not task_state["running"]:
-                    _log("任务被用户停止")
-                    break
-                
-                query = f"{city}{district}重卡充电站" if district != city else f"{city}重卡充电站"
-                _log(f"  搜索: {query}")
-                
-                try:
-                    stations = crawler.search_stations(city, query)
-                    _log(f"  找到 {len(stations)} 个站点")
-                    
-                    for si, station in enumerate(stations):
-                        if not task_state["running"]:
-                            break
-                        
-                        task_state["current_station"] = station["name"][:30]
-                        task_state["progress"]["done"] += 1
-                        
-                        try:
-                            result = crawler.collect_detail(station, city)
-                            if result:
-                                crawler.results.append(result)
-                                _log(f"    OK: {result.get('station_name', '?')[:30]}")
-                        except Exception as e:
-                            _log(f"    FAIL: {str(e)[:60]}")
-                            
-                except Exception as e:
-                    _log(f"  搜索失败: {str(e)[:60]}")
-            
             if not task_state["running"]:
                 break
+            
+            try:
+                # 使用 crawler.run_city() — 自动处理城市定位 + 区县遍历
+                # 重写 run_city 的输出来捕获日志
+                orig_run = crawler.run_city
+                
+                # Monkey-patch: 拦截 search_stations 来更新进度
+                orig_search = crawler.search_stations
+                def search_with_progress(city, query=None, recenter_only=False):
+                    task_state["current_station"] = query or ""
+                    result = orig_search(city, query, recenter_only)
+                    if not recenter_only and result:
+                        _log(f"  找到 {len(result)} 个站点")
+                    return result
+                crawler.search_stations = search_with_progress
+                
+                # Monkey-patch: 拦截 collect_detail 来更新进度
+                orig_collect = crawler.collect_detail
+                def collect_with_progress(station, city):
+                    task_state["current_station"] = station["name"][:30]
+                    task_state["progress"]["done"] += 1
+                    result = orig_collect(station, city)
+                    if result:
+                        _log(f"    OK: {result.get('station_name', '?')[:30]}")
+                    return result
+                crawler.collect_detail = collect_with_progress
+                
+                n = crawler.run_city(city)
+                _log(f"  城市 {city} 完成: {n} 个站点")
+                
+            except Exception as e:
+                _log(f"  城市 {city} 异常: {str(e)[:80]}")
         
         # 去重
         crawler.deduplicate_results()

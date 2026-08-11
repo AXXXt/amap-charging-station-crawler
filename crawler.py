@@ -680,6 +680,7 @@ class AmapCrawler:
                 continue
             
             print(f"    该区县发现 {len(stations)} 个站点")
+            mismatch_count = 0
             for i, station in enumerate(stations):
                 try:
                     result = self.collect_detail(station, city)

@@ -114,9 +114,13 @@ class VisualChecker:
                     return PageState.POPUP_BLOCKING, info
                 
                 type_map = {
+                    "detail": PageState.DETAIL_PAGE,
                     "detail_page": PageState.DETAIL_PAGE,
+                    "search": PageState.SEARCH_RESULTS,
                     "search_results": PageState.SEARCH_RESULTS,
+                    "home": PageState.MAP_VIEW,
                     "map_view": PageState.MAP_VIEW,
+                    "popup": PageState.POPUP_BLOCKING,
                 }
                 return type_map.get(page_type, PageState.UNKNOWN), info
                 
@@ -279,6 +283,115 @@ def integrate_with_crawler(crawler_instance, visual_model_func=None):
         return original_collect(station, city)
     
     crawler_instance.collect_detail = checked_collect
+    return checker
+
+
+
+
+# ============================================================
+# 千问 (Qianwen) 视觉模型适配器
+# ============================================================
+class QianwenVisionAdapter:
+    """
+    千问免费视觉模型适配器
+    使用 qwen3-vl-flash，OpenAI 兼容接口
+    """
+    
+    def __init__(self, api_key=None, model="qwen3-vl-flash"):
+        self.api_key = api_key or "sk-ws-H.EEHDRPE.0xeZ.MEQCIBhG18l3ZpKeOPQSQ8GQruFOBQ0CUdT66pbTRJ7Z9eaUAiAU_tiwR_UafO4oz5ppwY8jV0pMsZOx6C6bNL__BE8ppA"
+        self.model = model
+        self.endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    
+    def __call__(self, image_path):
+        """调用千问视觉模型分析页面截图"""
+        import base64, requests, json, re
+        
+        with open(image_path, "rb") as f:
+            img_b64 = base64.b64encode(f.read()).decode()
+        
+        prompt = """这是高德地图App的当前截图。请严格判断页面状态，只返回JSON（不要任何其他文字）：
+
+{
+  "page_type": "home(地图首页)/search(搜索页)/detail(充电站详情页)/popup(弹窗)/other(其他)",
+  "has_popup": true或false,
+  "popup_description": "如果has_popup为true，描述弹窗内容；否则为空字符串",
+  "is_normal": true或false,
+  "suggestion": "如果is_normal为false，给出恢复建议；否则为空字符串"
+}
+
+判断标准：
+- home: 地图首页，底部有"首页/探路/消息/我的"tab，中间有搜索栏
+- search: 顶部有搜索输入框，显示搜索结果列表
+- detail: 显示某个充电站的详细信息（名称、地址、电价、设备等）
+- popup: 有权限弹窗、广告、更新提示等遮挡层
+- other: 以上都不是（如设置页、其他App等）"""
+
+        try:
+            resp = requests.post(
+                self.endpoint,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": self.model,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                            {"type": "text", "text": prompt}
+                        ]
+                    }]
+                },
+                timeout=30
+            )
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                
+                # 尝试从返回中提取JSON
+                json_match = re.search(r'\{[^{}]*\}', content, re.DOTALL)
+                if json_match:
+                    result = json.loads(json_match.group())
+                    result["_tokens"] = data.get("usage", {}).get("total_tokens", 0)
+                    return result
+            
+            # API失败时返回fallback
+            return {
+                "page_type": "other",
+                "has_popup": False,
+                "popup_description": "",
+                "is_normal": True,
+                "suggestion": "",
+                "_error": f"API status {resp.status_code}"
+            }
+            
+        except Exception as e:
+            return {
+                "page_type": "other",
+                "has_popup": False,
+                "popup_description": "",
+                "is_normal": True,
+                "suggestion": "",
+                "_error": str(e)
+            }
+
+
+def create_qianwen_checker(device_serial="RFCXA0W194D"):
+    """
+    快速创建带千问视觉模型的 VisualChecker
+    
+    Usage:
+        from visual_check import create_qianwen_checker
+        checker = create_qianwen_checker()
+        state, info = checker.check()
+    """
+    import uiautomator2 as u2
+    
+    d = u2.connect(device_serial)
+    adapter = QianwenVisionAdapter()
+    checker = VisualChecker(d, visual_model_func=adapter)
     return checker
 
 

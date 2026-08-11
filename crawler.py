@@ -446,9 +446,10 @@ def geocode(address, city="郑州"):
 # DEVICE CONTROL
 # ============================================================
 class AmapCrawler:
-    def __init__(self, serial=DEVICE_SERIAL):
+    def __init__(self, serial=DEVICE_SERIAL, visual_checker=None):
         self.d = u2.connect(serial)
         self.results = []
+        self.visual_checker = visual_checker  # 可选视觉自检器
     
 
     def search_stations(self, city, query=None):
@@ -540,6 +541,21 @@ class AmapCrawler:
         # Click station
         self.d.click(station["cx"], station["cy"])
         time.sleep(3)
+        
+        # === Visual check (if available) ===
+        if self.visual_checker:
+            state, vinfo = self.visual_checker.check(use_visual=True)
+            if state.name == "POPUP_BLOCKING":
+                print(f"      [视觉] 检测到弹窗: {vinfo.get('visual_result',{}).get('popup_description','')}")
+                self.visual_checker.recover()
+                time.sleep(2)
+            elif state.name == "UNKNOWN" and not vinfo.get("visual_result", {}).get("is_normal", True):
+                print(f"      [视觉] 页面异常，尝试back恢复")
+                self.d.press("back")
+                time.sleep(2)
+                # 重试点击
+                self.d.click(station["cx"], station["cy"])
+                time.sleep(3)
         
         # Dump 1: initial view + classify
         xml1 = self.d.dump_hierarchy()

@@ -1,4 +1,4 @@
-﻿"""
+"""
 api_server.py — 重卡充电站数据API服务
 功能：
   1. 提供RESTful API供其他平台使用
@@ -35,7 +35,10 @@ DB_CONFIG = {
 }
 
 def get_db():
-    return pymysql.connect(**DB_CONFIG)
+    try:
+        return pymysql.connect(**DB_CONFIG)
+    except Exception:
+        return None
 
 
 # ============================================================
@@ -91,6 +94,8 @@ class StationResponse(BaseModel):
 def init_db():
     """创建数据表（如果不存在）"""
     conn = get_db()
+    if conn is None:
+        raise HTTPException(503, "数据库不可用，请先配置MySQL连接")
     cur = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS heavy_truck_stations (
@@ -136,8 +141,12 @@ def init_db():
 # ============================================================
 @app.on_event("startup")
 async def startup():
-    init_db()
-    print("  DB initialized")
+    try:
+        init_db()
+        print("  MySQL connected")
+    except Exception as e:
+        print(f"  MySQL unavailable: {e}")
+        print("  Running in offline mode (task management + JSON only)")
 
 
 @app.get("/")
@@ -145,15 +154,32 @@ async def root():
     return {
         "service": "重卡充电站数据服务",
         "version": "1.0.0",
-        "endpoints": [
-            "GET /api/stations — 查询充电站列表",
-            "GET /api/stations/{id} — 查询单个充电站详情",
-            "GET /api/stations/nearby — 附近充电站查询",
-            "GET /api/stats — 统计概览",
-            "POST /api/stations/batch — 批量导入数据",
-        ]
+        "dashboard": "/dashboard",
+        "endpoints": {
+            "数据查询": [
+                "GET /api/stations — 充电站列表（分页+筛选）",
+                "GET /api/stations/{id} — 单站点详情",
+                "GET /api/stations/nearby?lng=&lat=&radius= — 附近站点",
+                "GET /api/stats — 统计概览",
+                "POST /api/stations/batch — 批量导入",
+            ],
+            "任务管理": [
+                "POST /api/tasks/start?cities=郑州&use_visual=false — 启动采集",
+                "POST /api/tasks/stop — 停止采集",
+                "GET /api/tasks/status — 采集进度",
+                "GET /api/tasks/results — 当前结果",
+            ]
+        }
     }
 
+
+
+def safe_db_query(query_func, default=None):
+    """安全执行数据库查询，MySQL不可用时返回默认值"""
+    try:
+        return query_func()
+    except Exception as e:
+        return default
 
 @app.get("/api/stations")
 async def list_stations(
@@ -164,6 +190,8 @@ async def list_stations(
 ):
     """查询充电站列表，支持分页和筛选"""
     conn = get_db()
+    if conn is None:
+        return {"total": 0, "page": page, "page_size": page_size, "total_pages": 0, "data": [], "offline": True}
     cur = conn.cursor(pymysql.cursors.DictCursor)
     
     where = []
@@ -218,6 +246,8 @@ async def list_stations(
 async def get_station(station_id: int):
     """查询单个充电站完整详情"""
     conn = get_db()
+    if conn is None:
+        return {"total": 0, "page": page, "page_size": page_size, "total_pages": 0, "data": [], "offline": True}
     cur = conn.cursor(pymysql.cursors.DictCursor)
     cur.execute(
         """SELECT * FROM heavy_truck_stations WHERE id = %s""",
@@ -246,6 +276,8 @@ async def nearby_stations(
 ):
     """根据经纬度查询附近充电站（简化版Haversine公式）"""
     conn = get_db()
+    if conn is None:
+        return {"total": 0, "page": page, "page_size": page_size, "total_pages": 0, "data": [], "offline": True}
     cur = conn.cursor(pymysql.cursors.DictCursor)
     cur.execute(
         """SELECT id, station_name, operator, address, city, current_price,
@@ -281,6 +313,8 @@ async def nearby_stations(
 async def get_stats():
     """统计概览：各城市站点数量、运营商分布等"""
     conn = get_db()
+    if conn is None:
+        return {"total": 0, "page": page, "page_size": page_size, "total_pages": 0, "data": [], "offline": True}
     cur = conn.cursor(pymysql.cursors.DictCursor)
     
     # Total
@@ -313,6 +347,8 @@ async def get_stats():
 async def batch_import(stations: List[dict]):
     """批量导入充电站数据"""
     conn = get_db()
+    if conn is None:
+        raise HTTPException(503, "数据库不可用，请先配置MySQL连接")
     cur = conn.cursor()
     
     inserted = 0
@@ -368,6 +404,181 @@ async def batch_import(stations: List[dict]):
 
 
 # ============================================================
+
+
+# ============================================================
+# TASK MANAGEMENT (后台任务调度)
+# ============================================================
+import threading
+import sys
+import os
+
+# 全局任务状态
+task_state = {
+    "running": False,
+    "current_city": "",
+    "current_station": "",
+    "progress": {"done": 0, "total": 0},
+    "log": [],
+    "results": [],
+    "started_at": None,
+    "error": None,
+}
+
+def _log(msg):
+    """添加日志"""
+    from datetime import datetime
+    task_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+    if len(task_state["log"]) > 200:
+        task_state["log"] = task_state["log"][-100:]
+
+def _run_crawl_task(cities, use_visual=False):
+    """后台执行采集任务"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from crawler import AmapCrawler, CITY_DISTRICTS
+    
+    task_state["running"] = True
+    task_state["error"] = None
+    task_state["log"] = []
+    task_state["results"] = []
+    task_state["started_at"] = __import__('datetime').datetime.now().isoformat()
+    
+    _log(f"任务启动: {len(cities)} 个城市")
+    
+    try:
+        # 初始化
+        checker = None
+        if use_visual:
+            from visual_check import create_qianwen_checker
+            checker = create_qianwen_checker()
+            _log("视觉自检已启用 (qwen3-vl-flash)")
+        
+        crawler = AmapCrawler(visual_checker=checker)
+        
+        total_cities = len(cities)
+        for ci, city in enumerate(cities):
+            task_state["current_city"] = city
+            _log(f"开始采集: {city}")
+            
+            # 按区县遍历
+            districts = CITY_DISTRICTS.get(city, [city])
+            
+            for di, district in enumerate(districts):
+                if not task_state["running"]:
+                    _log("任务被用户停止")
+                    break
+                
+                query = f"{city}{district}重卡充电站" if district != city else f"{city}重卡充电站"
+                _log(f"  搜索: {query}")
+                
+                try:
+                    stations = crawler.search_stations(city, query)
+                    _log(f"  找到 {len(stations)} 个站点")
+                    
+                    for si, station in enumerate(stations):
+                        if not task_state["running"]:
+                            break
+                        
+                        task_state["current_station"] = station["name"][:30]
+                        task_state["progress"]["done"] += 1
+                        
+                        try:
+                            result = crawler.collect_detail(station, city)
+                            if result:
+                                crawler.results.append(result)
+                                _log(f"    OK: {result.get('station_name', '?')[:30]}")
+                        except Exception as e:
+                            _log(f"    FAIL: {str(e)[:60]}")
+                            
+                except Exception as e:
+                    _log(f"  搜索失败: {str(e)[:60]}")
+            
+            if not task_state["running"]:
+                break
+        
+        # 去重
+        crawler.deduplicate_results()
+        task_state["results"] = crawler.results
+        task_state["progress"]["total"] = len(crawler.results)
+        _log(f"任务完成: 共 {len(crawler.results)} 个站点（去重后）")
+        
+        # 自动保存
+        outpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task_result.json")
+        __import__('json').dump(
+            {"total": len(crawler.results), "stations": crawler.results},
+            open(outpath, "w", encoding="utf-8"),
+            ensure_ascii=False, indent=2
+        )
+        _log(f"结果已保存: task_result.json")
+        
+    except Exception as e:
+        task_state["error"] = str(e)
+        _log(f"任务异常: {e}")
+    finally:
+        task_state["running"] = False
+        task_state["current_city"] = ""
+        task_state["current_station"] = ""
+
+
+@app.post("/api/tasks/start")
+async def start_task(
+    cities: str = Query("郑州", description="城市列表，逗号分隔"),
+    use_visual: bool = Query(False, description="是否启用视觉自检"),
+):
+    """启动采集任务"""
+    if task_state["running"]:
+        raise HTTPException(400, "已有任务在运行，请先停止")
+    
+    city_list = [c.strip() for c in cities.split(",") if c.strip()]
+    
+    task_state["progress"] = {"done": 0, "total": 0}
+    task_state["log"] = []
+    
+    thread = threading.Thread(target=_run_crawl_task, args=(city_list, use_visual), daemon=True)
+    thread.start()
+    
+    return {"status": "started", "cities": city_list, "visual": use_visual}
+
+
+@app.post("/api/tasks/stop")
+async def stop_task():
+    """停止当前任务"""
+    task_state["running"] = False
+    return {"status": "stopped"}
+
+
+@app.get("/api/tasks/status")
+async def task_status():
+    """获取任务状态"""
+    return {
+        "running": task_state["running"],
+        "current_city": task_state["current_city"],
+        "current_station": task_state["current_station"],
+        "progress": task_state["progress"],
+        "started_at": task_state["started_at"],
+        "log": task_state["log"][-50:],  # 最近50条
+        "error": task_state["error"],
+    }
+
+
+@app.get("/api/tasks/results")
+async def task_results():
+    """获取当前任务结果"""
+    results = task_state["results"]
+    return {"total": len(results), "stations": results}
+
+
+@app.get("/dashboard")
+async def dashboard():
+    """Web控制台"""
+    from fastapi.responses import HTMLResponse
+    dashboard_html = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
+    if os.path.exists(dashboard_html):
+        with open(dashboard_html, "r", encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    return HTMLResponse("<h1>dashboard.html not found</h1>")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8800)

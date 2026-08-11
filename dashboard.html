@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>重卡充电站数据采集控制台</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f7fa;color:#333}
+.header{background:#1a1a2e;color:#fff;padding:16px 24px;display:flex;justify-content:space-between;align-items:center}
+.header h1{font-size:20px;font-weight:600}
+.header .status{font-size:13px;opacity:.8}
+.main{max-width:1200px;margin:0 auto;padding:20px;display:grid;grid-template-columns:360px 1fr;gap:20px}
+.card{background:#fff;border-radius:10px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.card h2{font-size:16px;margin-bottom:16px;padding-bottom:10px;border-bottom:2px solid #f0f0f0}
+.form-group{margin-bottom:14px}
+.form-group label{display:block;font-size:13px;font-weight:600;margin-bottom:6px;color:#555}
+.form-group select,.form-group input{width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px}
+.city-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.city-tag{padding:4px 10px;background:#e8f0fe;border:1px solid #c4d7f2;border-radius:14px;font-size:12px;cursor:pointer;user-select:none}
+.city-tag.active{background:#1a73e8;color:#fff;border-color:#1a73e8}
+.btn{padding:10px 20px;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;transition:.2s}
+.btn-primary{background:#1a73e8;color:#fff}
+.btn-primary:hover{background:#1557b0}
+.btn-danger{background:#ea4335;color:#fff}
+.btn-danger:hover{background:#c5221f}
+.btn-secondary{background:#f0f0f0;color:#555}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-row{display:flex;gap:10px;margin-top:20px}
+#progress-bar{height:8px;background:#e0e0e0;border-radius:4px;margin:12px 0;overflow:hidden}
+#progress-fill{height:100%;background:#1a73e8;width:0;transition:width .3s;border-radius:4px}
+#progress-text{font-size:13px;color:#666;text-align:center}
+#log-box{height:300px;overflow-y:auto;background:#1a1a2e;color:#0f0;font-family:monospace;font-size:12px;padding:12px;border-radius:6px;white-space:pre-wrap;line-height:1.6}
+.results-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #f0f0f0}
+th{background:#fafafa;font-weight:600;color:#555;position:sticky;top:0}
+tr:hover{background:#f8f9ff}
+.empty{text-align:center;padding:40px;color:#999}
+.loading{display:inline-block;width:16px;height:16px;border:2px solid #ccc;border-top-color:#1a73e8;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.badge{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.badge-running{background:#e8f5e9;color:#2e7d32}
+.badge-stopped{background:#fce4ec;color:#c62828}
+.badge-idle{background:#f5f5f5;color:#888}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>重卡充电站数据采集控制台</h1>
+  <div class="status" id="app-status">就绪</div>
+</div>
+
+<div class="main">
+  <!-- 左侧：任务配置 -->
+  <div>
+    <div class="card">
+      <h2>任务配置</h2>
+      <div class="form-group">
+        <label>选择城市（可多选）</label>
+        <div class="city-tags" id="city-tags"></div>
+      </div>
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="use-visual" style="width:auto;margin-right:6px">
+          启用视觉自检 (qwen3-vl-flash)
+        </label>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-start" onclick="startTask()">启动采集</button>
+        <button class="btn btn-danger" id="btn-stop" onclick="stopTask()" disabled>停止</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>采集进度</h2>
+      <div id="current-task">等待启动...</div>
+      <div id="progress-bar"><div id="progress-fill"></div></div>
+      <div id="progress-text">--/--</div>
+    </div>
+  </div>
+
+  <!-- 右侧：日志 + 结果 -->
+  <div>
+    <div class="card">
+      <h2>运行日志</h2>
+      <div id="log-box">等待任务启动...</div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="results-header">
+        <h2>采集结果</h2>
+        <span id="result-count" style="font-size:13px;color:#888"></span>
+      </div>
+      <div style="max-height:400px;overflow-y:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>站点名称</th>
+              <th>城市</th>
+              <th>运营商</th>
+              <th>电价</th>
+              <th>分时</th>
+            </tr>
+          </thead>
+          <tbody id="results-table">
+            <tr><td colspan="5" class="empty">暂无数据</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const CITIES = {
+  "郑州":["中原区","二七区","管城回族区","金水区","上街区","惠济区","中牟县","巩义市","荥阳市","新密市","新郑市","登封市"],
+  "洛阳":["老城区","西工区","瀍河区","涧西区","偃师区","孟津区","洛龙区","新安县","栾川县","嵩县","汝阳县","宜阳县","洛宁县","伊川县"],
+  "开封":["龙亭区","顺河回族区","鼓楼区","禹王台区","祥符区","杞县","通许县","尉氏县","兰考县"],
+  "南阳":["宛城区","卧龙区","南召县","方城县","西峡县","镇平县","内乡县","淅川县","社旗县","唐河县","新野县","桐柏县","邓州市"],
+  "许昌":["魏都区","建安区","鄢陵县","襄城县","禹州市","长葛市"],
+  "平顶山":["新华区","卫东区","石龙区","湛河区","宝丰县","叶县","鲁山县","郏县","舞钢市","汝州市"],
+  "新乡":["红旗区","卫滨区","凤泉区","牧野区","新乡县","获嘉县","原阳县","延津县","封丘县","卫辉市","辉县市","长垣市"],
+  "安阳":["文峰区","北关区","殷都区","龙安区","安阳县","汤阴县","滑县","内黄县","林州市"],
+  "焦作":["解放区","中站区","马村区","山阳区","修武县","博爱县","武陟县","温县","沁阳市","孟州市"],
+  "商丘":["梁园区","睢阳区","民权县","睢县","宁陵县","柘城县","虞城县","夏邑县","永城市"],
+  "周口":["川汇区","淮阳区","扶沟县","西华县","商水县","沈丘县","郸城县","太康县","鹿邑县","项城市"],
+  "驻马店":["驿城区","西平县","上蔡县","平舆县","正阳县","确山县","泌阳县","汝南县","遂平县","新蔡县"],
+  "信阳":["浉河区","平桥区","罗山县","光山县","新县","商城县","固始县","潢川县","淮滨县","息县"],
+  "漯河":["源汇区","郾城区","召陵区","舞阳县","临颍县"],
+  "三门峡":["湖滨区","陕州区","渑池县","卢氏县","义马市","灵宝市"],
+  "鹤壁":["鹤山区","山城区","淇滨区","浚县","淇县"],
+  "濮阳":["华龙区","清丰县","南乐县","范县","台前县","濮阳县"],
+  "济源":["济源"]
+};
+
+let selectedCities = [];
+let pollTimer = null;
+
+// 初始化城市标签
+function initCityTags() {
+  const container = document.getElementById('city-tags');
+  Object.keys(CITIES).forEach(city => {
+    const tag = document.createElement('span');
+    tag.className = 'city-tag';
+    tag.textContent = city;
+    tag.onclick = () => {
+      tag.classList.toggle('active');
+      if (tag.classList.contains('active')) {
+        if (!selectedCities.includes(city)) selectedCities.push(city);
+      } else {
+        selectedCities = selectedCities.filter(c => c !== city);
+      }
+    };
+    container.appendChild(tag);
+  });
+  // 默认选中郑州
+  container.querySelector('.city-tag').classList.add('active');
+  selectedCities = ['郑州'];
+}
+
+// 启动任务
+async function startTask() {
+  if (selectedCities.length === 0) {
+    alert('请至少选择一个城市');
+    return;
+  }
+  
+  const useVisual = document.getElementById('use-visual').checked;
+  const cities = selectedCities.join(',');
+  
+  document.getElementById('btn-start').disabled = true;
+  document.getElementById('btn-stop').disabled = false;
+  document.getElementById('app-status').innerHTML = '<span class="badge badge-running">采集中</span>';
+  
+  try {
+    const resp = await fetch(`/api/tasks/start?cities=${encodeURIComponent(cities)}&use_visual=${useVisual}`, {method:'POST'});
+    const data = await resp.json();
+    console.log('Task started:', data);
+    
+    // 开始轮询状态
+    pollTimer = setInterval(pollStatus, 2000);
+    pollStatus();
+  } catch(e) {
+    alert('启动失败: ' + e.message);
+    document.getElementById('btn-start').disabled = false;
+    document.getElementById('btn-stop').disabled = true;
+  }
+}
+
+// 停止任务
+async function stopTask() {
+  try {
+    await fetch('/api/tasks/stop', {method:'POST'});
+    document.getElementById('btn-start').disabled = false;
+    document.getElementById('btn-stop').disabled = true;
+    document.getElementById('app-status').innerHTML = '<span class="badge badge-stopped">已停止</span>';
+    if (pollTimer) clearInterval(pollTimer);
+  } catch(e) {}
+}
+
+// 轮询状态
+async function pollStatus() {
+  try {
+    const resp = await fetch('/api/tasks/status');
+    const data = await resp.json();
+    
+    // 更新进度
+    const done = data.progress?.done || 0;
+    const total = data.progress?.total || 0;
+    document.getElementById('current-task').textContent = 
+      data.running ? (data.current_city || '初始化...') : (total > 0 ? '已完成' : '空闲');
+    
+    if (total > 0) {
+      const pct = Math.min(100, Math.round(done / Math.max(total, done + 5) * 100));
+      document.getElementById('progress-fill').style.width = pct + '%';
+      document.getElementById('progress-text').textContent = `${done} 站点 (预计${total})`;
+    } else if (data.running) {
+      document.getElementById('progress-fill').style.width = '10%';
+      document.getElementById('progress-text').textContent = `采集中...`;
+    }
+    
+    // 更新日志
+    const logBox = document.getElementById('log-box');
+    if (data.log && data.log.length > 0) {
+      logBox.textContent = data.log.join('\n');
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+    
+    // 任务结束
+    if (!data.running && total > 0) {
+      document.getElementById('btn-start').disabled = false;
+      document.getElementById('btn-stop').disabled = true;
+      document.getElementById('app-status').innerHTML = '<span class="badge badge-idle">空闲</span>';
+      if (pollTimer) clearInterval(pollTimer);
+      loadResults();
+    }
+    
+    // 错误
+    if (data.error) {
+      document.getElementById('log-box').textContent += '\n\n[ERROR] ' + data.error;
+    }
+    
+  } catch(e) {
+    // 轮询失败，可能服务未启动
+  }
+}
+
+// 加载结果
+async function loadResults() {
+  try {
+    const resp = await fetch('/api/tasks/results');
+    const data = await resp.json();
+    const tbody = document.getElementById('results-table');
+    document.getElementById('result-count').textContent = `共 ${data.total} 条`;
+    
+    if (data.total === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无数据</td></tr>';
+      return;
+    }
+    
+    tbody.innerHTML = data.stations.map(s => `
+      <tr>
+        <td title="${s.station_name || ''}">${(s.station_name || '?').substring(0, 25)}</td>
+        <td>${s.search_city || '-'}</td>
+        <td>${s.operator || '-'}</td>
+        <td>${s.current_price ? s.current_price + '元/度' : '-'}</td>
+        <td>${s.fast_prices?.length || s.slow_prices?.length || 0} 时段</td>
+      </tr>
+    `).join('');
+  } catch(e) {}
+}
+
+// 页面加载
+initCityTags();
+loadResults();
+
+// 检查初始状态
+fetch('/api/tasks/status').then(r => r.json()).then(data => {
+  if (data.running) {
+    document.getElementById('btn-start').disabled = true;
+    document.getElementById('btn-stop').disabled = false;
+    document.getElementById('app-status').innerHTML = '<span class="badge badge-running">采集中</span>';
+    pollTimer = setInterval(pollStatus, 2000);
+    pollStatus();
+  }
+});
+</script>
+</body>
+</html>

@@ -77,6 +77,25 @@ checker = VisualChecker(d, visual_model_func=VisualModelAdapter(my_model))
 pip install uiautomator2 fastapi uvicorn pymysql requests
 ```
 
+## 环境变量
+
+敏感配置不写入代码仓库。PowerShell 示例：
+
+```powershell
+$env:DEVICE_SERIAL="你的设备序列号"
+$env:ADB_PATH="C:\Android\platform-tools\adb.exe"
+$env:AMAP_API_KEY="你的高德 Web 服务 Key"
+$env:DASHSCOPE_API_KEY="你的千问 API Key"  # 可选，仅视觉异常审查使用
+
+$env:DB_HOST="127.0.0.1"
+$env:DB_PORT="3306"
+$env:DB_USER="evcs_app"
+$env:DB_PASSWORD="你的数据库密码"
+$env:DB_NAME="evcs"
+```
+
+未配置 MySQL 时，采集与 SQLite 调度仍可运行；数据库类 API 会返回 `503`。
+
 ## 快速开始
 
 ### 1. 连接设备
@@ -86,10 +105,7 @@ adb devices
 # 应显示设备序列号，如 RFCXA0W194D
 ```
 
-修改 `crawler.py` 中的设备序列号：
-```python
-DEVICE_SERIAL = "你的设备序列号"
-```
+设置 `DEVICE_SERIAL`，或在批处理命令中通过 `--devices` 指定设备序列号。
 
 ### 2. 单城市测试
 
@@ -111,6 +127,16 @@ if __name__ == "__main__":
 
 ### 4. 启动 API 服务
 
+推荐直接双击项目根目录的 `start.bat`：
+
+- 自动启动端口 `8800` 的后端服务
+- 健康检查通过后自动打开控制台
+- 按任意键只停止本项目后端，不会结束其他 Python 程序
+- 启动日志：`logs/api_server.log`
+- 错误日志：`logs/api_server_error.log`
+
+也可以在终端中手动启动：
+
 ```bash
 python api_server.py
 # 服务运行在 http://localhost:8800
@@ -118,7 +144,7 @@ python api_server.py
 
 ### 5. 导入数据到 MySQL
 
-修改 `api_server.py` 中的数据库连接配置，然后：
+设置上文 `DB_*` 环境变量，然后：
 
 ```python
 import json, requests

@@ -10,16 +10,24 @@ import uiautomator2 as u2
 import time
 import re
 import json
+import os
+import subprocess
 import xml.etree.ElementTree as ET
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
+from urllib.parse import urlencode
+from page_state import PageKind, assess_page, normalize_station_name
 
 # ============================================================
 # CONFIG
 # ============================================================
-DEVICE_SERIAL = "RFCXA0W194D"
+DEVICE_SERIAL = os.getenv("DEVICE_SERIAL", "RFCXA0W194D")
+ADB_PATH = os.getenv(
+    "ADB_PATH",
+    r"C:\Users\26381\AppData\Local\Android\Sdk\platform-tools\adb.exe",
+)
 AMAP_PACKAGE = "com.autonavi.minimap"
-AMAP_API_KEY = "c0bbf114c048a8a74d66cb7c274ac379"
+AMAP_API_KEY = os.getenv("AMAP_API_KEY", "")
 SEARCH_KEYWORD = "重卡充电站"
 # 河南省各市及区县（按区县粒度搜索，避免遗漏）
 CITY_DISTRICTS = {
@@ -171,7 +179,11 @@ def parse_detail_xml(xml_text):
     
     # Station name
     for n in all_nodes:
-        if n["desc"] and "充电站" in n["desc"]:
+        station_name_markers = (
+            "充电站", "充换电站", "超充站", "快充站", "重卡站",
+            "充电场", "充电中心",
+        )
+        if n["desc"] and any(marker in n["desc"] for marker in station_name_markers):
             result["station_name"] = n["desc"]; break
     
     # Tags (dedup)
@@ -188,13 +200,18 @@ def parse_detail_xml(xml_text):
         "重卡车位", "桩多", "免费停车", "WIFI", "无障碍"
     ]
     result["facilities"] = list(dict.fromkeys(
-        t for t in texts if t in facility_set
+        facility
+        for text in texts
+        for facility in facility_set
+        if facility in text
     ))
     
     # Business hours
     for i, t in enumerate(texts):
         if t == "营业时间" and i + 1 < len(texts):
             result["business_hours"] = texts[i + 1]; break
+        if "暂无营业时间" in t:
+            result["business_hours"] = "暂无营业时间"; break
     
     # Distance & duration
     for t in texts:
@@ -207,16 +224,30 @@ def parse_detail_xml(xml_text):
     
     # Address
     for t in texts:
-        if len(t) >= 8 and ("区" in t or "路" in t or "街" in t or "号" in t):
+        address_markers = ("省", "市", "县", "区", "镇", "乡", "村", "路", "街", "道", "号", "高速")
+        if len(t) >= 6 and any(marker in t for marker in address_markers):
             if t.startswith("停车费") or t.startswith("占位费"): continue
             if any(bad in t for bad in ["通知", "K/s", "正在充电", "WLAN", "已选中", "未选中", "信号"]): continue
-            result["address"] = t; break
+            parts = [part.strip() for part in re.split(r"[|｜]", t) if part.strip()]
+            while parts and parts[0] in facility_set:
+                parts.pop(0)
+            result["address"] = " | ".join(parts) if parts else t
+            break
     
     # Operator
-    for t in texts:
-        if t in ["特来电", "新电途", "星星充电", "国家电网", "南方电网",
-                  "依威能源", "云快充", "万马爱充", "小桔充电", "快电", "蔚来"]:
-            result["operator"] = t; break
+    known_operators = [
+        "特来电", "新电途", "星星充电", "国家电网", "南方电网",
+        "依威能源", "云快充", "万马爱充", "小桔充电", "快电", "蔚来",
+    ]
+    for text in texts:
+        if text in known_operators:
+            result["operator"] = text
+            break
+    if not result["operator"] and result["station_name"]:
+        for operator in known_operators:
+            if operator in result["station_name"]:
+                result["operator"] = operator
+                break
     
     # Current price
     for i, t in enumerate(texts):
@@ -407,6 +438,9 @@ def merge_results(r1, r2):
 def geocode(address, city="郑州"):
     """高德地理编码：地址 → 经纬度"""
     import re
+
+    if not AMAP_API_KEY:
+        return None
     
     # 从地址中提取城市名（如"河南省洛阳市偃师区..."）
     city_match = re.search(r'([^省]+市)', address)
@@ -446,11 +480,137 @@ def geocode(address, city="郑州"):
 # DEVICE CONTROL
 # ============================================================
 class AmapCrawler:
-    def __init__(self, serial=DEVICE_SERIAL, visual_checker=None):
+    def __init__(self, serial=DEVICE_SERIAL, visual_checker=None, stop_event=None):
+        self.serial = serial
         self.d = u2.connect(serial)
         self.results = []
         self.visual_checker = visual_checker  # 可选视觉自检器
+        self.stop_event = stop_event
     
+
+
+    def _should_stop(self):
+        return self.stop_event is not None and self.stop_event.is_set()
+
+    def _ensure_amap_foreground(self):
+        current = self.d.app_current()
+        if current.get("package") == AMAP_PACKAGE:
+            return
+        self.d.app_start(AMAP_PACKAGE, stop=False)
+        if not self.d.app_wait(AMAP_PACKAGE, timeout=10):
+            raise RuntimeError("高德地图启动失败")
+        time.sleep(3)
+
+    def _wait_for_page(self, expected_kind, expected_station=None, timeout=6):
+        deadline = time.monotonic() + timeout
+        last_xml = ""
+        last_assessment = None
+        while time.monotonic() < deadline:
+            if self._should_stop():
+                return False, last_assessment, last_xml
+            last_xml = self.d.dump_hierarchy()
+            last_assessment = assess_page(last_xml, expected_station)
+            station_matches = not expected_station or last_assessment.expected_station_visible
+            if last_assessment.kind == expected_kind and station_matches:
+                return True, last_assessment, last_xml
+            time.sleep(0.6)
+        return False, last_assessment, last_xml
+
+    def _confirm_detail_page(self, station_name):
+        confirmed, assessment, _ = self._wait_for_page(
+            PageKind.DETAIL,
+            expected_station=station_name,
+            timeout=6,
+        )
+        if confirmed:
+            return True
+
+        if self._should_stop():
+            return False
+
+        if self.visual_checker:
+            try:
+                state, info = self.visual_checker.check(use_visual=True)
+                visual_result = info.get("visual_result", {})
+                print(
+                    f"      [视觉] 详情转场异常: xml={assessment.kind.value if assessment else 'unknown'}, "
+                    f"visual={state.name}"
+                )
+                if state.name == "POPUP_BLOCKING":
+                    print(f"      [视觉] 弹窗: {visual_result.get('popup_description', '')}")
+                    self.visual_checker.recover()
+                    confirmed, _, _ = self._wait_for_page(
+                        PageKind.DETAIL,
+                        expected_station=station_name,
+                        timeout=5,
+                    )
+                    return confirmed
+            except Exception as error:
+                print(f"      [视觉] 详情确认失败: {error}")
+        return False
+
+    def _open_poi_detail(self, station):
+        poi_id = (station.get("id") or "").strip()
+        if not poi_id:
+            return False
+
+        params = {
+            "poiname": station.get("name", ""),
+            "poiid": poi_id,
+        }
+        if station.get("latitude") not in (None, ""):
+            params["lat"] = station["latitude"]
+        if station.get("longitude") not in (None, ""):
+            params["lon"] = station["longitude"]
+
+        uri = f"amapuri://poi/detail?{urlencode(params)}"
+        remote_command = (
+            "am start -W -a android.intent.action.VIEW "
+            "-c android.intent.category.DEFAULT "
+            f"-d '{uri}' -p {AMAP_PACKAGE}"
+        )
+        try:
+            completed = subprocess.run(
+                [ADB_PATH, "-s", self.serial, "shell", remote_command],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+        except Exception as error:
+            print(f"      [POI] 唤起失败: {error}")
+            return False
+
+        if completed.returncode != 0 or "Error:" in completed.stdout:
+            message = (completed.stderr or completed.stdout).strip()
+            print(f"      [POI] 唤起失败: {message[:120]}")
+            return False
+
+        confirmed, assessment, _ = self._wait_for_page(
+            PageKind.DETAIL,
+            expected_station=station.get("name"),
+            timeout=8,
+        )
+        if confirmed:
+            return True
+
+        print(
+            f"      [POI] 未进入详情页: "
+            f"{assessment.kind.value if assessment else 'unknown'}"
+        )
+        return False
+
+    def _recover_to_search_results(self):
+        for _ in range(3):
+            current = self.d.app_current()
+            if current.get("package") != AMAP_PACKAGE:
+                self._ensure_amap_foreground()
+                return False
+            xml = self.d.dump_hierarchy()
+            if assess_page(xml).kind == PageKind.SEARCH_RESULTS:
+                return True
+            self.d.press("back")
+            time.sleep(1.5)
+        return assess_page(self.d.dump_hierarchy()).kind == PageKind.SEARCH_RESULTS
 
     def search_stations(self, city, query=None, recenter_only=False):
         """搜索指定区县的重卡充电站
@@ -458,9 +618,13 @@ class AmapCrawler:
         Args:
             recenter_only: 仅切换城市定位，不解析站点列表
         """
+        if self._should_stop():
+            return []
+
         if query is None:
             query = f"{city}{SEARCH_KEYWORD}"
         print(f"\n  [搜索] {query}")
+        self._ensure_amap_foreground()
         
         # Smart search bar: detect page state first, then use correct entry
         xml_pre = self.d.dump_hierarchy()
@@ -514,59 +678,181 @@ class AmapCrawler:
         time.sleep(1)
         self.d.press("enter")
         time.sleep(3)
-        
-        # Parse search results
-        xml = self.d.dump_hierarchy()
-        
-        # recenter_only: 不解析站点，直接返回空列表
+
         if recenter_only:
             return []
-        stations = []
-        for m in re.finditer(r'<node[^>]*>', xml):
-            node_str = m.group()
-            if ('充电站' in node_str or '充电' in node_str) and 'clickable="true"' in node_str:
-                bounds_m = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', node_str)
-                desc_m = re.search(r'content-desc="([^"]*)"', node_str)
-                if bounds_m:
-                    x1, y1, x2, y2 = int(bounds_m.group(1)), int(bounds_m.group(2)), \
-                                     int(bounds_m.group(3)), int(bounds_m.group(4))
-                    label = desc_m.group(1) if desc_m else ""
-                    stations.append({
-                        "name": label,
-                        "cx": (x1+x2)//2,
-                        "cy": (y1+y2)//2,
-                    })
         
-        # Filter to charging stations only
-        stations = [s for s in stations if "充电" in s["name"]]
-        print(f"    找到 {len(stations)} 个充电站")
-        return stations
+        # === Scroll and collect ALL search results (waterfall list) ===
+        seen_keys = set()
+        all_stations = []
+        no_new_count = 0
+        max_scrolls = 12
+
+        for scroll_idx in range(max_scrolls):
+            xml = self.d.dump_hierarchy()
+
+            new_in_scroll = 0
+            for m in re.finditer(r'<node[^>]*>', xml):
+                node_str = m.group()
+                if ('充电站' in node_str or '充电' in node_str) and 'clickable="true"' in node_str:
+                    bounds_m = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', node_str)
+                    desc_m = re.search(r'content-desc="([^"]*)"', node_str)
+                    if bounds_m:
+                        x1, y1, x2, y2 = int(bounds_m.group(1)), int(bounds_m.group(2)), \
+                                         int(bounds_m.group(3)), int(bounds_m.group(4))
+                        label = desc_m.group(1) if desc_m else ""
+                        key = normalize_station_name(label)
+                        if key not in seen_keys and "充电" in label and not label.startswith("搜索框"):
+                            seen_keys.add(key)
+                            all_stations.append({
+                                "name": label,
+                                "cx": (x1 + x2) // 2,
+                                "cy": (y1 + y2) // 2,
+                            })
+                            new_in_scroll += 1
+
+            if self._should_stop():
+                print("    收到停止信号")
+                return []
+            if new_in_scroll == 0:
+                no_new_count += 1
+                if no_new_count >= 2:
+                    print(f"    滚动{scroll_idx + 1}次，无新站点，停止采集")
+                    break
+            else:
+                no_new_count = 0
+
+            # Scroll down for next batch
+            if scroll_idx < max_scrolls - 1:
+                self.d.swipe(540, 1900, 540, 600, duration=0.4)
+                time.sleep(1.5)
+
+        # Filter + sort by vertical position
+        all_stations = [s for s in all_stations if "充电" in s["name"]]
+        total_found = len(all_stations)
+        print(f"    找到 {total_found} 个充电站（滚动{scroll_idx + 1}次）")
+        
+        # Scroll back to top so clicks are accurate
+        if total_found > 0 and scroll_idx > 0:
+            for _ in range(scroll_idx + 2):
+                self.d.swipe(540, 400, 540, 1900, duration=0.3)
+                time.sleep(0.8)
+            time.sleep(1)
+            print("    已滚回顶部")
+        
+        # Visual check: if 0 results, diagnose why
+        if total_found == 0 and self.visual_checker:
+            print("    [视觉] 搜索无结果，使用视觉模型诊断...")
+            try:
+                state, vinfo = self.visual_checker.check(use_visual=True)
+                if state.name == "POPUP_BLOCKING":
+                    print(f"    [视觉] 检测到弹窗: {vinfo.get('visual_result',{}).get('popup_description','')}")
+                    self.visual_checker.recover()
+                    time.sleep(2)
+                else:
+                    vr = vinfo.get("visual_result", {})
+                    if not vr.get("is_normal", True):
+                        print(f"    [视觉] 页面异常: {vr.get('suggestion', '未知')}")
+                    else:
+                        print(f"    [视觉] 页面状态: {state.name} — 该区县可能确实无重卡充电站")
+            except Exception as e:
+                print(f"    [视觉] 检查失败: {e}")
+        
+        return all_stations
     
+    def _find_and_click_station(self, station_name, max_scrolls=12):
+        target_name = normalize_station_name(station_name)
+        previous_signature = None
+        unchanged_count = 0
+
+        for scroll_index in range(max_scrolls + 1):
+            if self._should_stop():
+                return False
+
+            xml = self.d.dump_hierarchy()
+            assessment = assess_page(xml)
+            if assessment.kind != PageKind.SEARCH_RESULTS:
+                print(f"      [定位] 当前不是搜索结果页: {assessment.kind.value}")
+                return False
+
+            best_match = None
+            visible_names = []
+            for node in ET.fromstring(xml).iter("node"):
+                if node.attrib.get("clickable") != "true":
+                    continue
+                description = node.attrib.get("content-desc", "").strip()
+                if "充电" not in description or description.startswith("搜索框"):
+                    continue
+                visible_names.append(normalize_station_name(description))
+                candidate_name = normalize_station_name(description)
+                if not candidate_name:
+                    continue
+                if candidate_name == target_name:
+                    score = 1000
+                elif target_name in candidate_name:
+                    score = 800 + len(target_name)
+                elif candidate_name in target_name:
+                    score = 700 + len(candidate_name)
+                else:
+                    continue
+                bounds = node.attrib.get("bounds", "")
+                bounds_match = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", bounds)
+                if not bounds_match:
+                    continue
+                x1, y1, x2, y2 = map(int, bounds_match.groups())
+                match = (score, (x1 + x2) // 2, (y1 + y2) // 2, description)
+                if best_match is None or match[0] > best_match[0]:
+                    best_match = match
+
+            if best_match:
+                _, center_x, center_y, description = best_match
+                print(f"      [定位] 找到候选: {description[:50]}")
+                self.d.click(center_x, center_y)
+                if self._confirm_detail_page(station_name):
+                    return True
+                print("      [定位] 点击后未进入目标详情页，停止本次采集")
+                self._recover_to_search_results()
+                return False
+
+            signature = tuple(sorted(set(visible_names)))
+            if signature == previous_signature:
+                unchanged_count += 1
+                if unchanged_count >= 2:
+                    break
+            else:
+                unchanged_count = 0
+                previous_signature = signature
+
+            if scroll_index < max_scrolls:
+                self.d.swipe(540, 1900, 540, 650, duration=0.35)
+                time.sleep(1.2)
+
+        print(f"      [定位] 未找到目标站点: {station_name[:50]}")
+        return False
+
     def collect_detail(self, station, city):
         """进入详情页采集数据（根据页面类型自适应）"""
         print(f"    [采集] {station['name'][:30]}...")
         
-        # Click station
-        self.d.click(station["cx"], station["cy"])
-        time.sleep(3)
-        
-        # === Visual check (if available) ===
-        if self.visual_checker:
-            state, vinfo = self.visual_checker.check(use_visual=True)
-            if state.name == "POPUP_BLOCKING":
-                print(f"      [视觉] 检测到弹窗: {vinfo.get('visual_result',{}).get('popup_description','')}")
-                self.visual_checker.recover()
-                time.sleep(2)
-            elif state.name == "UNKNOWN" and not vinfo.get("visual_result", {}).get("is_normal", True):
-                print(f"      [视觉] 页面异常，尝试back恢复")
-                self.d.press("back")
-                time.sleep(2)
-                # 重试点击
-                self.d.click(station["cx"], station["cy"])
-                time.sleep(3)
+        if self._should_stop():
+            return None
+
+        opened_by_poi = False
+        if station.get("id"):
+            opened_by_poi = self._open_poi_detail(station)
+
+        if not opened_by_poi and not self._find_and_click_station(station["name"]):
+            return None
         
         # Dump 1: initial view + classify
         xml1 = self.d.dump_hierarchy()
+        detail_assessment = assess_page(xml1, station["name"])
+        if detail_assessment.kind != PageKind.DETAIL or (
+            not opened_by_poi and not detail_assessment.expected_station_visible
+        ):
+            print(f"      [采集] 详情页强校验失败: {detail_assessment.kind.value}")
+            self._recover_to_search_results()
+            return None
         page_info = classify_detail_page(xml1)
         r1 = parse_detail_xml(xml1)
         print(f"      类型: {page_info['type']} ({page_info['description']})")
@@ -618,41 +904,116 @@ class AmapCrawler:
             result = merge_results(r1, r2)
         else:
             result = merge_results(merge_results(r1, r2), r3)
+
+        if (
+            not result["station_name"]
+            and detail_assessment.expected_station_visible
+            and station.get("name")
+        ):
+            result["station_name"] = station["name"]
+            result["station_name_source"] = "input_verified"
         
         # Attach price details from sub-page
         if price_details:
             result["fast_prices"] = price_details
         result["search_city"] = city
-        result["search_keyword"] = SEARCH_KEYWORD
-        result["collected_at"] = datetime.now().isoformat()
+        result["search_keyword"] = station.get("search_query", SEARCH_KEYWORD)
+        result["collected_at"] = datetime.now(timezone.utc).isoformat()
+        result["detail_verified"] = True
+        result["name_match"] = detail_assessment.expected_station_visible
+        result["match_method"] = "poi_id" if opened_by_poi else "search_card"
+
+        source_address = (station.get("address") or "").strip()
+        if result["address"]:
+            result["address_source"] = "detail"
+        elif source_address:
+            result["address"] = source_address
+            result["address_source"] = "input"
+
+        if station.get("id"):
+            result["source_station_id"] = station["id"]
+        result["source_station_name"] = station.get("name", "")
+        result["source_address"] = source_address
         
         # Geocode: try address first, then station name, then parenthetical name
-        geocode_candidates = []
-        if result["address"] and len(result["address"]) > 5:
-            geocode_candidates.append(result["address"])
-        if result["station_name"]:
-            # Extract name inside parentheses (usually more specific)
-            pm = re.search(r'\(([^)]+)\)', result["station_name"])
-            if pm:
-                geocode_candidates.append(pm.group(1))
-            # Full station name without suffix
-            name = result["station_name"].split("(")[0] if "(" in result["station_name"] else result["station_name"]
-            geocode_candidates.append(name)
-        
-        for candidate in geocode_candidates:
-            geo = geocode(candidate, city)
-            if geo:
-                result["longitude"] = geo["longitude"]
-                result["latitude"] = geo["latitude"]
-                # Also store the matched address for reference
-                result["geocoded_address"] = candidate
-                break
+        source_longitude = station.get("longitude")
+        source_latitude = station.get("latitude")
+        if source_longitude not in (None, "") and source_latitude not in (None, ""):
+            result["longitude"] = float(source_longitude)
+            result["latitude"] = float(source_latitude)
+            result["coordinate_source"] = "input"
+        else:
+            geocode_candidates = []
+            if result["address"] and len(result["address"]) > 5:
+                geocode_candidates.append(result["address"])
+            if result["station_name"]:
+                pm = re.search(r'\(([^)]+)\)', result["station_name"])
+                if pm:
+                    geocode_candidates.append(pm.group(1))
+                name = result["station_name"].split("(")[0] if "(" in result["station_name"] else result["station_name"]
+                geocode_candidates.append(name)
+
+            for candidate in geocode_candidates:
+                geo = geocode(candidate, city)
+                if geo:
+                    result["longitude"] = geo["longitude"]
+                    result["latitude"] = geo["latitude"]
+                    result["coordinate_source"] = "amap_geocode"
+                    result["geocoded_address"] = candidate
+                    break
         
         # Go back to search results
         self.d.press("back")
         time.sleep(2)
         
         return result
+    
+    def run_district(self, city, district):
+        print(f"\n  [District] {city}/{district}")
+        
+        query = f"{city}{district}{SEARCH_KEYWORD}" if district != city else f"{city}{SEARCH_KEYWORD}"
+        # Recenter to city first
+        self.search_stations(city, query=f"{city}市", recenter_only=True)
+        import time; time.sleep(1)
+        
+        stations = self.search_stations(city, query)
+        if not stations:
+            return 0
+        
+        print(f"    Found {len(stations)} stations in this district")
+        count = 0
+        mismatch_count = 0
+        
+        for i, station in enumerate(stations):
+            if self._should_stop():
+                print("    收到停止信号")
+                break
+            try:
+                result = self.collect_detail(station, city)
+                if result is None:
+                    continue
+
+                if district != city:
+                    addr = result.get("address", "")
+                    name = result.get("station_name", "")
+                    if district not in addr and district not in name:
+                        mismatch_count += 1
+                        msg = f"      [{i+1}/{len(stations)}] SKIP: not in {district}"
+                        print(msg)
+                        continue
+
+                self.results.append(result)
+                count += 1
+            except Exception as e:
+                print(f"      [{i+1}/{len(stations)}] FAIL: {e}")
+                try:
+                    self.d.press("back")
+                    import time; time.sleep(2)
+                except:
+                    pass
+        
+        print(f"  District {district} done: {count} stations, skipped {mismatch_count}")
+        return count
     
     def run_city(self, city):
         """采集单个城市的全部充电站（按区县遍历）"""
@@ -681,30 +1042,42 @@ class AmapCrawler:
             mismatch_count = 0
             
             for i, station in enumerate(stations):
+                if self._should_stop():
+                    print("    收到停止信号")
+                    break
                 try:
                     result = self.collect_detail(station, city)
-                    self.results.append(result)
-                    city_total += 1
+                    if result is None:
+                        continue
                     
                     # 区县校验：地址/站名是否包含目标区县
                     if district != city:
                         addr = result.get("address", "")
                         name = result.get("station_name", "")
-                        if district in addr or district in name:
-                            mismatch_count = 0
-                        else:
+                        if district not in addr and district not in name:
                             mismatch_count += 1
                             print(f"      [{i+1}/{len(stations)}] SKIP: not in {district} (x{mismatch_count})")
-                            if mismatch_count >= 2:
-                                print(f"      >>> {district} exhausted, next district")
-                                break
+                            continue
+
+                    self.results.append(result)
+                    city_total += 1
                     
                 except Exception as e:
                     print(f"      [{i+1}/{len(stations)}] FAIL: {e}")
-                    # 尝试恢复
+                    # Recovery: back + visual check
                     try:
                         self.d.press("back")
                         time.sleep(2)
+                        # Visual-guided recovery
+                        if self.visual_checker:
+                            try:
+                                state, _ = self.visual_checker.check(use_visual=True)
+                                if state.name != "SEARCH_RESULTS":
+                                    print(f"      [恢复] 视觉检查: 未回到搜索结果页({state.name})，再次back")
+                                    self.d.press("back")
+                                    time.sleep(2)
+                            except:
+                                pass
                     except:
                         pass
         

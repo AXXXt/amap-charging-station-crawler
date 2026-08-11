@@ -12,7 +12,8 @@ from pydantic import BaseModel
 from typing import Optional, List
 import pymysql
 import json
-from datetime import datetime
+import os
+from datetime import datetime, timezone
 
 app = FastAPI(
     title="重卡充电站数据服务",
@@ -26,15 +27,18 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # MySQL CONFIG
 # ============================================================
 DB_CONFIG = {
-    "host": "121.41.56.301",
-    "port": 3306,
-    "user": "anxitong_u",
-    "password": "1d0Pb8s21d0PbLGx78Pdqqc6",
-    "database": "evcs",
-    "charset": "utf8mb4",
+    "host": os.getenv("DB_HOST", ""),
+    "port": int(os.getenv("DB_PORT", "3306")),
+    "user": os.getenv("DB_USER", ""),
+    "password": os.getenv("DB_PASSWORD", ""),
+    "database": os.getenv("DB_NAME", ""),
+    "charset": os.getenv("DB_CHARSET", "utf8mb4"),
+    "connect_timeout": int(os.getenv("DB_CONNECT_TIMEOUT", "5")),
 }
 
 def get_db():
+    if not all(DB_CONFIG.get(key) for key in ("host", "user", "database")):
+        return None
     try:
         return pymysql.connect(**DB_CONFIG)
     except Exception:
@@ -242,12 +246,12 @@ async def list_stations(
     }
 
 
-@app.get("/api/stations/{station_id}")
+@app.get("/api/stations/{station_id:int}")
 async def get_station(station_id: int):
     """查询单个充电站完整详情"""
     conn = get_db()
     if conn is None:
-        return {"total": 0, "page": page, "page_size": page_size, "total_pages": 0, "data": [], "offline": True}
+        return {"data": None, "offline": True}
     cur = conn.cursor(pymysql.cursors.DictCursor)
     cur.execute(
         """SELECT * FROM heavy_truck_stations WHERE id = %s""",
@@ -277,7 +281,7 @@ async def nearby_stations(
     """根据经纬度查询附近充电站（简化版Haversine公式）"""
     conn = get_db()
     if conn is None:
-        return {"total": 0, "page": page, "page_size": page_size, "total_pages": 0, "data": [], "offline": True}
+        return {"data": [], "offline": True}
     cur = conn.cursor(pymysql.cursors.DictCursor)
     cur.execute(
         """SELECT id, station_name, operator, address, city, current_price,
@@ -314,7 +318,13 @@ async def get_stats():
     """统计概览：各城市站点数量、运营商分布等"""
     conn = get_db()
     if conn is None:
-        return {"total": 0, "page": page, "page_size": page_size, "total_pages": 0, "data": [], "offline": True}
+        return {
+            "total_stations": 0,
+            "by_city": [],
+            "by_operator": [],
+            "latest_collection": None,
+            "offline": True,
+        }
     cur = conn.cursor(pymysql.cursors.DictCursor)
     
     # Total
@@ -413,7 +423,15 @@ import threading
 import sys
 import os
 
+from task_queue import StationTaskQueue
+
 # 全局任务状态
+stop_event = threading.Event()
+QUEUE_DB_PATH = os.getenv(
+    "STATION_TASK_DB",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "station_tasks.db"),
+)
+
 task_state = {
     "running": False,
     "current_city": "",
@@ -425,6 +443,53 @@ task_state = {
     "error": None,
 }
 
+
+class UserStationTask(BaseModel):
+    id: Optional[str] = ""
+    name: str
+    address: Optional[str] = ""
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    priority: int = 1000
+    max_attempts: int = 3
+
+
+def get_station_queue():
+    return StationTaskQueue(QUEUE_DB_PATH)
+
+
+@app.post("/api/queue/stations")
+async def enqueue_station_task(request: UserStationTask):
+    """提交用户回传站点；当前任务安全完成后按最高优先级调度。"""
+    payload = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+    priority = payload.pop("priority")
+    max_attempts = payload.pop("max_attempts")
+    queue = get_station_queue()
+    station_id = queue.enqueue_user_task(
+        payload,
+        priority=priority,
+        max_attempts=max_attempts,
+    )
+    return {
+        "status": "queued",
+        "station_id": station_id,
+        "priority": priority,
+        "task": queue.get_task(station_id),
+    }
+
+
+@app.get("/api/queue/status")
+async def station_queue_status():
+    return get_station_queue().stats()
+
+
+@app.get("/api/queue/stations/{station_id}")
+async def station_queue_task(station_id: str):
+    task = get_station_queue().get_task(station_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="站点任务不存在")
+    return {"task": task}
+
 def _log(msg):
     """添加日志"""
     from datetime import datetime
@@ -432,16 +497,19 @@ def _log(msg):
     if len(task_state["log"]) > 200:
         task_state["log"] = task_state["log"][-100:]
 
-def _run_crawl_task(cities, use_visual=False):
+def _run_crawl_task(cities, use_visual=False, districts=None):
     """后台执行采集任务"""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from crawler import AmapCrawler, CITY_DISTRICTS
     
-    task_state["running"] = True
+    if stop_event.is_set():
+        task_state["running"] = False
+        return
+
     task_state["error"] = None
     task_state["log"] = []
     task_state["results"] = []
-    task_state["started_at"] = __import__('datetime').datetime.now().isoformat()
+    task_state["started_at"] = datetime.now(timezone.utc).isoformat()
     
     _log(f"任务启动: {len(cities)} 个城市")
     
@@ -453,42 +521,100 @@ def _run_crawl_task(cities, use_visual=False):
             checker = create_qianwen_checker()
             _log("视觉自检已启用 (qwen3-vl-flash)")
         
-        crawler = AmapCrawler(visual_checker=checker)
+        crawler = AmapCrawler(visual_checker=checker, stop_event=stop_event)
+
+        # Install progress hooks once. Re-wrapping these methods inside each
+        # city/district loop would make later wrappers call earlier wrappers
+        # recursively.
+        original_search = crawler.search_stations
+        def search_with_progress(city, query=None, recenter_only=False):
+            if not task_state["running"]:
+                raise InterruptedError("Task stopped by user")
+            task_state["current_station"] = query or ""
+            result = original_search(city, query, recenter_only)
+            if not recenter_only and result:
+                _log(f"  找到 {len(result)} 个站点")
+            return result
+        crawler.search_stations = search_with_progress
+
+        original_collect = crawler.collect_detail
+        def collect_with_progress(station, city):
+            if not task_state["running"]:
+                raise InterruptedError("Task stopped by user")
+            task_state["current_station"] = station["name"][:30]
+            task_state["progress"]["done"] += 1
+            result = original_collect(station, city)
+            if result:
+                name = (result.get("station_name", "?") or "?")[:25]
+                status = (result.get("business_status", "") or "")[:6]
+                addr = (result.get("address", "") or "")[:20]
+                operator = (result.get("operator", "") or "")[:10]
+                price = (result.get("current_price", "") or "")[:8]
+                eq_parts = []
+                for eq_type in ["super", "fast", "slow"]:
+                    avail = result.get(f"{eq_type}_available", "")
+                    total = result.get(f"{eq_type}_total", "")
+                    if avail or total:
+                        eq_parts.append(f"{eq_type[:2]}:{avail}/{total}")
+                eq_str = " ".join(eq_parts) if eq_parts else "-"
+                _log(f"  {name:<25} | {status:<6} | {price:<8} | {operator:<10} | {eq_str}")
+                if task_state["progress"]["done"] % 5 == 0:
+                    detail_parts = [f"   地址: {addr}"]
+                    if result.get("fast_prices"):
+                        detail_parts.append(f"   分时电价: {len(result['fast_prices'])}组")
+                    if result.get("latitude"):
+                        detail_parts.append(f"   坐标: {result['latitude']},{result['longitude']}")
+                    for detail in detail_parts:
+                        _log(detail)
+            return result
+        crawler.collect_detail = collect_with_progress
+
+        # === District-only mode ===
+        if districts:
+            _log(f"District mode: {len(districts)} districts")
+            for di, (city, district) in enumerate(districts):
+                if not task_state["running"]:
+                    break
+                task_state["current_city"] = f"{city}/{district}"
+                _log(f"Start: {city}/{district}")
+                _log("  " + "-" * 70)
+                
+                try:
+                    n = crawler.run_district(city, district)
+                    _log(f"  District {district} done: {n} stations")
+                except InterruptedError:
+                    _log("  Stopped by user")
+                    break
+                except Exception as e:
+                    _log(f"  District {district} error: {str(e)[:80]}")
+            
+            crawler.deduplicate_results()
+            task_state["results"] = crawler.results
+            task_state["progress"]["total"] = len(crawler.results)
+            _log(f"Done: {len(crawler.results)} stations (deduped)")
+            
+            outpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task_result.json")
+            __import__("json").dump(
+                {"total": len(crawler.results), "stations": crawler.results},
+                open(outpath, "w", encoding="utf-8"),
+                ensure_ascii=False, indent=2
+            )
+            _log(f"Saved: task_result.json")
+            return
+        
         
         total_cities = len(cities)
         for ci, city in enumerate(cities):
             task_state["current_city"] = city
             _log(f"开始采集: {city}")
+            _log("  " + "-" * 95)
+            _log(f"  {'站点名称':<25} | {'营业':<6} | {'电价':<8} | {'运营商':<10} | {'设备(可用/总)'}")
+            _log("  " + "-" * 95)
             
             if not task_state["running"]:
                 break
             
             try:
-                # 使用 crawler.run_city() — 自动处理城市定位 + 区县遍历
-                # 重写 run_city 的输出来捕获日志
-                orig_run = crawler.run_city
-                
-                # Monkey-patch: 拦截 search_stations 来更新进度
-                orig_search = crawler.search_stations
-                def search_with_progress(city, query=None, recenter_only=False):
-                    task_state["current_station"] = query or ""
-                    result = orig_search(city, query, recenter_only)
-                    if not recenter_only and result:
-                        _log(f"  找到 {len(result)} 个站点")
-                    return result
-                crawler.search_stations = search_with_progress
-                
-                # Monkey-patch: 拦截 collect_detail 来更新进度
-                orig_collect = crawler.collect_detail
-                def collect_with_progress(station, city):
-                    task_state["current_station"] = station["name"][:30]
-                    task_state["progress"]["done"] += 1
-                    result = orig_collect(station, city)
-                    if result:
-                        _log(f"    OK: {result.get('station_name', '?')[:30]}")
-                    return result
-                crawler.collect_detail = collect_with_progress
-                
                 n = crawler.run_city(city)
                 _log(f"  城市 {city} 完成: {n} 个站点")
                 
@@ -523,6 +649,8 @@ def _run_crawl_task(cities, use_visual=False):
 async def start_task(
     cities: str = Query("郑州", description="城市列表，逗号分隔"),
     use_visual: bool = Query(False, description="是否启用视觉自检"),
+
+    districts: str = Query(None, description="Districts: city:district,..."),
 ):
     """启动采集任务"""
     if task_state["running"]:
@@ -530,10 +658,27 @@ async def start_task(
     
     city_list = [c.strip() for c in cities.split(",") if c.strip()]
     
+    stop_event.clear()  # Reset stop signal for new task
+    task_state["running"] = True
     task_state["progress"] = {"done": 0, "total": 0}
     task_state["log"] = []
+    task_state["results"] = []
+    task_state["current_city"] = ""
+    task_state["current_station"] = ""
+    task_state["error"] = None
     
-    thread = threading.Thread(target=_run_crawl_task, args=(city_list, use_visual), daemon=True)
+    
+    # Parse districts if provided
+    district_list = None
+    if districts:
+        district_list = []
+        for d in districts.split(","):
+            d = d.strip()
+            if ":" in d:
+                city, district = d.split(":", 1)
+                district_list.append((city.strip(), district.strip()))
+
+    thread = threading.Thread(target=_run_crawl_task, args=(city_list, use_visual, district_list), daemon=True)
     thread.start()
     
     return {"status": "started", "cities": city_list, "visual": use_visual}
@@ -541,11 +686,33 @@ async def start_task(
 
 @app.post("/api/tasks/stop")
 async def stop_task():
-    """停止当前任务"""
+    """停止当前任务 — 设置停止标志 + 多途径打断手机当前操作"""
     task_state["running"] = False
+    stop_event.set()  # Signal crawler to stop
+    
+    # 途径1: uiautomator2 发送 back 键
+    try:
+        import uiautomator2 as u2
+        d = u2.connect("RFCXA0W194D")
+        d.press("back")
+    except:
+        pass
+    
+    # 途径2: 直接通过 adb shell 发送 back 键（可打断阻塞中的 uiautomator2 操作）
+    try:
+        import subprocess
+        for _ in range(3):
+            subprocess.run(
+                [r"C:\Users\26381\AppData\Local\Android\Sdk\platform-tools\adb.exe",
+                 "-s", "RFCXA0W194D", "shell", "input", "keyevent", "KEYCODE_BACK"],
+                capture_output=True, timeout=3
+            )
+            import time
+            time.sleep(0.3)
+    except:
+        pass
+    
     return {"status": "stopped"}
-
-
 @app.get("/api/tasks/status")
 async def task_status():
     """获取任务状态"""

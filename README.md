@@ -1,0 +1,168 @@
+﻿# 高德地图重卡充电站数据采集系统
+
+通过 ADB + uiautomator2 自动化采集高德地图 App 中河南省重卡充电站的详情数据，并提供 RESTful API 供其他平台调用。
+
+## 功能概览
+
+### 1. 数据采集 (`crawler.py`)
+
+- **区县粒度搜索**：按 `{城市}{区县}重卡充电站` 遍历河南省 18 市 180+ 区县，避免结果截断
+- **自适应页面类型**：自动识别 4 种详情页并采用不同采集策略
+
+| 页面类型 | 特征 | 策略 |
+|---------|------|------|
+| `basic` | 仅名称+地址 | dump 1次 |
+| `standard` | 含设备/停车费 | 滚动1次 + dump合并 |
+| `full_trend` | 含24h价格趋势图 | 滚动2次 + dump合并 |
+| `click_to_expand` | 需点击电价查看分时 | 点击跳转分时页 + 状态机解析 |
+
+- **采集字段**：
+  - 站点名称、营业状态、详细地址、运营商
+  - 实时电价、24小时分时电价（含电费/服务费）
+  - 设备信息：快充/慢充/超充 可用数/总枪数/功率
+  - 停车费、占位费、设施标签、收藏数
+  - 高德 API 逆地理编码获取经纬度
+- **去重**：采集完成后按坐标距离自动去重（同名<500m / 异名<100m）
+- **搜索框自适应**：自动识别首页/搜索页/地图三种状态，使用对应搜索入口
+
+### 2. 数据服务 (`api_server.py`)
+
+FastAPI 服务，端口 8800：
+
+| 接口 | 说明 |
+|------|------|
+| `GET /api/stations` | 分页查询，支持城市/运营商筛选 |
+| `GET /api/stations/{id}` | 单站点详情 |
+| `GET /api/stations/nearby?lng=&lat=&radius=` | 附近站点搜索 |
+| `GET /api/stats` | 统计概览（各城市/运营商分布） |
+| `POST /api/stations/batch` | 批量导入数据 |
+
+数据存储于 MySQL，表 `heavy_truck_stations` 自动建表。
+
+### 3. 视觉自检 (`visual_check.py`)
+
+- `VisualChecker`：截图 → 判断页面状态 → 自动弹窗关闭/误触恢复
+- `VisualModelAdapter`：用户自定义视觉模型接入接口
+- `check_text_fallback()`：无视觉模型时的纯文本兜底
+- 可一键注入到 `crawler.py` 采集流程中
+
+## 环境要求
+
+- Python 3.10+
+- Android 手机 + ADB 调试已开启
+- uiautomator2 已安装并初始化
+- 高德地图 App 已安装
+
+```bash
+pip install uiautomator2 fastapi uvicorn pymysql requests
+```
+
+## 快速开始
+
+### 1. 连接设备
+
+```bash
+adb devices
+# 应显示设备序列号，如 RFCXA0W194D
+```
+
+修改 `crawler.py` 中的设备序列号：
+```python
+DEVICE_SERIAL = "你的设备序列号"
+```
+
+### 2. 单城市测试
+
+```bash
+python crawler.py
+# 默认采集郑州市，结果保存到 collected_data.json
+```
+
+### 3. 全省采集
+
+编辑 `crawler.py`，取消 `run_all()` 的注释：
+```python
+if __name__ == "__main__":
+    crawler = AmapCrawler()
+    crawler.run_all()                           # 全省采集
+    crawler.deduplicate_results()               # 去重
+    crawler.save_results("henan_stations.json") # 保存
+```
+
+### 4. 启动 API 服务
+
+```bash
+python api_server.py
+# 服务运行在 http://localhost:8800
+```
+
+### 5. 导入数据到 MySQL
+
+修改 `api_server.py` 中的数据库连接配置，然后：
+
+```python
+import json, requests
+
+with open("collected_data.json", encoding="utf-8") as f:
+    data = json.load(f)
+
+resp = requests.post("http://localhost:8800/api/stations/batch", json=data["stations"])
+print(resp.json())  # {"inserted": N, "total": M}
+```
+
+### 6. 接入视觉模型（可选）
+
+```python
+from visual_check import VisualModelAdapter, integrate_with_crawler
+from crawler import AmapCrawler
+
+def my_visual_model(image_path):
+    # 调用你的视觉模型
+    return {"page_type": "detail_page", "has_popup": False}
+
+crawler = AmapCrawler()
+adapter = VisualModelAdapter(my_visual_model)
+integrate_with_crawler(crawler, adapter)
+crawler.run_all()
+```
+
+## 目录结构
+
+```
+adb-first/
+├── crawler.py          # 采集引擎
+├── api_server.py       # FastAPI 数据服务
+├── visual_check.py     # 视觉模型自检模块
+├── batch_test_v2.py    # 端到端测试脚本
+├── .gitignore
+└── README.md
+```
+
+## 河南城市覆盖
+
+18个城市，180+区县，自动遍历：
+
+郑州、洛阳、开封、南阳、许昌、平顶山、新乡、安阳、焦作、商丘、周口、驻马店、信阳、漯河、三门峡、鹤壁、濮阳、济源
+
+## 数据样例
+
+```json
+{
+  "station_name": "特来电汽车充电站(特来电郑州惠济颂慧充电站)",
+  "operator": "特来电",
+  "address": "郑州市惠济区...",
+  "current_price": "1.35",
+  "fast_available": "11",
+  "fast_total": "26",
+  "fast_power": "120.0kW|750V",
+  "longitude": 113.475943,
+  "latitude": 34.883285,
+  "fast_prices": [
+    {"time": "00:00-07:00", "price": "0.59"},
+    {"time": "07:00-16:00", "price": "0.89"},
+    {"time": "16:00-20:00", "price": "1.35"},
+    {"time": "20:00-23:00", "price": "1.60"},
+    {"time": "23:00-23:59", "price": "1.35"}
+  ]
+}
+```

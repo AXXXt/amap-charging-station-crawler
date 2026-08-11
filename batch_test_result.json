@@ -1,0 +1,146 @@
+{
+  "total": 2,
+  "stations": [
+    {
+      "station_name": "玖行能源汽车充电站(郑州重链郑登快速路重卡充电站)",
+      "tags": [
+        "优选电站",
+        "刚刚浏览"
+      ],
+      "category": "充电站",
+      "facilities": [
+        "地上",
+        "桩多",
+        "休息室"
+      ],
+      "business_hours": "",
+      "distance": "驾车69.5公里",
+      "duration": "",
+      "address": "",
+      "operator": "",
+      "current_price": "1.35",
+      "parking_fee": "免费停车",
+      "occupancy_fee": "",
+      "favorite_count": "33",
+      "view_count": "",
+      "fast_available": "15",
+      "fast_total": "16",
+      "fast_power": "320.0kW｜1000V",
+      "super_available": "",
+      "super_total": "",
+      "super_power": "",
+      "slow_available": "",
+      "slow_total": "",
+      "slow_power": "",
+      "price_trend_title": "",
+      "fast_prices": [
+        {
+          "time": "00:00-07:00",
+          "total_price": "0.60",
+          "elec_fee": "0.40",
+          "service_fee": "0.20",
+          "tag": "最低"
+        },
+        {
+          "time": "07:00-16:00",
+          "total_price": "0.93",
+          "elec_fee": "0.73",
+          "service_fee": "0.20",
+          "tag": ""
+        },
+        {
+          "time": "16:00-20:00",
+          "total_price": "1.35",
+          "elec_fee": "1.15",
+          "service_fee": "0.20",
+          "tag": ""
+        },
+        {
+          "time": "20:00-23:00",
+          "total_price": "1.57",
+          "elec_fee": "1.37",
+          "service_fee": "0.20",
+          "tag": ""
+        },
+        {
+          "time": "23:00-23:59",
+          "total_price": "1.35",
+          "elec_fee": "1.15",
+          "service_fee": "0.20",
+          "tag": "当前计费时段"
+        }
+      ],
+      "slow_prices": [],
+      "search_city": "郑州",
+      "search_query": "郑州重卡充电站",
+      "page_type": "click_to_expand",
+      "collected_at": "2026-08-11T23:17:31.207871",
+      "longitude": 113.333063,
+      "latitude": 34.504581
+    },
+    {
+      "station_name": "特来电汽车充电站(特来电郑州郑密路佳佳重卡充电站)",
+      "tags": [
+        "优选电站",
+        "刚刚浏览"
+      ],
+      "category": "充电站",
+      "facilities": [
+        "地面",
+        "卫生间",
+        "休息室",
+        "重卡车位",
+        "桩多"
+      ],
+      "business_hours": "周一至周日 00:00-24:00",
+      "distance": "驾车40.6公里",
+      "duration": "40分钟",
+      "address": "二七区郑密路与绕城高速往南一公里河南汇丰新能源汽车运输有限公司内部地面停车场",
+      "operator": "特来电",
+      "current_price": "1.35",
+      "parking_fee": "停车免费",
+      "occupancy_fee": "",
+      "favorite_count": "39",
+      "view_count": "",
+      "fast_available": "",
+      "fast_total": "",
+      "fast_power": "",
+      "super_available": "",
+      "super_total": "",
+      "super_power": "",
+      "slow_available": "",
+      "slow_total": "",
+      "slow_power": "",
+      "price_trend_title": "24小时价格趋势图",
+      "fast_prices": [
+        {
+          "price": "0.57",
+          "time": "00:00-07:00"
+        },
+        {
+          "price": "0.91",
+          "time": "07:00-16:00"
+        },
+        {
+          "price": "1.35",
+          "time": "16:00-20:00"
+        },
+        {
+          "price": "1.57",
+          "time": "20:00-23:00"
+        },
+        {
+          "price": "1.35",
+          "time": "当前时段"
+        }
+      ],
+      "slow_prices": [],
+      "search_city": "郑州",
+      "search_query": "郑州重卡充电站",
+      "page_type": "full_trend",
+      "collected_at": "2026-08-11T23:17:44.507220",
+      "longitude": 113.547294,
+      "latitude": 34.639209
+    }
+  ]
+}

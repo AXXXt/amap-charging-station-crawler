@@ -1,0 +1,21 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Screenshots & XML dumps
+*.png
+*.xml
+*.jpg
+
+# Data outputs
+*.json
+!batch_test_result.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

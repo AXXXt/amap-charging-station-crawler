@@ -661,11 +661,9 @@ class AmapCrawler:
         print(f"{'='*50}")
         
         # === 先搜索城市名切换地图中心 ===
-        # 跨城市搜索前必须先定位到目标城市，否则高德只搜当前地图范围
         print(f"  [定位] 切换到 {city}...")
         self.search_stations(city, query=f"{city}市", recenter_only=True)
         
-        # 生成该城市的所有搜索query
         districts = CITY_DISTRICTS.get(city, [city])
         city_total = 0
         
@@ -681,21 +679,37 @@ class AmapCrawler:
             
             print(f"    该区县发现 {len(stations)} 个站点")
             mismatch_count = 0
+            
             for i, station in enumerate(stations):
                 try:
                     result = self.collect_detail(station, city)
                     self.results.append(result)
-                    print(f"      [{i+1}/{len(stations)}] ✅ {result['station_name'][:30]}")
                     city_total += 1
+                    
+                    # 区县校验：地址/站名是否包含目标区县
+                    if district != city:
+                        addr = result.get("address", "")
+                        name = result.get("station_name", "")
+                        if district in addr or district in name:
+                            mismatch_count = 0
+                        else:
+                            mismatch_count += 1
+                            print(f"      [{i+1}/{len(stations)}] SKIP: not in {district} (x{mismatch_count})")
+                            if mismatch_count >= 2:
+                                print(f"      >>> {district} exhausted, next district")
+                                break
+                    
                 except Exception as e:
-                    print(f"      [{i+1}/{len(stations)}] ❌ 采集失败: {e}")
-                # Try to recover
-                self.d.press("back")
-                time.sleep(2)
+                    print(f"      [{i+1}/{len(stations)}] FAIL: {e}")
+                    # 尝试恢复
+                    try:
+                        self.d.press("back")
+                        time.sleep(2)
+                    except:
+                        pass
         
         print(f"  城市 {city} 合计: {city_total} 个站点")
         return city_total
-    
     def run_all(self, cities=None):
         """遍历所有城市采集数据（按区县粒度）"""
         if cities is None:

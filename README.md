@@ -46,6 +46,26 @@ FastAPI 服务，端口 8800：
 - `check_text_fallback()`：无视觉模型时的纯文本兜底
 - 可一键注入到 `crawler.py` 采集流程中
 
+**已集成千问免费视觉模型**（`qwen3-vl-flash`）：
+```python
+from visual_check import create_qianwen_checker
+from crawler import AmapCrawler
+
+checker = create_qianwen_checker()       # 自动使用千问视觉模型
+crawler = AmapCrawler(visual_checker=checker)
+crawler.run_city("郑州")                  # 采集时自动弹窗检测+恢复
+```
+
+也可使用自定义视觉模型：
+```python
+from visual_check import VisualModelAdapter
+
+def my_model(img_path):
+    return {"page_type": "detail", "has_popup": False}
+
+checker = VisualChecker(d, visual_model_func=VisualModelAdapter(my_model))
+```
+
 ## 环境要求
 
 - Python 3.10+

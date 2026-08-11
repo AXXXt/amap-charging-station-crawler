@@ -1,16 +1,17 @@
 """
 visual_check.py — 视觉模型自检模块
 功能：
-  1. 每次操作后截图，送视觉模型判断页面状态
+  1. XML 无法确认或页面转场异常时，调用视觉模型辅助判断
   2. 检测弹窗遮挡（权限请求、广告、切换应用提示等）
   3. 检测误触导致的页面跳转
   4. 自动恢复机制
 """
 import uiautomator2 as u2
 import time
-import base64
 import os
 from enum import Enum
+
+from page_state import PageKind, assess_page
 
 
 class PageState(Enum):
@@ -44,19 +45,16 @@ class VisualChecker:
           }
     """
     
-    # 页面特征关键词（用于无视觉模型时的 fallback 文本检测）
-    DETAIL_KEYWORDS = ["营业时间", "电站信息", "24小时价格趋势图", "扫码充电"]
-    SEARCH_KEYWORDS = ["充电站", "搜索", "重卡"]
-    POPUP_KEYWORDS = ["允许", "始终允许", "仅在使用时允许", "拒绝", "更新", "评价",
-                       "跳过", "关闭", "我知道了", "立即体验"]
-    
     def __init__(self, device: u2.Device, visual_model_func=None,
-                 screenshot_dir=r"C:\Users\26381\Desktop\adb-first\screenshots"):
+                 screenshot_dir=None):
         self.d = device
         self.visual_model = visual_model_func
+        if screenshot_dir is None:
+            screenshot_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screenshots")
         self.screenshot_dir = screenshot_dir
         os.makedirs(screenshot_dir, exist_ok=True)
         self.check_count = 0
+        self.last_text_assessment = None
     
     def take_screenshot(self, label="check"):
         """截图并保存"""
@@ -69,23 +67,17 @@ class VisualChecker:
     def check_text_fallback(self):
         """基于XML文本的页面状态检测（fallback方案）"""
         xml = self.d.dump_hierarchy()
-        
-        # 检查弹窗关键词
-        for kw in self.POPUP_KEYWORDS:
-            if kw in xml:
-                return PageState.POPUP_BLOCKING
-        
-        # 检查详情页关键词
-        detail_score = sum(1 for kw in self.DETAIL_KEYWORDS if kw in xml)
-        if detail_score >= 3:
-            return PageState.DETAIL_PAGE
-        
-        # 检查搜索结果
-        search_score = sum(1 for kw in self.SEARCH_KEYWORDS if kw in xml)
-        if search_score >= 2:
-            return PageState.SEARCH_RESULTS
-        
-        return PageState.UNKNOWN
+        assessment = assess_page(xml)
+        self.last_text_assessment = assessment
+        state_map = {
+            PageKind.DETAIL: PageState.DETAIL_PAGE,
+            PageKind.PRICE_DETAIL: PageState.DETAIL_PAGE,
+            PageKind.SEARCH_RESULTS: PageState.SEARCH_RESULTS,
+            PageKind.HOME: PageState.MAP_VIEW,
+            PageKind.POPUP: PageState.POPUP_BLOCKING,
+            PageKind.UNKNOWN: PageState.UNKNOWN,
+        }
+        return state_map[assessment.kind]
     
     def check(self, use_visual=True):
         """
@@ -97,39 +89,47 @@ class VisualChecker:
         Returns:
             (PageState, dict) — 页面状态和额外信息
         """
-        filepath = self.take_screenshot()
-        
-        info = {"screenshot": filepath}
-        
+        info = {}
+
         if use_visual and self.visual_model:
+            filepath = self.take_screenshot()
+            info["screenshot"] = filepath
             try:
                 result = self.visual_model(filepath)
                 info["visual_result"] = result
-                
-                page_type = result.get("page_type", "other")
-                has_popup = result.get("has_popup", False)
-                
-                if has_popup or page_type == "popup":
-                    info["popup_desc"] = result.get("popup_description", "")
-                    return PageState.POPUP_BLOCKING, info
-                
-                type_map = {
-                    "detail": PageState.DETAIL_PAGE,
-                    "detail_page": PageState.DETAIL_PAGE,
-                    "search": PageState.SEARCH_RESULTS,
-                    "search_results": PageState.SEARCH_RESULTS,
-                    "home": PageState.MAP_VIEW,
-                    "map_view": PageState.MAP_VIEW,
-                    "popup": PageState.POPUP_BLOCKING,
-                }
-                return type_map.get(page_type, PageState.UNKNOWN), info
-                
+
+                if not isinstance(result, dict):
+                    info["visual_error"] = "invalid visual response"
+                elif result.get("_error"):
+                    info["visual_error"] = result["_error"]
+                else:
+                    page_type = result.get("page_type", "other")
+                    has_popup = result.get("has_popup", False)
+
+                    if has_popup or page_type == "popup":
+                        info["popup_desc"] = result.get("popup_description", "")
+                        return PageState.POPUP_BLOCKING, info
+
+                    type_map = {
+                        "detail": PageState.DETAIL_PAGE,
+                        "detail_page": PageState.DETAIL_PAGE,
+                        "search": PageState.SEARCH_RESULTS,
+                        "search_results": PageState.SEARCH_RESULTS,
+                        "home": PageState.MAP_VIEW,
+                        "map_view": PageState.MAP_VIEW,
+                    }
+                    visual_state = type_map.get(page_type)
+                    if visual_state is not None:
+                        return visual_state, info
             except Exception as e:
-                print(f"  [!] 视觉模型调用失败: {e}, 使用文本fallback")
+                info["visual_error"] = str(e)
+                print(f"  [!] 视觉模型调用失败: {e}, 使用XML fallback")
         
-        # Fallback: text-based check
+        # Visual failures and unknown visual responses must fall back to XML.
         state = self.check_text_fallback()
         info["fallback"] = True
+        if self.last_text_assessment is not None:
+            info["xml_assessment"] = self.last_text_assessment
         return state, info
     
     def recover(self, expected_state=PageState.DETAIL_PAGE):
@@ -192,7 +192,9 @@ class VisualChecker:
             bool — 是否在详情页
         """
         for i in range(max_retries):
-            state, info = self.check()
+            state, info = self.check(use_visual=False)
+            if state == PageState.UNKNOWN and self.visual_model:
+                state, info = self.check(use_visual=True)
             
             if state == PageState.DETAIL_PAGE:
                 return True
@@ -263,26 +265,7 @@ def integrate_with_crawler(crawler_instance, visual_model_func=None):
         crawler.run_all()
     """
     checker = VisualChecker(crawler_instance.d, visual_model_func)
-    
-    # 注入自检：在进入详情页后验证
-    original_collect = crawler_instance.collect_detail
-    
-    def checked_collect(station, city):
-        # 进入详情页
-        crawler_instance.d.click(station["cx"], station["cy"])
-        time.sleep(3)
-        
-        # 视觉自检
-        is_ok = checker.ensure_detail_page(max_retries=2)
-        if not is_ok:
-            print(f"    [!] 自检失败，跳过 {station['name'][:30]}")
-            crawler_instance.d.press("back")
-            return None
-        
-        # 正常采集
-        return original_collect(station, city)
-    
-    crawler_instance.collect_detail = checked_collect
+    crawler_instance.visual_checker = checker
     return checker
 
 
@@ -298,13 +281,23 @@ class QianwenVisionAdapter:
     """
     
     def __init__(self, api_key=None, model="qwen3-vl-flash"):
-        self.api_key = api_key or "sk-ws-H.EEHDRPE.0xeZ.MEQCIBhG18l3ZpKeOPQSQ8GQruFOBQ0CUdT66pbTRJ7Z9eaUAiAU_tiwR_UafO4oz5ppwY8jV0pMsZOx6C6bNL__BE8ppA"
+        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY", "")
         self.model = model
         self.endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     
     def __call__(self, image_path):
         """调用千问视觉模型分析页面截图"""
         import base64, requests, json, re
+
+        if not self.api_key:
+            return {
+                "page_type": "other",
+                "has_popup": False,
+                "popup_description": "",
+                "is_normal": False,
+                "suggestion": "配置 DASHSCOPE_API_KEY 后启用视觉模型",
+                "_error": "DASHSCOPE_API_KEY is not configured",
+            }
         
         with open(image_path, "rb") as f:
             img_b64 = base64.b64encode(f.read()).decode()
@@ -362,7 +355,7 @@ class QianwenVisionAdapter:
                 "page_type": "other",
                 "has_popup": False,
                 "popup_description": "",
-                "is_normal": True,
+                "is_normal": False,
                 "suggestion": "",
                 "_error": f"API status {resp.status_code}"
             }
@@ -372,7 +365,7 @@ class QianwenVisionAdapter:
                 "page_type": "other",
                 "has_popup": False,
                 "popup_description": "",
-                "is_normal": True,
+                "is_normal": False,
                 "suggestion": "",
                 "_error": str(e)
             }

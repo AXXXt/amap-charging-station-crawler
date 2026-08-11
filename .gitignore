@@ -11,10 +11,19 @@ __pycache__/
 # Data outputs
 *.json
 !batch_test_result.json
+data/*.db
+data/*.pid
+logs/
+outputs/
 
 # IDE
 .vscode/
 .idea/
+
+# Local secrets
+.env
+.env.*
+!.env.example
 
 # OS
 .DS_Store

@@ -19,6 +19,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .city-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .city-tag{padding:4px 10px;background:#e8f0fe;border:1px solid #c4d7f2;border-radius:14px;font-size:12px;cursor:pointer;user-select:none}
 .city-tag.active{background:#1a73e8;color:#fff;border-color:#1a73e8}
+.city-group{margin-bottom:4px;display:inline-block;vertical-align:top}
+.city-header{padding:4px 10px;background:#e8f0fe;border:1px solid #c4d7f2;border-radius:14px;font-size:12px;cursor:pointer;user-select:none;display:inline-block;margin:2px}
+.city-header.active{background:#1a73e8;color:#fff;border-color:#1a73e8}
+.city-header .arrow{font-size:10px;margin-left:2px}
+.district-panel{display:none;padding:6px 10px;margin:2px 0 4px 12px;background:#fafbfc;border-radius:8px;border:1px solid #e8e8e8}
+.district-panel.show{display:flex;flex-wrap:wrap;gap:4px}
+.district-tag{padding:2px 8px;background:#fff;border:1px solid #ddd;border-radius:10px;font-size:11px;cursor:pointer;user-select:none}
+.district-tag.active{background:#34a853;color:#fff;border-color:#34a853}
+.district-actions{margin-top:4px;display:flex;gap:6px;width:100%}
+.district-actions .btn-sm{padding:2px 10px;font-size:11px;border:none;border-radius:8px;cursor:pointer}
+.btn-sm-all{background:#1a73e8;color:#fff}
+.btn-sm-none{background:#f0f0f0;color:#666}
 .btn{padding:10px 20px;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;transition:.2s}
 .btn-primary{background:#1a73e8;color:#fff}
 .btn-primary:hover{background:#1557b0}
@@ -58,8 +70,8 @@ tr:hover{background:#f8f9ff}
     <div class="card">
       <h2>任务配置</h2>
       <div class="form-group">
-        <label>选择城市（可多选）</label>
-        <div class="city-tags" id="city-tags"></div>
+        <label>选择城市/区县（点城市展开区县，直接点=全城采集）</label>
+        <div id="city-tags"></div>
       </div>
       <div class="form-group">
         <label>
@@ -135,51 +147,154 @@ const CITIES = {
   "济源":["济源"]
 };
 
-let selectedCities = [];
-let pollTimer = null;
 
 // 初始化城市标签
+let selectedCities = [];
+let selectedDistricts = {};  // {city: [district1, district2]}
+let pollTimer = null;
+
 function initCityTags() {
   const container = document.getElementById('city-tags');
-  Object.keys(CITIES).forEach(city => {
-    const tag = document.createElement('span');
-    tag.className = 'city-tag';
-    tag.textContent = city;
-    tag.onclick = () => {
-      tag.classList.toggle('active');
-      if (tag.classList.contains('active')) {
+  Object.entries(CITIES).forEach(([city, districts]) => {
+    const group = document.createElement('div');
+    group.className = 'city-group';
+    
+    // City header (clickable tag)
+    const header = document.createElement('span');
+    header.className = 'city-header';
+    header.innerHTML = city + ' <span class="arrow">&#9662;</span>';
+    header.onclick = (e) => {
+      e.stopPropagation();
+      // Toggle district panel
+      const panel = group.querySelector('.district-panel');
+      const isOpening = !panel.classList.contains('show');
+      panel.classList.toggle('show');
+      header.querySelector('.arrow').innerHTML = isOpening ? '&#9652;' : '&#9662;';
+    };
+    
+    // Direct click on header (without arrow toggle) = select whole city
+    header.ondblclick = () => {
+      header.classList.toggle('active');
+      if (header.classList.contains('active')) {
         if (!selectedCities.includes(city)) selectedCities.push(city);
+        // Clear district selections for this city
+        delete selectedDistricts[city];
+        panel.querySelectorAll('.district-tag').forEach(t => t.classList.remove('active'));
       } else {
         selectedCities = selectedCities.filter(c => c !== city);
       }
     };
-    container.appendChild(tag);
+    group.appendChild(header);
+    
+    // District panel
+    const panel = document.createElement('div');
+    panel.className = 'district-panel';
+    
+    districts.forEach(district => {
+      const dt = document.createElement('span');
+      dt.className = 'district-tag';
+      dt.textContent = district;
+      dt.onclick = (e) => {
+        e.stopPropagation();
+        dt.classList.toggle('active');
+        // Collect selected districts
+        if (!selectedDistricts[city]) selectedDistricts[city] = [];
+        if (dt.classList.contains('active')) {
+          if (!selectedDistricts[city].includes(district)) selectedDistricts[city].push(district);
+          // Deselect city-level if district selected
+          selectedCities = selectedCities.filter(c => c !== city);
+          header.classList.remove('active');
+        } else {
+          selectedDistricts[city] = selectedDistricts[city].filter(d => d !== district);
+          if (selectedDistricts[city].length === 0) delete selectedDistricts[city];
+        }
+      };
+      panel.appendChild(dt);
+    });
+    
+    // Select all / none buttons
+    const actions = document.createElement('div');
+    actions.className = 'district-actions';
+    const btnAll = document.createElement('button');
+    btnAll.className = 'btn-sm btn-sm-all';
+    btnAll.textContent = '全选';
+    btnAll.onclick = (e) => {
+      e.stopPropagation();
+      panel.querySelectorAll('.district-tag').forEach(t => t.classList.add('active'));
+      selectedDistricts[city] = [...districts];
+      selectedCities = selectedCities.filter(c => c !== city);
+      header.classList.remove('active');
+    };
+    const btnNone = document.createElement('button');
+    btnNone.className = 'btn-sm btn-sm-none';
+    btnNone.textContent = '清除';
+    btnNone.onclick = (e) => {
+      e.stopPropagation();
+      panel.querySelectorAll('.district-tag').forEach(t => t.classList.remove('active'));
+      delete selectedDistricts[city];
+    };
+    actions.appendChild(btnAll);
+    actions.appendChild(btnNone);
+    panel.appendChild(actions);
+    
+    group.appendChild(panel);
+    container.appendChild(group);
   });
-  // 默认选中郑州
-  container.querySelector('.city-tag').classList.add('active');
-  selectedCities = ['郑州'];
+  
+  // Default: select 郑州 city-level
+  const firstHeader = container.querySelector('.city-header');
+  if (firstHeader) {
+    firstHeader.classList.add('active');
+    selectedCities = ['郑州'];
+  }
 }
 
 // 启动任务
 async function startTask() {
-  if (selectedCities.length === 0) {
-    alert('请至少选择一个城市');
-    return;
+  const useVisual = document.getElementById('use-visual').checked;
+  
+  // Build params
+  let params = new URLSearchParams();
+  params.append('use_visual', useVisual);
+  
+  // Collect all selected items
+  const allCities = new Set();
+  
+  // City-level selections
+  if (selectedCities.length > 0) {
+    params.append('cities', selectedCities.join(','));
+    selectedCities.forEach(c => allCities.add(c));
+  } else {
+    params.append('cities', '');  // placeholder
   }
   
-  const useVisual = document.getElementById('use-visual').checked;
-  const cities = selectedCities.join(',');
+  // District-level selections
+  const districtParts = [];
+  Object.entries(selectedDistricts).forEach(([city, districts]) => {
+    districts.forEach(d => {
+      districtParts.push(city + ':' + d);
+    });
+    allCities.add(city);
+  });
+  
+  if (districtParts.length > 0) {
+    params.append('districts', districtParts.join(','));
+  }
+  
+  if (allCities.size === 0 && districtParts.length === 0) {
+    alert('请至少选择一个城市或区县');
+    return;
+  }
   
   document.getElementById('btn-start').disabled = true;
   document.getElementById('btn-stop').disabled = false;
   document.getElementById('app-status').innerHTML = '<span class="badge badge-running">采集中</span>';
   
   try {
-    const resp = await fetch(`/api/tasks/start?cities=${encodeURIComponent(cities)}&use_visual=${useVisual}`, {method:'POST'});
+    const resp = await fetch('/api/tasks/start?' + params.toString(), {method:'POST'});
     const data = await resp.json();
     console.log('Task started:', data);
     
-    // 开始轮询状态
     pollTimer = setInterval(pollStatus, 2000);
     pollStatus();
   } catch(e) {

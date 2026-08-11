@@ -527,11 +527,24 @@ def _run_crawl_task(cities, use_visual=False, districts=None):
         # city/district loop would make later wrappers call earlier wrappers
         # recursively.
         original_search = crawler.search_stations
-        def search_with_progress(city, query=None, recenter_only=False):
+        def search_with_progress(
+            city,
+            query=None,
+            recenter_only=False,
+            station_handler=None,
+        ):
             if not task_state["running"]:
                 raise InterruptedError("Task stopped by user")
             task_state["current_station"] = query or ""
-            result = original_search(city, query, recenter_only)
+            if station_handler is None:
+                result = original_search(city, query, recenter_only)
+            else:
+                result = original_search(
+                    city,
+                    query,
+                    recenter_only,
+                    station_handler,
+                )
             if not recenter_only and result:
                 _log(f"  找到 {len(result)} 个站点")
             return result

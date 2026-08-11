@@ -212,6 +212,14 @@ def parse_detail_xml(xml_text):
             result["business_hours"] = texts[i + 1]; break
         if "暂无营业时间" in t:
             result["business_hours"] = "暂无营业时间"; break
+        if "24小时营业" in t:
+            result["business_hours"] = t; break
+        if "营业中" in t:
+            if i + 1 < len(texts) and "小时营业" in texts[i + 1]:
+                result["business_hours"] = texts[i + 1]
+            else:
+                result["business_hours"] = t
+            break
     
     # Distance & duration
     for t in texts:
@@ -612,11 +620,149 @@ class AmapCrawler:
             time.sleep(1.5)
         return assess_page(self.d.dump_hierarchy()).kind == PageKind.SEARCH_RESULTS
 
-    def search_stations(self, city, query=None, recenter_only=False):
+    @staticmethod
+    def _extract_visible_station_cards(xml_text):
+        cards = []
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError:
+            return cards
+
+        for node in root.iter("node"):
+            if node.attrib.get("clickable") != "true":
+                continue
+            description = node.attrib.get("content-desc", "").strip()
+            if (
+                not description
+                or "充电" not in description
+                or description.startswith("搜索框")
+            ):
+                continue
+            bounds_match = re.match(
+                r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]",
+                node.attrib.get("bounds", ""),
+            )
+            if not bounds_match:
+                continue
+            x1, y1, x2, y2 = map(int, bounds_match.groups())
+            cards.append(
+                {
+                    "name": description,
+                    "cx": (x1 + x2) // 2,
+                    "cy": (y1 + y2) // 2,
+                    "bounds": (x1, y1, x2, y2),
+                }
+            )
+        return sorted(cards, key=lambda card: (card["cy"], card["cx"]))
+
+    def _visible_card_can_be_clicked(self, station):
+        x1, y1, x2, y2 = station.get("bounds", (0, 0, 0, 0))
+        try:
+            _, screen_height = self.d.window_size()
+        except Exception:
+            screen_height = 2400
+        return (
+            x2 > x1
+            and y2 > y1
+            and y1 >= 280
+            and station["cy"] <= screen_height - 240
+        )
+
+    def _scan_search_results_incrementally(self, query, station_handler, max_scrolls=12):
+        seen_keys = set()
+        discovered = []
+        no_new_count = 0
+        scroll_count = 0
+
+        while True:
+            if self._should_stop():
+                print("    收到停止信号")
+                break
+
+            xml = self.d.dump_hierarchy()
+            cards = self._extract_visible_station_cards(xml)
+            candidate = None
+            has_unseen_card = False
+            for card in cards:
+                key = normalize_station_name(card["name"])
+                if not key or key in seen_keys:
+                    continue
+                has_unseen_card = True
+                if self._visible_card_can_be_clicked(card):
+                    candidate = (key, card)
+                    break
+
+            if candidate:
+                key, station = candidate
+                seen_keys.add(key)
+                station["search_query"] = query
+                station["_click_visible"] = True
+                discovered.append(dict(station))
+                no_new_count = 0
+                print(f"    [发现] {station['name'][:50]}，立即进入详情")
+                station_handler(station)
+                if self._should_stop():
+                    print("    收到停止信号")
+                    break
+                continue
+
+            if not cards or not has_unseen_card:
+                no_new_count += 1
+            else:
+                no_new_count = 0
+            if no_new_count >= 2:
+                print(f"    滚动{scroll_count}次，无新站点，停止采集")
+                break
+            if scroll_count >= max_scrolls:
+                break
+
+            self.d.swipe(540, 1900, 540, 600, duration=0.4)
+            time.sleep(1.5)
+            scroll_count += 1
+
+        print(f"    增量发现 {len(discovered)} 个充电站（滚动{scroll_count}次）")
+        return discovered
+
+    def _enter_search_query(self, query):
+        query_entered = False
+        try:
+            focused_input = self.d(focused=True)
+            if focused_input.exists:
+                focused_input.set_text(query)
+                query_entered = True
+        except Exception:
+            pass
+
+        if query_entered:
+            return
+
+        try:
+            self.d.clear_text()
+            time.sleep(0.5)
+        except Exception:
+            self.d.long_click(540, 176, duration=1.0)
+            time.sleep(1)
+            xml = self.d.dump_hierarchy()
+            if "全选" in xml:
+                match = re.search(
+                    r'text="全选"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+                    xml,
+                )
+                if match:
+                    center_x = (int(match.group(1)) + int(match.group(3))) // 2
+                    center_y = (int(match.group(2)) + int(match.group(4))) // 2
+                    self.d.click(center_x, center_y)
+                    time.sleep(0.5)
+            self.d.press("delete")
+            time.sleep(0.5)
+        self.d.send_keys(query)
+
+    def search_stations(self, city, query=None, recenter_only=False, station_handler=None):
         """搜索指定区县的重卡充电站
         
         Args:
             recenter_only: 仅切换城市定位，不解析站点列表
+            station_handler: 发现当前可见站点后立即调用的处理函数
         """
         if self._should_stop():
             return []
@@ -654,33 +800,16 @@ class AmapCrawler:
         
         time.sleep(2)
         
-        # === Clear existing text in search box ===
-        try:
-            self.d.clear_text()
-            time.sleep(0.5)
-        except Exception:
-            # Fallback: long-press to trigger context menu, then select all
-            self.d.long_click(540, 176, duration=1.0)
-            time.sleep(1)
-            xml = self.d.dump_hierarchy()
-            if "全选" in xml:
-                m = re.search(r'text="全选"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
-                if m:
-                    cx = (int(m.group(1)) + int(m.group(3))) // 2
-                    cy = (int(m.group(2)) + int(m.group(4))) // 2
-                    self.d.click(cx, cy)
-                    time.sleep(0.5)
-            self.d.press("delete")
-            time.sleep(0.5)
-        
-        # Type search query
-        self.d.send_keys(query)
+        self._enter_search_query(query)
         time.sleep(1)
         self.d.press("enter")
         time.sleep(3)
 
         if recenter_only:
             return []
+
+        if station_handler is not None:
+            return self._scan_search_results_incrementally(query, station_handler)
         
         # === Scroll and collect ALL search results (waterfall list) ===
         seen_keys = set()
@@ -759,6 +888,21 @@ class AmapCrawler:
                 print(f"    [视觉] 检查失败: {e}")
         
         return all_stations
+
+    def _open_visible_station(self, station):
+        if self._should_stop():
+            return False
+        center_x = station.get("cx")
+        center_y = station.get("cy")
+        if center_x is None or center_y is None:
+            return False
+        print(f"      [定位] 点击当前可见站点: {station['name'][:50]}")
+        self.d.click(int(center_x), int(center_y))
+        if self._confirm_detail_page(station["name"]):
+            return True
+        print("      [定位] 点击后未进入目标详情页，停止本次采集")
+        self._recover_to_search_results()
+        return False
     
     def _find_and_click_station(self, station_name, max_scrolls=12):
         target_name = normalize_station_name(station_name)
@@ -838,10 +982,17 @@ class AmapCrawler:
             return None
 
         opened_by_poi = False
-        if station.get("id"):
+        opened_from_visible_card = False
+        if station.get("_click_visible"):
+            opened_from_visible_card = self._open_visible_station(station)
+        elif station.get("id"):
             opened_by_poi = self._open_poi_detail(station)
 
-        if not opened_by_poi and not self._find_and_click_station(station["name"]):
+        if (
+            not opened_by_poi
+            and not opened_from_visible_card
+            and not self._find_and_click_station(station["name"])
+        ):
             return None
         
         # Dump 1: initial view + classify
@@ -865,7 +1016,6 @@ class AmapCrawler:
         # === Handle click_to_expand FIRST (before scrolling!) ===
         # 必须先点击再滚动，否则坐标会位移
         if page_info["type"] == "click_to_expand":
-            import re
             m = re.search(r'text="/度"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml1)
             if not m:
                 m = re.search(r'text="查看"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml1)
@@ -968,50 +1118,54 @@ class AmapCrawler:
         
         return result
     
-    def run_district(self, city, district):
-        print(f"\n  [District] {city}/{district}")
-        
-        query = f"{city}{district}{SEARCH_KEYWORD}" if district != city else f"{city}{SEARCH_KEYWORD}"
-        # Recenter to city first
-        self.search_stations(city, query=f"{city}市", recenter_only=True)
-        import time; time.sleep(1)
-        
-        stations = self.search_stations(city, query)
-        if not stations:
-            return 0
-        
-        print(f"    Found {len(stations)} stations in this district")
+    def _collect_district_search(self, city, district, query):
         count = 0
         mismatch_count = 0
-        
-        for i, station in enumerate(stations):
+        attempted_count = 0
+
+        def handle_station(station):
+            nonlocal count, mismatch_count, attempted_count
             if self._should_stop():
-                print("    收到停止信号")
-                break
+                return
+            attempted_count += 1
             try:
                 result = self.collect_detail(station, city)
                 if result is None:
-                    continue
+                    return
 
                 if district != city:
                     addr = result.get("address", "")
                     name = result.get("station_name", "")
                     if district not in addr and district not in name:
                         mismatch_count += 1
-                        msg = f"      [{i+1}/{len(stations)}] SKIP: not in {district}"
-                        print(msg)
-                        continue
+                        print(f"      [{attempted_count}] SKIP: not in {district}")
+                        return
 
                 self.results.append(result)
                 count += 1
             except Exception as e:
-                print(f"      [{i+1}/{len(stations)}] FAIL: {e}")
+                print(f"      [{attempted_count}] FAIL: {e}")
                 try:
-                    self.d.press("back")
-                    import time; time.sleep(2)
-                except:
+                    self._recover_to_search_results()
+                except Exception:
                     pass
-        
+
+        stations = self.search_stations(
+            city,
+            query,
+            station_handler=handle_station,
+        )
+        print(f"    Found {len(stations)} stations in this district")
+        return count, mismatch_count
+
+    def run_district(self, city, district):
+        print(f"\n  [District] {city}/{district}")
+
+        query = f"{city}{district}{SEARCH_KEYWORD}" if district != city else f"{city}{SEARCH_KEYWORD}"
+        self.search_stations(city, query=f"{city}市", recenter_only=True)
+        time.sleep(1)
+
+        count, mismatch_count = self._collect_district_search(city, district, query)
         print(f"  District {district} done: {count} stations, skipped {mismatch_count}")
         return count
     
@@ -1034,52 +1188,8 @@ class AmapCrawler:
             else:
                 query = f"{city}{district}{SEARCH_KEYWORD}"
             
-            stations = self.search_stations(city, query)
-            if not stations:
-                continue
-            
-            print(f"    该区县发现 {len(stations)} 个站点")
-            mismatch_count = 0
-            
-            for i, station in enumerate(stations):
-                if self._should_stop():
-                    print("    收到停止信号")
-                    break
-                try:
-                    result = self.collect_detail(station, city)
-                    if result is None:
-                        continue
-                    
-                    # 区县校验：地址/站名是否包含目标区县
-                    if district != city:
-                        addr = result.get("address", "")
-                        name = result.get("station_name", "")
-                        if district not in addr and district not in name:
-                            mismatch_count += 1
-                            print(f"      [{i+1}/{len(stations)}] SKIP: not in {district} (x{mismatch_count})")
-                            continue
-
-                    self.results.append(result)
-                    city_total += 1
-                    
-                except Exception as e:
-                    print(f"      [{i+1}/{len(stations)}] FAIL: {e}")
-                    # Recovery: back + visual check
-                    try:
-                        self.d.press("back")
-                        time.sleep(2)
-                        # Visual-guided recovery
-                        if self.visual_checker:
-                            try:
-                                state, _ = self.visual_checker.check(use_visual=True)
-                                if state.name != "SEARCH_RESULTS":
-                                    print(f"      [恢复] 视觉检查: 未回到搜索结果页({state.name})，再次back")
-                                    self.d.press("back")
-                                    time.sleep(2)
-                            except:
-                                pass
-                    except:
-                        pass
+            district_count, _ = self._collect_district_search(city, district, query)
+            city_total += district_count
         
         print(f"  城市 {city} 合计: {city_total} 个站点")
         return city_total

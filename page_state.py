@@ -81,7 +81,17 @@ def assess_page(xml_text: str, expected_station: Optional[str] = None) -> PageAs
         return PageAssessment(PageKind.POPUP, 0.9, tuple(reasons), expected_visible)
 
     time_period_count = len(re.findall(r"\d{2}:\d{2}[-~]\d{2}:\d{2}", combined_text))
-    if time_period_count >= 2 and "参考价" in combined_text and "服务费" in combined_text:
+    price_detail_title = any(
+        title in combined_text
+        for title in ("充电价格详情", "电价详情", "价格详情")
+    )
+    fee_breakdown = "参考价" in combined_text and (
+        "电费" in combined_text or "服务费" in combined_text
+    )
+    if fee_breakdown and (
+        time_period_count >= 2
+        or (price_detail_title and time_period_count >= 1)
+    ):
         reasons.extend(("multiple_time_periods", "fee_breakdown"))
         return PageAssessment(PageKind.PRICE_DETAIL, 0.98, tuple(reasons), expected_visible)
 

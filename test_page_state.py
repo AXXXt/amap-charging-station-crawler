@@ -95,6 +95,17 @@ class PageStateTests(unittest.TestCase):
         </hierarchy>"""
         self.assertEqual(PageKind.PRICE_DETAIL, assess_page(xml).kind)
 
+    def test_single_period_price_detail_with_title(self):
+        xml = """<hierarchy>
+            <node text="充电价格详情" />
+            <node text="00:00-07:00" />
+            <node text="参考价0.64/度" />
+            <node text="电费：￥0.37/度" />
+            <node text="服务费：￥0.27/度" />
+        </hierarchy>"""
+
+        self.assertEqual(PageKind.PRICE_DETAIL, assess_page(xml).kind)
+
     def test_live_search_and_detail_fixtures_when_available(self):
         fixture_dir = Path(__file__).parent / "debug_runs" / "page_state_compare"
         search_path = fixture_dir / "search.xml"

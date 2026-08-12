@@ -80,6 +80,213 @@ def generate_search_queries():
     return queries
 SCROLL_SMALL = (540, 2000, 540, 1600)  # 小幅度滚动用于露出时间段
 
+
+def _parse_bounds(value):
+    match = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", value or "")
+    if not match:
+        return None
+    return tuple(map(int, match.groups()))
+
+
+def _price_period(time_range="", total_price="", elec_fee="", service_fee="", tag="", source=""):
+    return {
+        "time": time_range,
+        "total_price": total_price,
+        "elec_fee": elec_fee,
+        "service_fee": service_fee,
+        "tag": tag,
+        "source": source,
+    }
+
+
+def _normalize_price_period(period, default_source=""):
+    return _price_period(
+        time_range=(period.get("time") or "").replace("~", "-"),
+        total_price=period.get("total_price") or period.get("price", ""),
+        elec_fee=period.get("elec_fee", ""),
+        service_fee=period.get("service_fee", ""),
+        tag=period.get("tag", ""),
+        source=period.get("source") or default_source,
+    )
+
+
+def merge_price_periods(detail_periods, fallback_periods):
+    """价格详情优先，并用内嵌趋势补齐缺失时段或参考价。"""
+    if not detail_periods:
+        merged = []
+        by_time = {}
+        for fallback_period in fallback_periods or []:
+            fallback = _normalize_price_period(fallback_period, "embedded_trend")
+            time_range = fallback["time"]
+            existing = by_time.get(time_range) if time_range else None
+            if existing is None:
+                merged.append(fallback)
+                if time_range:
+                    by_time[time_range] = fallback
+                continue
+            for field in ("total_price", "elec_fee", "service_fee", "tag"):
+                if not existing.get(field) and fallback.get(field):
+                    existing[field] = fallback[field]
+        return merged
+
+    merged = []
+    by_time = {}
+    for detail_period in detail_periods:
+        detail = _normalize_price_period(detail_period, "price_detail")
+        time_range = detail["time"]
+        existing = by_time.get(time_range) if time_range else None
+        if existing is None:
+            merged.append(detail)
+            if time_range:
+                by_time[time_range] = detail
+            continue
+        for field in ("total_price", "elec_fee", "service_fee", "tag"):
+            if not existing.get(field) and detail.get(field):
+                existing[field] = detail[field]
+
+    for fallback_period in fallback_periods or []:
+        fallback = _normalize_price_period(fallback_period, "embedded_trend")
+        time_range = fallback["time"]
+        if not re.fullmatch(r"\d{2}:\d{2}-\d{2}:\d{2}", time_range):
+            continue
+        existing = by_time.get(time_range)
+        if existing is None:
+            merged.append(dict(fallback))
+            if time_range:
+                by_time[time_range] = merged[-1]
+            continue
+        for field in ("total_price", "elec_fee", "service_fee", "tag"):
+            if not existing.get(field) and fallback.get(field):
+                existing[field] = fallback[field]
+    return merged
+
+
+def find_price_detail_entry(xml_text):
+    """定位详情页中的分时电价入口，优先返回完整趋势图区块。"""
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return None
+
+    parents = {child: parent for parent in root.iter() for child in parent}
+
+    def node_value(node):
+        return (node.attrib.get("text") or node.attrib.get("content-desc") or "").strip()
+
+    def clickable_ancestors(node):
+        ancestors = []
+        current = node
+        while current in parents:
+            current = parents[current]
+            if current.tag != "node" or current.attrib.get("clickable") != "true":
+                continue
+            bounds = _parse_bounds(current.attrib.get("bounds"))
+            if bounds:
+                ancestors.append((current, bounds))
+        return ancestors
+
+    trend_nodes = [
+        node for node in root.iter("node")
+        if "24小时价格趋势图" in node_value(node)
+    ]
+    for node in trend_nodes:
+        ancestors = clickable_ancestors(node)
+        if not ancestors:
+            continue
+        block_candidates = [
+            item for item in ancestors
+            if item[1][2] - item[1][0] >= 400 and item[1][3] - item[1][1] >= 120
+        ]
+        _, bounds = min(block_candidates or ancestors, key=lambda item: (
+            (item[1][2] - item[1][0]) * (item[1][3] - item[1][1])
+        ))
+        x1, y1, x2, y2 = bounds
+        return {
+            "cx": (x1 + x2) // 2,
+            "cy": (y1 + y2) // 2,
+            "bounds": bounds,
+            "marker": "price_trend",
+        }
+
+    price_card_candidates = []
+    for node in root.iter("node"):
+        if node.attrib.get("clickable") != "true":
+            continue
+        values = [node_value(child) for child in node.iter("node")]
+        values = [value for value in values if value]
+        combined = "\n".join(values)
+        if "/度" not in values:
+            continue
+        if "查看" not in values and not re.search(r"\d{2}:\d{2}起[涨降]至", combined):
+            continue
+        bounds = _parse_bounds(node.attrib.get("bounds"))
+        if not bounds:
+            continue
+        width = bounds[2] - bounds[0]
+        height = bounds[3] - bounds[1]
+        if height > max(520, int(width * 0.7)):
+            continue
+        price_card_candidates.append(bounds)
+    if price_card_candidates:
+        bounds = min(
+            price_card_candidates,
+            key=lambda item: (item[2] - item[0]) * (item[3] - item[1]),
+        )
+        x1, y1, x2, y2 = bounds
+        return {
+            "cx": (x1 + x2) // 2,
+            "cy": (y1 + y2) // 2,
+            "bounds": bounds,
+            "marker": "price_card",
+        }
+
+    marker_checks = (
+        ("price_change", lambda value: bool(re.search(r"\d{2}:\d{2}起[涨降]至", value))),
+        ("price_detail", lambda value: value in ("电价详情", "价格详情", "充电价格详情")),
+    )
+    has_price_hint = False
+    for marker, check in marker_checks:
+        for node in root.iter("node"):
+            if not check(node_value(node)):
+                continue
+            has_price_hint = True
+            ancestors = clickable_ancestors(node)
+            if ancestors:
+                _, bounds = min(ancestors, key=lambda item: (
+                    (item[1][2] - item[1][0]) * (item[1][3] - item[1][1])
+                ))
+            else:
+                bounds = _parse_bounds(node.attrib.get("bounds"))
+            if not bounds:
+                continue
+            x1, y1, x2, y2 = bounds
+            return {
+                "cx": (x1 + x2) // 2,
+                "cy": (y1 + y2) // 2,
+                "bounds": bounds,
+                "marker": marker,
+            }
+    if has_price_hint:
+        for node in root.iter("node"):
+            if node_value(node) != "/度":
+                continue
+            ancestors = clickable_ancestors(node)
+            if ancestors:
+                _, bounds = min(ancestors, key=lambda item: (
+                    (item[1][2] - item[1][0]) * (item[1][3] - item[1][1])
+                ))
+            else:
+                bounds = _parse_bounds(node.attrib.get("bounds"))
+            if bounds:
+                x1, y1, x2, y2 = bounds
+                return {
+                    "cx": (x1 + x2) // 2,
+                    "cy": (y1 + y2) // 2,
+                    "bounds": bounds,
+                    "marker": "price_unit",
+                }
+    return None
+
 # ============================================================
 # PAGE TYPE CLASSIFIER
 # ============================================================
@@ -87,7 +294,7 @@ SCROLL_SMALL = (540, 2000, 540, 1600)  # 小幅度滚动用于露出时间段
 PAGE_STRUCTURE_MARKERS = {
     "has_equipment":     ["空闲", "空"],                       # 枪数/功率行
     "has_price_trend":   ["24小时价格趋势图"],                  # 内嵌价格趋势图区块
-    "has_price_click":   ["00:00起降至", "查看"],              # 需要点击电价跳转分时页
+    "has_price_click":   ["电价详情", "价格详情"],
     "has_parking":       ["停车费", "停车免费"],                # 停车费行
     "has_occupancy":     ["占位费"],                           # 占位费行
     "has_business_hours":["营业时间"],                          # 营业时间行
@@ -110,6 +317,10 @@ def classify_detail_page(xml_text):
     features = {}
     for name, keywords in PAGE_STRUCTURE_MARKERS.items():
         features[name] = any(kw in xml_text for kw in keywords)
+    features["has_price_click"] = features["has_price_click"] or bool(
+        re.search(r"\d{2}:\d{2}起[涨降]至", xml_text)
+    )
+    features["has_price_detail_entry"] = find_price_detail_entry(xml_text) is not None
     
     # 分类逻辑：只看UI区块是否存在
     if features["has_price_trend"]:
@@ -117,7 +328,7 @@ def classify_detail_page(xml_text):
         page_type = "full_trend"
         scrolls = 2
         desc = "完整：含24h价格趋势图"
-    elif features["has_price_click"]:
+    elif features["has_price_click"] or features["has_price_detail_entry"]:
         # 需要点击电价跳转分时页 = 特殊类型，滚1次 + 点击价格
         page_type = "click_to_expand"
         scrolls = 1
@@ -317,7 +528,11 @@ def parse_detail_xml(xml_text):
                 for j in range(i, min(len(texts), i+4)):
                     c = texts[j]
                     if ("-" in c and ":" in c) or c == "当前时段": tr = c; break
-                prices.append({"price": pv, "time": tr})
+                prices.append(_price_period(
+                    time_range=tr,
+                    total_price=pv,
+                    source="embedded_trend",
+                ))
         
         if "快充价格" in texts and "慢充价格" in texts:
             mid = len(prices) // 2
@@ -334,57 +549,101 @@ def parse_price_detail_page(xml_text):
     """
     解析点击跳转后的"充电价格详情"页
     状态机按文档顺序解析：时间段 → 参考价 → 电费 → 服务费
-    Returns: list of {time, total_price, elec_fee, service_fee, tag}
+    Returns: list of {time, total_price, elec_fee, service_fee, tag, source}
     """
-    import re
-    
     texts = []
-    for m in re.finditer(r'text="([^"]*)"', xml_text):
-        t = m.group(1).strip()
-        if t:
-            texts.append(t)
-    
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        root = None
+    if root is not None:
+        for node in root.iter("node"):
+            node_values = []
+            for attribute in ("text", "content-desc"):
+                value = node.attrib.get(attribute, "").strip()
+                if value and value not in node_values:
+                    node_values.append(value)
+            for value in node_values:
+                if value:
+                    texts.append(value)
+    else:
+        for match in re.finditer(r'text="([^"]*)"', xml_text):
+            value = match.group(1).strip()
+            if value:
+                texts.append(value)
+
     STATE_IDLE, STATE_REF, STATE_ELEC, STATE_SVC = 0, 1, 2, 3
-    
+
     periods = []
     current = None
     state = STATE_IDLE
     int_buffer = ""  # 整数部分缓冲（处理价格拆分为"1" + ".45"的情况）
-    
-    for t in texts:
-        # 时间段标记
-        if re.match(r'^\d{2}:\d{2}[-~]\d{2}:\d{2}$', t):
-            if current:
-                periods.append(current)
-            current = {"time": t, "total_price": "", "elec_fee": "", "service_fee": "", "tag": ""}
+
+    inline_patterns = (
+        ("total_price", re.compile(r"参考价\s*[:：]?\s*[￥¥]?\s*(\d+(?:\.\d+)?)")),
+        ("elec_fee", re.compile(r"电费\s*[:：]?\s*[￥¥]?\s*(\d+(?:\.\d+)?)")),
+        ("service_fee", re.compile(r"服务费\s*[:：]?\s*[￥¥]?\s*(\d+(?:\.\d+)?)")),
+    )
+
+    def append_current():
+        if not current or not current["time"]:
+            return
+        if not any(current[field] for field in ("total_price", "elec_fee", "service_fee")):
+            return
+        periods.append(current.copy())
+
+    for value in texts:
+        time_match = re.search(r'\d{2}:\d{2}[-~]\d{2}:\d{2}', value)
+        if time_match:
+            time_range = time_match.group(0).replace("~", "-")
+            if current is None or current["time"] != time_range:
+                append_current()
+                current = _price_period(time_range=time_range, source="price_detail")
+            state = STATE_IDLE
+            int_buffer = ""
+
+        if current is None:
+            continue
+
+        # 标签
+        for tag in ("最低", "当前计费时段"):
+            if tag in value:
+                current["tag"] = tag
+
+        matched_inline = False
+        for field, pattern in inline_patterns:
+            match = pattern.search(value)
+            if match:
+                current[field] = match.group(1)
+                matched_inline = True
+        if matched_inline:
             state = STATE_IDLE
             int_buffer = ""
             continue
-        
-        if current is None:
-            continue
-        
-        # 标签
-        if t in ("最低", "当前计费时段"):
-            current["tag"] = t
-            continue
-        
+
         # 整数价格缓冲：纯数字（如"1"在".45"前面）
-        if t.isdigit() and len(t) <= 2:
-            int_buffer = t
+        normalized_value = (
+            value.replace("￥", "")
+            .replace("¥", "")
+            .replace("元", "")
+            .replace("/度", "")
+            .strip()
+        )
+        if normalized_value.isdigit() and len(normalized_value) <= 2:
+            int_buffer = normalized_value
             continue
-        
+
         # 状态切换
-        if "参考价" in t:
+        if "参考价" in value:
             state = STATE_REF; int_buffer = ""; continue
-        if "电费:" in t or "电费" in t:
+        if "电费" in value:
             state = STATE_ELEC; int_buffer = ""; continue
-        if "服务费:" in t or "服务费" in t:
+        if "服务费" in value:
             state = STATE_SVC; int_buffer = ""; continue
-        
+
         # 小数价格：".XX"
-        if re.match(r'^\.\d+$', t):
-            price = (int_buffer if int_buffer else "0") + t
+        if re.match(r'^\.\d+$', normalized_value):
+            price = (int_buffer if int_buffer else "0") + normalized_value
             if state == STATE_REF:
                 current["total_price"] = price
             elif state == STATE_ELEC:
@@ -396,20 +655,18 @@ def parse_price_detail_page(xml_text):
             continue
         
         # 完整价格："X.XX"
-        if re.match(r'^\d+\.\d+$', t):
+        if re.match(r'^\d+\.\d+$', normalized_value):
             if state == STATE_REF:
-                current["total_price"] = t
+                current["total_price"] = normalized_value
             elif state == STATE_ELEC:
-                current["elec_fee"] = t
+                current["elec_fee"] = normalized_value
             elif state == STATE_SVC:
-                current["service_fee"] = t
+                current["service_fee"] = normalized_value
             state = STATE_IDLE
             continue
-    
-    if current:
-        periods.append(current)
-    
-    return periods
+
+    append_current()
+    return merge_price_periods(periods, [])
 
 def merge_results(r1, r2):
     """合并两次dump结果，r2补充r1缺失的字段（但不覆盖已有字段）"""
@@ -619,6 +876,55 @@ class AmapCrawler:
             self.d.press("back")
             time.sleep(1.5)
         return assess_page(self.d.dump_hierarchy()).kind == PageKind.SEARCH_RESULTS
+
+    def _collect_price_detail(self, detail_xml, station_name):
+        entry = find_price_detail_entry(detail_xml)
+        if entry is None:
+            return [], {}, True
+        if self._should_stop():
+            return [], {}, False
+
+        print(f"      [电价] 点击分时详情入口: {entry['marker']}")
+        self.d.click(entry["cx"], entry["cy"])
+        confirmed, assessment, price_xml = self._wait_for_page(
+            PageKind.PRICE_DETAIL,
+            timeout=7,
+        )
+        if self._should_stop():
+            return [], {}, False
+
+        if not confirmed:
+            current_kind = assessment.kind if assessment else PageKind.UNKNOWN
+            print(f"      [电价] 未进入价格详情页: {current_kind.value}")
+            current_detail = assess_page(price_xml, station_name)
+            if current_kind == PageKind.DETAIL and (
+                price_xml == detail_xml or current_detail.expected_station_visible
+            ):
+                return [], {}, True
+            self.d.press("back")
+            returned, _, _ = self._wait_for_page(
+                PageKind.DETAIL,
+                expected_station=station_name,
+                timeout=5,
+            )
+            return [], {}, returned
+
+        price_details = parse_price_detail_page(price_xml)
+        price_page_result = parse_detail_xml(price_xml)
+        if price_details:
+            print(f"      [电价] 获取 {len(price_details)} 个分时价格")
+        else:
+            print("      [电价] 详情页未解析到分时价格，保留趋势图数据")
+
+        self.d.press("back")
+        returned, _, _ = self._wait_for_page(
+            PageKind.DETAIL,
+            expected_station=station_name,
+            timeout=6,
+        )
+        if not returned:
+            print("      [电价] 返回原站点详情页失败")
+        return price_details, price_page_result, returned
 
     @staticmethod
     def _extract_visible_station_cards(xml_text):
@@ -1011,28 +1317,22 @@ class AmapCrawler:
         # Adaptive collection based on page type
         xml2 = xml1  # default: same as xml1
         xml3 = xml1
-        price_details = []  # 分时电价详情（click_to_expand类型）
-        
-        # === Handle click_to_expand FIRST (before scrolling!) ===
-        # 必须先点击再滚动，否则坐标会位移
-        if page_info["type"] == "click_to_expand":
-            m = re.search(r'text="/度"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml1)
-            if not m:
-                m = re.search(r'text="查看"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml1)
-            if m:
-                cx = (int(m.group(1)) + int(m.group(3))) // 2
-                cy = (int(m.group(2)) + int(m.group(4))) // 2
-                self.d.click(cx, cy)
-                time.sleep(3)
-                xml_price = self.d.dump_hierarchy()
-                price_details = parse_price_detail_page(xml_price)
-                # 获取跳转页面的运营商
-                r_price = parse_detail_xml(xml_price)
-                if r_price.get("operator") and not r1.get("operator"):
-                    r1["operator"] = r_price["operator"]
-                # Back to detail page
-                self.d.press("back")
-                time.sleep(2)
+        price_details = []
+        price_detail_attempted = page_info["features"]["has_price_detail_entry"]
+
+        # 电价入口必须在滚动前点击，否则页面坐标会发生位移。
+        if price_detail_attempted:
+            price_details, price_page_result, detail_ready = self._collect_price_detail(
+                xml1,
+                station["name"],
+            )
+            if self._should_stop():
+                return None
+            if not detail_ready:
+                self._recover_to_search_results()
+                return None
+            if price_page_result.get("operator") and not r1.get("operator"):
+                r1["operator"] = price_page_result["operator"]
         
         # Then scroll for other data
         if page_info["scrolls_needed"] >= 1:
@@ -1063,9 +1363,17 @@ class AmapCrawler:
             result["station_name"] = station["name"]
             result["station_name_source"] = "input_verified"
         
-        # Attach price details from sub-page
+        # 价格详情页数据优先，内嵌趋势作为缺失时段和点击失败兜底。
         if price_details:
-            result["fast_prices"] = price_details
+            result["fast_prices"] = merge_price_periods(
+                price_details,
+                result.get("fast_prices"),
+            )
+            result["price_schedule_source"] = "price_detail"
+        elif result.get("fast_prices") or result.get("slow_prices"):
+            result["price_schedule_source"] = "embedded_trend"
+        result["price_detail_attempted"] = price_detail_attempted
+        result["price_detail_collected"] = bool(price_details)
         result["search_city"] = city
         result["search_keyword"] = station.get("search_query", SEARCH_KEYWORD)
         result["collected_at"] = datetime.now(timezone.utc).isoformat()

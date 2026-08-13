@@ -11,6 +11,11 @@ import api_server
 from batch_runner import evaluate_detail
 from crawler import (
     AmapCrawler,
+    DISTRICT_MATCH_OUTSIDE,
+    DISTRICT_MATCH_TARGET,
+    DISTRICT_MATCH_UNKNOWN,
+    SCROLL_TOWARD_TOP,
+    classify_district_match,
     classify_detail_page,
     find_price_detail_entry,
     merge_price_periods,
@@ -151,6 +156,105 @@ class CrawlerRegressionTests(unittest.TestCase):
         self.assertEqual(1, len(discovered))
         self.assertEqual("测试重卡充电站", handled[0]["name"])
         self.assertTrue(handled[0]["_click_visible"])
+        self.assertEqual(0, crawler.d.swipe_count)
+
+    def test_search_card_extraction_keeps_visible_address(self):
+        xml = """<hierarchy>
+            <node clickable="true"
+                  content-desc="达克云超级充电站(鼎盛鸿丰裕物流园站)"
+                  bounds="[36,700][1044,1200]">
+                <node text="河南省郑州市新郑市德坤物流E园西南侧310米" />
+                <node text="66公里" />
+            </node>
+        </hierarchy>"""
+
+        cards = AmapCrawler._extract_visible_station_cards(xml)
+
+        self.assertEqual(1, len(cards))
+        self.assertEqual(
+            "河南省郑州市新郑市德坤物流E园西南侧310米",
+            cards[0]["address"],
+        )
+
+    def test_search_card_extraction_ignores_highlighted_title(self):
+        xml = """<hierarchy>
+            <node clickable="true"
+                  content-desc="小桔充电汽车充电站(郑州中原区电厂路充电站)"
+                  bounds="[36,700][1044,1200]">
+                <node text="&lt;font&gt;郑州中原区电厂路充电站&lt;/font&gt;" />
+                <node text="电厂路与电厂南路交叉口东北角地面停车场" />
+            </node>
+        </hierarchy>"""
+
+        cards = AmapCrawler._extract_visible_station_cards(xml)
+
+        self.assertEqual("", cards[0]["address"])
+
+    def test_district_match_recognizes_unlisted_city_functional_area(self):
+        match = classify_district_match(
+            "郑州",
+            "中原区",
+            "河南省郑州市航空港区炎黄大道与文化路交叉口",
+        )
+
+        self.assertEqual(DISTRICT_MATCH_OUTSIDE, match)
+
+    def test_district_match_does_not_treat_residential_area_as_district(self):
+        match = classify_district_match(
+            "郑州",
+            "中原区",
+            "河南省郑州市建设路幸福小区东门",
+        )
+
+        self.assertEqual(DISTRICT_MATCH_UNKNOWN, match)
+
+    def test_district_match_uses_station_name_only_as_target_hint(self):
+        outside_name = classify_district_match(
+            "郑州",
+            "中原区",
+            "",
+            target_hints=("新郑市物流园重卡充电站",),
+        )
+        target_name = classify_district_match(
+            "郑州",
+            "中原区",
+            "",
+            target_hints=("郑州中原区电厂路充电站",),
+        )
+
+        self.assertEqual(DISTRICT_MATCH_UNKNOWN, outside_name)
+        self.assertEqual(DISTRICT_MATCH_TARGET, target_name)
+
+    def test_incremental_scan_stops_when_handler_requests_it(self):
+        xml = """<hierarchy>
+            <node clickable="true"
+                  content-desc="郑州公用集团中原超级充电站"
+                  bounds="[36,700][1044,1200]" />
+        </hierarchy>"""
+
+        class FakeDevice:
+            def __init__(self):
+                self.swipe_count = 0
+
+            def dump_hierarchy(self):
+                return xml
+
+            def window_size(self):
+                return 1080, 2400
+
+            def swipe(self, *args, **kwargs):
+                self.swipe_count += 1
+
+        crawler = AmapCrawler.__new__(AmapCrawler)
+        crawler.d = FakeDevice()
+        crawler.stop_event = None
+
+        discovered = crawler._scan_search_results_incrementally(
+            "郑州中原区重卡充电站",
+            lambda station: False,
+        )
+
+        self.assertEqual(1, len(discovered))
         self.assertEqual(0, crawler.d.swipe_count)
 
     def test_visible_station_uses_current_card_coordinates(self):
@@ -373,9 +477,70 @@ class CrawlerRegressionTests(unittest.TestCase):
         self.assertEqual([], periods)
         crawler.d.press.assert_not_called()
 
+    def test_price_detail_return_scrolls_up_to_verify_original_station(self):
+        station_name = "云快充汽车充电站(易岸达物流园充电站)"
+        detail_xml = """<hierarchy>
+            <node clickable="true" bounds="[48,1400][1032,2050]">
+                <node text="24小时价格趋势图" />
+            </node>
+        </hierarchy>"""
+        price_xml = """<hierarchy>
+            <node text="充电价格详情" />
+            <node text="00:00-07:00 参考价0.89/度 电费：￥0.62/度 服务费：￥0.27/度" />
+        </hierarchy>"""
+        low_detail_xml = """<hierarchy>
+            <node text="电站信息" />
+            <node text="24小时价格趋势图" />
+        </hierarchy>"""
+        top_detail_xml = f"""<hierarchy>
+            <node content-desc="{station_name}" />
+            <node text="电站信息" />
+        </hierarchy>"""
+        crawler = AmapCrawler.__new__(AmapCrawler)
+        crawler.d = MagicMock()
+        crawler.d.dump_hierarchy.return_value = top_detail_xml
+        crawler.stop_event = None
+        crawler._wait_for_page = MagicMock(side_effect=[
+            (True, PageAssessment(PageKind.PRICE_DETAIL, 0.98, ()), price_xml),
+            (False, PageAssessment(PageKind.UNKNOWN, 0.2, (), False), low_detail_xml),
+        ])
+
+        with patch("crawler.time.sleep"):
+            periods, _, returned = crawler._collect_price_detail(detail_xml, station_name)
+
+        self.assertTrue(returned)
+        self.assertEqual("0.62", periods[0]["elec_fee"])
+        crawler.d.swipe.assert_called_once_with(*SCROLL_TOWARD_TOP, duration=0.35)
+
+    def test_price_entry_must_clear_bottom_overlay_before_clicking(self):
+        crawler = AmapCrawler.__new__(AmapCrawler)
+        crawler.d = MagicMock()
+        crawler.d.window_size.return_value = (1080, 2340)
+
+        hidden_entry = {
+            "bounds": (48, 1827, 1032, 2340),
+            "cx": 540,
+            "cy": 2083,
+        }
+        visible_entry = {
+            "bounds": (48, 1447, 1032, 1858),
+            "cx": 540,
+            "cy": 1652,
+        }
+
+        self.assertFalse(crawler._price_entry_is_safely_clickable(hidden_entry))
+        self.assertTrue(crawler._price_entry_is_safely_clickable(visible_entry))
+
     def test_collect_detail_prefers_price_breakdown_over_embedded_trend(self):
         crawler = AmapCrawler.__new__(AmapCrawler)
         crawler.d = MagicMock()
+        crawler.d.dump_hierarchy.return_value = """<hierarchy>
+            <node content-desc="测试重卡充电站" />
+            <node text="电站信息" />
+            <node clickable="true" bounds="[48,1400][1032,2050]">
+                <node text="24小时价格趋势图" />
+            </node>
+        </hierarchy>"""
         crawler.stop_event = None
         crawler._open_visible_station = MagicMock(return_value=True)
         crawler._collect_price_detail = MagicMock(return_value=([
@@ -428,6 +593,218 @@ class CrawlerRegressionTests(unittest.TestCase):
         self.assertEqual("0.37", result["fast_prices"][0]["elec_fee"])
         self.assertEqual("0.27", result["fast_prices"][0]["service_fee"])
 
+    def test_collect_detail_detects_price_entry_after_second_scroll(self):
+        self._assert_delayed_price_entry_is_collected(entry_scroll=2)
+
+    def test_collect_detail_detects_price_entry_after_third_scroll(self):
+        self._assert_delayed_price_entry_is_collected(entry_scroll=3)
+
+    def test_collect_detail_waits_for_trend_card_to_clear_bottom_overlay(self):
+        station_name = "云快充汽车充电站(易岸达物流园充电站)"
+        hidden_trend_xml = f"""<hierarchy>
+            <node content-desc="{station_name}" />
+            <node text="电站信息" />
+            <node clickable="true" bounds="[48,1827][1032,2340]">
+                <node text="24小时价格趋势图" />
+                <node text="￥0.89/度" />
+            </node>
+        </hierarchy>"""
+        still_hidden_xml = f"""<hierarchy>
+            <node content-desc="{station_name}" />
+            <node text="电站信息" />
+            <node clickable="true" bounds="[48,1855][1032,2266]">
+                <node text="24小时价格趋势图" />
+                <node text="￥0.89/度" />
+            </node>
+        </hierarchy>"""
+        visible_trend_xml = f"""<hierarchy>
+            <node content-desc="{station_name}" />
+            <node text="电站信息" />
+            <node clickable="true" bounds="[48,1447][1032,1858]">
+                <node text="24小时价格趋势图" />
+                <node text="￥0.89/度" />
+                <node text="00:00-07:00" />
+            </node>
+        </hierarchy>"""
+
+        crawler = AmapCrawler.__new__(AmapCrawler)
+        crawler.d = MagicMock()
+        crawler.d.window_size.return_value = (1080, 2340)
+        crawler.d.dump_hierarchy.side_effect = [
+            hidden_trend_xml,
+            still_hidden_xml,
+            visible_trend_xml,
+        ]
+        crawler.stop_event = None
+        crawler._open_visible_station = MagicMock(return_value=True)
+        crawler._collect_price_detail = MagicMock(return_value=([{
+            "time": "00:00-07:00",
+            "total_price": "0.89",
+            "elec_fee": "0.62",
+            "service_fee": "0.27",
+        }], {}, True))
+
+        with patch("crawler.time.sleep"):
+            result = crawler.collect_detail(
+                {
+                    "name": station_name,
+                    "_click_visible": True,
+                    "longitude": 113.1,
+                    "latitude": 34.7,
+                },
+                "郑州",
+            )
+
+        self.assertEqual(2, crawler.d.swipe.call_count)
+        crawler._collect_price_detail.assert_called_once_with(
+            visible_trend_xml,
+            station_name,
+        )
+        self.assertTrue(result["price_detail_collected"])
+
+    def test_collect_detail_stops_price_probe_at_bottom(self):
+        station_name = "测试基础充电站"
+        initial_xml = f"""<hierarchy>
+            <node content-desc="{station_name}" />
+            <node text="电站信息" />
+            <node text="快充" />
+            <node text="空闲2/4" />
+            <node text="￥0.89/度" />
+        </hierarchy>"""
+        bottom_xml = f"""<hierarchy>
+            <node content-desc="{station_name}" />
+            <node text="电站信息" />
+            <node text="暂无更多内容" />
+        </hierarchy>"""
+        crawler = AmapCrawler.__new__(AmapCrawler)
+        crawler.d = MagicMock()
+        crawler.d.dump_hierarchy.side_effect = [initial_xml, bottom_xml]
+        crawler.stop_event = None
+        crawler._open_visible_station = MagicMock(return_value=True)
+        crawler._collect_price_detail = MagicMock()
+
+        with patch("crawler.time.sleep"):
+            result = crawler.collect_detail(
+                {
+                    "name": station_name,
+                    "_click_visible": True,
+                    "longitude": 113.1,
+                    "latitude": 34.7,
+                },
+                "郑州",
+            )
+
+        self.assertEqual(1, crawler.d.swipe.call_count)
+        crawler._collect_price_detail.assert_not_called()
+        self.assertFalse(result["price_detail_attempted"])
+        self.assertFalse(result["price_detail_collected"])
+
+    def test_collect_detail_skips_delayed_probe_without_price_signals(self):
+        station_name = "测试基础充电站"
+        initial_xml = f"""<hierarchy>
+            <node content-desc="{station_name}" />
+            <node text="营业时间" />
+            <node text="24小时营业" />
+            <node text="地图" />
+            <node text="电话" />
+        </hierarchy>"""
+        crawler = AmapCrawler.__new__(AmapCrawler)
+        crawler.d = MagicMock()
+        crawler.d.dump_hierarchy.return_value = initial_xml
+        crawler.stop_event = None
+        crawler._open_visible_station = MagicMock(return_value=True)
+        crawler._collect_price_detail = MagicMock()
+
+        with patch("crawler.time.sleep"):
+            result = crawler.collect_detail(
+                {
+                    "name": station_name,
+                    "_click_visible": True,
+                    "longitude": 113.1,
+                    "latitude": 34.7,
+                },
+                "郑州",
+            )
+
+        crawler.d.swipe.assert_not_called()
+        crawler._collect_price_detail.assert_not_called()
+        self.assertFalse(result["price_detail_attempted"])
+
+    def _assert_delayed_price_entry_is_collected(self, entry_scroll):
+        station_name = "云快充汽车充电站(易岸达物流园充电站)"
+        initial_xml = f"""<hierarchy>
+            <node content-desc="{station_name}" />
+            <node text="电站信息" />
+            <node text="快充" />
+            <node text="空闲11/20" />
+            <node text="￥0.89/度" />
+        </hierarchy>"""
+        trend_xml = f"""<hierarchy>
+            <node content-desc="{station_name}" />
+            <node text="电站信息" />
+            <node clickable="true" bounds="[48,1400][1032,2050]">
+                <node text="24小时价格趋势图" />
+                <node text="￥0.89/度" />
+                <node text="00:00-07:00" />
+            </node>
+        </hierarchy>"""
+        plain_scroll_xml = f"""<hierarchy>
+            <node content-desc="{station_name}" />
+            <node text="电站信息" />
+            <node text="高德专享价" />
+        </hierarchy>"""
+        scroll_xmls = [plain_scroll_xml] * (entry_scroll - 1) + [trend_xml]
+
+        crawler = AmapCrawler.__new__(AmapCrawler)
+        crawler.d = MagicMock()
+        crawler.d.dump_hierarchy.side_effect = [initial_xml, *scroll_xmls]
+        crawler.stop_event = None
+        crawler._open_visible_station = MagicMock(return_value=True)
+        crawler._collect_price_detail = MagicMock(return_value=([{
+            "time": "00:00-07:00",
+            "total_price": "0.89",
+            "elec_fee": "0.62",
+            "service_fee": "0.27",
+        }], {}, True))
+
+        with patch("crawler.time.sleep"):
+            result = crawler.collect_detail(
+                {
+                    "name": station_name,
+                    "_click_visible": True,
+                    "longitude": 113.1,
+                    "latitude": 34.7,
+                },
+                "郑州",
+            )
+
+        self.assertEqual(entry_scroll, crawler.d.swipe.call_count)
+        crawler._collect_price_detail.assert_called_once_with(trend_xml, station_name)
+        self.assertTrue(result["price_detail_attempted"])
+        self.assertTrue(result["price_detail_collected"])
+        self.assertEqual("price_detail", result["price_schedule_source"])
+        self.assertEqual("0.62", result["fast_prices"][0]["elec_fee"])
+
+    def test_merge_results_combines_price_periods_from_multiple_scrolls(self):
+        first = parse_detail_xml("""<hierarchy>
+            <node text="24小时价格趋势图" />
+            <node text="￥0.64/度" />
+            <node text="00:00-07:00" />
+        </hierarchy>""")
+        second = parse_detail_xml("""<hierarchy>
+            <node text="24小时价格趋势图" />
+            <node text="￥0.88/度" />
+            <node text="07:00-16:00" />
+        </hierarchy>""")
+
+        from crawler import merge_results
+
+        periods = merge_results(first, second)["fast_prices"]
+
+        self.assertEqual(["00:00-07:00", "07:00-16:00"], [
+            period["time"] for period in periods
+        ])
+
     def test_verified_heavy_truck_station_counts_as_detailed(self):
         assessment = evaluate_detail({
             "detail_verified": True,
@@ -470,6 +847,122 @@ class CrawlerRegressionTests(unittest.TestCase):
 
         self.assertEqual(1, count)
         self.assertEqual(["three"], [item["station_name"] for item in crawler.results])
+
+    def test_district_filter_uses_search_card_address_when_detail_is_abbreviated(self):
+        crawler = AmapCrawler.__new__(AmapCrawler)
+        crawler.results = []
+        crawler.stop_event = None
+        station = {
+            "name": "云快充汽车充电站(易岸达物流园充电站)",
+            "address": "河南省郑州市中原区梧桐西街2号",
+        }
+
+        def search_stations(city, query=None, station_handler=None, **kwargs):
+            station_handler(station)
+            return [station]
+
+        crawler.search_stations = search_stations
+        crawler.collect_detail = MagicMock(return_value={
+            "station_name": station["name"],
+            "address": "梧桐西街2号",
+        })
+
+        count, mismatch_count = crawler._collect_district_search(
+            "郑州",
+            "中原区",
+            "郑州中原区重卡充电站",
+        )
+
+        self.assertEqual(1, count)
+        self.assertEqual(0, mismatch_count)
+        self.assertEqual([station["name"]], [item["station_name"] for item in crawler.results])
+
+    def test_district_filter_stops_after_confirmed_outside_tail(self):
+        crawler = AmapCrawler.__new__(AmapCrawler)
+        crawler.results = []
+        crawler.stop_event = None
+        stations = [
+            {"name": "target-one", "address": "河南省郑州市中原区建设路1号"},
+            {"name": "target-two", "address": "河南省郑州市中原区桐柏路2号"},
+            {"name": "early-outlier", "address": "河南省郑州市新郑市薛店镇3号"},
+            {"name": "target-three", "address": "河南省郑州市中原区电厂路4号"},
+            {"name": "outside-one", "address": "河南省郑州市惠济区大河路5号"},
+            {"name": "outside-two", "address": "河南省郑州市金水区货站街6号"},
+            {"name": "outside-three", "address": "河南省郑州市荥阳市中原路7号"},
+            {"name": "outside-four", "address": "河南省郑州市管城回族区航海路8号"},
+            {"name": "late-target", "address": "河南省郑州市中原区西四环9号"},
+        ]
+        visited = []
+
+        def search_stations(city, query=None, station_handler=None, **kwargs):
+            discovered = []
+            for station in stations:
+                discovered.append(station)
+                if station_handler(station) is False:
+                    break
+            return discovered
+
+        def collect_detail(station, city):
+            visited.append(station["name"])
+            return {
+                "station_name": station["name"],
+                "address": station["address"],
+            }
+
+        crawler.search_stations = search_stations
+        crawler.collect_detail = collect_detail
+
+        count, mismatch_count = crawler._collect_district_search(
+            "郑州",
+            "中原区",
+            "郑州中原区重卡充电站",
+        )
+
+        self.assertEqual(3, count)
+        self.assertEqual(5, mismatch_count)
+        self.assertEqual(["target-one", "target-two", "target-three"], visited)
+        self.assertNotIn("late-target", visited)
+
+    def test_district_filter_does_not_stop_on_unknown_addresses(self):
+        crawler = AmapCrawler.__new__(AmapCrawler)
+        crawler.results = []
+        crawler.stop_event = None
+        stations = [
+            {"name": "target-one", "address": "河南省郑州市中原区建设路1号"},
+            {"name": "unknown-one"},
+            {"name": "unknown-two"},
+            {"name": "unknown-three"},
+            {"name": "unknown-four"},
+            {"name": "target-two", "address": "河南省郑州市中原区西四环2号"},
+        ]
+
+        def search_stations(city, query=None, station_handler=None, **kwargs):
+            for station in stations:
+                if station_handler(station) is False:
+                    break
+            return stations
+
+        def collect_detail(station, city):
+            return {
+                "station_name": station["name"],
+                "address": station.get("address", "未知道路"),
+            }
+
+        crawler.search_stations = search_stations
+        crawler.collect_detail = collect_detail
+
+        count, mismatch_count = crawler._collect_district_search(
+            "郑州",
+            "中原区",
+            "郑州中原区重卡充电站",
+        )
+
+        self.assertEqual(2, count)
+        self.assertEqual(4, mismatch_count)
+        self.assertEqual(
+            ["target-one", "target-two"],
+            [item["station_name"] for item in crawler.results],
+        )
 
 
 class ApiRegressionTests(unittest.TestCase):

@@ -64,6 +64,51 @@ CITY_DISTRICTS = {
     "济源": ["济源"],  # 省直辖县级市，只有一个区划
 }
 
+DISTRICT_MATCH_TARGET = "target"
+DISTRICT_MATCH_OUTSIDE = "outside"
+DISTRICT_MATCH_UNKNOWN = "unknown"
+DISTRICT_OUTSIDE_TAIL_LIMIT = 4
+FUNCTIONAL_REGION_PREFIXES = (
+    "航空港区",
+    "郑东新区",
+    "高新区",
+    "高新技术产业开发区",
+    "经开区",
+    "经济技术开发区",
+    "城乡一体化示范区",
+)
+
+
+def classify_district_match(city, district, *address_sources, target_hints=()):
+    """按地址优先级判断站点属于目标区、其他区或无法确认。"""
+    city_districts = CITY_DISTRICTS.get(city, [])
+    other_districts = [item for item in city_districts if item != district]
+
+    for source in address_sources:
+        text = str(source or "").strip()
+        if not text:
+            continue
+        if district in text:
+            return DISTRICT_MATCH_TARGET
+        if any(other in text for other in other_districts):
+            return DISTRICT_MATCH_OUTSIDE
+        if any(
+            other_city != city and f"{other_city}市" in text
+            for other_city in CITY_DISTRICTS
+        ):
+            return DISTRICT_MATCH_OUTSIDE
+
+        city_marker = f"{city}市"
+        if city_marker in text:
+            city_remainder = text.split(city_marker, 1)[1]
+            if city_remainder.startswith(FUNCTIONAL_REGION_PREFIXES):
+                return DISTRICT_MATCH_OUTSIDE
+
+    if any(district in str(hint or "") for hint in target_hints):
+        return DISTRICT_MATCH_TARGET
+
+    return DISTRICT_MATCH_UNKNOWN
+
 # 从 CITY_DISTRICTS 生成所有搜索组合：(城市, 区县/全市)
 def generate_search_queries():
     """生成所有搜索组合：每个区县 + 每个城市兜底"""
@@ -79,6 +124,11 @@ def generate_search_queries():
         queries.append((city, f"{city}{SEARCH_KEYWORD}"))
     return queries
 SCROLL_SMALL = (540, 2000, 540, 1600)  # 小幅度滚动用于露出时间段
+SCROLL_TOWARD_TOP = (540, 700, 540, 1900)
+MAX_PRICE_PROBE_SCROLLS = 3
+MAX_STATION_CONFIRM_SCROLLS = 3
+PRICE_ENTRY_BOTTOM_MARGIN_RATIO = 0.13
+PRICE_ENTRY_MIN_BOTTOM_MARGIN = 260
 
 
 def _parse_bounds(value):
@@ -688,11 +738,12 @@ def merge_results(r1, r2):
                     merged[list_key].append(item)
                     seen.add(item)
     
-    # For prices: r2 may have time ranges that r1 doesn't
+    # Price trends can span multiple screens; merge and deduplicate every dump.
     for price_key in ["fast_prices", "slow_prices"]:
-        r1_has_time = any(p.get("time") for p in merged.get(price_key, []))
-        if not r1_has_time and r2.get(price_key):
-            merged[price_key] = r2[price_key]
+        merged[price_key] = merge_price_periods(
+            [],
+            list(merged.get(price_key) or []) + list(r2.get(price_key) or []),
+        )
     
     return merged
 
@@ -877,6 +928,70 @@ class AmapCrawler:
             time.sleep(1.5)
         return assess_page(self.d.dump_hierarchy()).kind == PageKind.SEARCH_RESULTS
 
+    def _confirm_station_detail_identity(self, station_name, timeout=4):
+        confirmed, assessment, xml_text = self._wait_for_page(
+            PageKind.DETAIL,
+            timeout=timeout,
+        )
+        if confirmed and assessment and assessment.expected_station_visible:
+            return True
+        if self._should_stop():
+            return False
+
+        current_detail = assess_page(xml_text, station_name)
+        if current_detail.expected_station_visible:
+            return True
+
+        detail_hints = (
+            "电站信息",
+            "营业时间",
+            "24小时价格趋势图",
+            "高德扫码充电",
+            "/度",
+        )
+        current_kind = assessment.kind if assessment else current_detail.kind
+        has_detail_hint = any(hint in (xml_text or "") for hint in detail_hints)
+        if current_kind not in (PageKind.DETAIL, PageKind.UNKNOWN) or not (
+            confirmed or has_detail_hint
+        ):
+            return False
+
+        for _ in range(MAX_STATION_CONFIRM_SCROLLS):
+            if self._should_stop():
+                return False
+            self.d.swipe(*SCROLL_TOWARD_TOP, duration=0.35)
+            time.sleep(0.8)
+            xml_text = self.d.dump_hierarchy()
+            assessment = assess_page(xml_text, station_name)
+            if assessment.kind == PageKind.DETAIL and assessment.expected_station_visible:
+                return True
+            if assessment.kind in (
+                PageKind.HOME,
+                PageKind.SEARCH_RESULTS,
+                PageKind.PRICE_DETAIL,
+            ):
+                return False
+        return False
+
+    def _price_entry_is_safely_clickable(self, entry):
+        if not entry or not entry.get("bounds"):
+            return False
+        try:
+            _, screen_height = self.d.window_size()
+            screen_height = int(screen_height)
+            if screen_height <= 0:
+                raise ValueError("invalid screen height")
+        except Exception:
+            screen_height = 2400
+
+        bottom_margin = max(
+            PRICE_ENTRY_MIN_BOTTOM_MARGIN,
+            int(screen_height * PRICE_ENTRY_BOTTOM_MARGIN_RATIO),
+        )
+        safe_bottom = screen_height - bottom_margin
+        _, y1, _, y2 = entry["bounds"]
+        return y1 >= 0 and y2 <= safe_bottom and entry["cy"] <= safe_bottom
+
     def _collect_price_detail(self, detail_xml, station_name):
         entry = find_price_detail_entry(detail_xml)
         if entry is None:
@@ -901,12 +1016,11 @@ class AmapCrawler:
                 price_xml == detail_xml or current_detail.expected_station_visible
             ):
                 return [], {}, True
+            if current_kind == PageKind.DETAIL or price_xml == detail_xml:
+                if self._confirm_station_detail_identity(station_name):
+                    return [], {}, True
             self.d.press("back")
-            returned, _, _ = self._wait_for_page(
-                PageKind.DETAIL,
-                expected_station=station_name,
-                timeout=5,
-            )
+            returned = self._confirm_station_detail_identity(station_name, timeout=5)
             return [], {}, returned
 
         price_details = parse_price_detail_page(price_xml)
@@ -917,11 +1031,7 @@ class AmapCrawler:
             print("      [电价] 详情页未解析到分时价格，保留趋势图数据")
 
         self.d.press("back")
-        returned, _, _ = self._wait_for_page(
-            PageKind.DETAIL,
-            expected_station=station_name,
-            timeout=6,
-        )
+        returned = self._confirm_station_detail_identity(station_name, timeout=6)
         if not returned:
             print("      [电价] 返回原站点详情页失败")
         return price_details, price_page_result, returned
@@ -951,9 +1061,33 @@ class AmapCrawler:
             if not bounds_match:
                 continue
             x1, y1, x2, y2 = map(int, bounds_match.groups())
+            child_texts = [
+                child.attrib.get("text", "").strip()
+                for child in node.iter("node")
+                if child.attrib.get("text", "").strip()
+            ]
+            regional_address = next(
+                (
+                    text
+                    for text in child_texts
+                    if "<" not in text
+                    and ">" not in text
+                    and text not in description
+                    and (
+                        any(
+                            district in text
+                            for districts in CITY_DISTRICTS.values()
+                            for district in districts
+                        )
+                        or any(f"{city}市" in text for city in CITY_DISTRICTS)
+                    )
+                ),
+                "",
+            )
             cards.append(
                 {
                     "name": description,
+                    "address": regional_address,
                     "cx": (x1 + x2) // 2,
                     "cy": (y1 + y2) // 2,
                     "bounds": (x1, y1, x2, y2),
@@ -1006,7 +1140,10 @@ class AmapCrawler:
                 discovered.append(dict(station))
                 no_new_count = 0
                 print(f"    [发现] {station['name'][:50]}，立即进入详情")
-                station_handler(station)
+                should_continue = station_handler(station)
+                if should_continue is False:
+                    print("    区县结果已收敛，停止继续滚动")
+                    break
                 if self._should_stop():
                     print("    收到停止信号")
                     break
@@ -1314,14 +1451,20 @@ class AmapCrawler:
         r1 = parse_detail_xml(xml1)
         print(f"      类型: {page_info['type']} ({page_info['description']})")
         
-        # Adaptive collection based on page type
-        xml2 = xml1  # default: same as xml1
-        xml3 = xml1
+        # Adaptive collection based on page type. Some stations only expose the
+        # trend entry after the second or third small swipe, so every dump must
+        # be rechecked instead of relying only on the initial classification.
+        parsed_pages = [r1]
         price_details = []
-        price_detail_attempted = page_info["features"]["has_price_detail_entry"]
+        price_page_result = {}
+        price_detail_attempted = False
 
         # 电价入口必须在滚动前点击，否则页面坐标会发生位移。
-        if price_detail_attempted:
+        initial_price_entry = find_price_detail_entry(xml1)
+        if initial_price_entry and self._price_entry_is_safely_clickable(
+            initial_price_entry
+        ):
+            price_detail_attempted = True
             price_details, price_page_result, detail_ready = self._collect_price_detail(
                 xml1,
                 station["name"],
@@ -1333,27 +1476,71 @@ class AmapCrawler:
                 return None
             if price_page_result.get("operator") and not r1.get("operator"):
                 r1["operator"] = price_page_result["operator"]
-        
-        # Then scroll for other data
-        if page_info["scrolls_needed"] >= 1:
+        elif initial_price_entry:
+            print("      [电价] 分时详情入口被底部操作栏遮挡，继续滚动")
+
+        minimum_scrolls = page_info["scrolls_needed"]
+        probe_delayed_price_entry = not price_detail_attempted and (
+            page_info["features"].get("has_equipment")
+            or page_info["features"].get("has_price_section")
+            or bool(r1.get("current_price"))
+        )
+        max_scrolls = max(
+            minimum_scrolls,
+            MAX_PRICE_PROBE_SCROLLS if probe_delayed_price_entry else 0,
+        )
+
+        for scroll_number in range(1, max_scrolls + 1):
+            if self._should_stop():
+                return None
             self.d.swipe(*SCROLL_SMALL, duration=0.3)
             time.sleep(2)
-            xml2 = self.d.dump_hierarchy()
-            r2 = parse_detail_xml(xml2)
-        
-        if page_info["scrolls_needed"] >= 2:
-            self.d.swipe(*SCROLL_SMALL, duration=0.3)
-            time.sleep(2)
-            xml3 = self.d.dump_hierarchy()
-            r3 = parse_detail_xml(xml3)
-        
-        # Merge all dumps
-        if page_info["scrolls_needed"] == 0:
-            result = r1
-        elif page_info["scrolls_needed"] == 1:
-            result = merge_results(r1, r2)
-        else:
-            result = merge_results(merge_results(r1, r2), r3)
+            scrolled_xml = self.d.dump_hierarchy()
+            parsed_pages.append(parse_detail_xml(scrolled_xml))
+
+            scrolled_price_entry = find_price_detail_entry(scrolled_xml)
+            if (
+                not price_detail_attempted
+                and scrolled_price_entry
+                and self._price_entry_is_safely_clickable(scrolled_price_entry)
+            ):
+                price_detail_attempted = True
+                print(f"      [电价] 第{scroll_number}次滚动后发现分时详情入口")
+                price_details, price_page_result, detail_ready = self._collect_price_detail(
+                    scrolled_xml,
+                    station["name"],
+                )
+                if self._should_stop():
+                    return None
+                if not detail_ready:
+                    self._recover_to_search_results()
+                    return None
+                if price_page_result.get("operator") and not r1.get("operator"):
+                    r1["operator"] = price_page_result["operator"]
+            elif not price_detail_attempted and scrolled_price_entry:
+                print(
+                    f"      [电价] 第{scroll_number}次滚动后入口仍被底部操作栏遮挡"
+                )
+
+            if scroll_number >= minimum_scrolls and price_detail_attempted:
+                break
+            if (
+                scroll_number >= minimum_scrolls
+                and not price_detail_attempted
+                and "暂无更多内容" in scrolled_xml
+            ):
+                print(f"      [电价] 第{scroll_number}次滚动已到页面底部")
+                break
+
+        if probe_delayed_price_entry and not price_detail_attempted:
+            print(
+                f"      [电价] 连续滚动{max_scrolls}次未发现分时详情入口，"
+                "保留页面内嵌价格"
+            )
+
+        result = parsed_pages[0]
+        for parsed_page in parsed_pages[1:]:
+            result = merge_results(result, parsed_page)
 
         if (
             not result["station_name"]
@@ -1430,33 +1617,90 @@ class AmapCrawler:
         count = 0
         mismatch_count = 0
         attempted_count = 0
+        consecutive_outside_count = 0
 
         def handle_station(station):
-            nonlocal count, mismatch_count, attempted_count
+            nonlocal count, mismatch_count, attempted_count, consecutive_outside_count
             if self._should_stop():
-                return
+                return False
             attempted_count += 1
+
+            if district != city:
+                card_match = classify_district_match(
+                    city,
+                    district,
+                    station.get("address"),
+                    target_hints=(station.get("name"),),
+                )
+                if card_match == DISTRICT_MATCH_OUTSIDE:
+                    mismatch_count += 1
+                    consecutive_outside_count += 1
+                    print(
+                        f"      [{attempted_count}] SKIP: search card not in {district}"
+                    )
+                    if (
+                        count > 0
+                        and consecutive_outside_count >= DISTRICT_OUTSIDE_TAIL_LIMIT
+                    ):
+                        print(
+                            f"      连续{consecutive_outside_count}个明确跨区结果，"
+                            "结束当前区县搜索"
+                        )
+                        return False
+                    return True
+
             try:
                 result = self.collect_detail(station, city)
                 if result is None:
-                    return
+                    consecutive_outside_count = 0
+                    return True
 
                 if district != city:
-                    addr = result.get("address", "")
-                    name = result.get("station_name", "")
-                    if district not in addr and district not in name:
+                    district_match = classify_district_match(
+                        city,
+                        district,
+                        result.get("address"),
+                        result.get("source_address"),
+                        station.get("address"),
+                        target_hints=(
+                            result.get("station_name"),
+                            station.get("name"),
+                        ),
+                    )
+                    if district_match != DISTRICT_MATCH_TARGET:
                         mismatch_count += 1
-                        print(f"      [{attempted_count}] SKIP: not in {district}")
-                        return
+                        if district_match == DISTRICT_MATCH_OUTSIDE:
+                            consecutive_outside_count += 1
+                            print(f"      [{attempted_count}] SKIP: not in {district}")
+                            if (
+                                count > 0
+                                and consecutive_outside_count
+                                >= DISTRICT_OUTSIDE_TAIL_LIMIT
+                            ):
+                                print(
+                                    f"      连续{consecutive_outside_count}个明确跨区结果，"
+                                    "结束当前区县搜索"
+                                )
+                                return False
+                        else:
+                            consecutive_outside_count = 0
+                            print(
+                                f"      [{attempted_count}] SKIP: district unknown"
+                            )
+                        return True
 
                 self.results.append(result)
                 count += 1
+                consecutive_outside_count = 0
+                return True
             except Exception as e:
+                consecutive_outside_count = 0
                 print(f"      [{attempted_count}] FAIL: {e}")
                 try:
                     self._recover_to_search_results()
                 except Exception:
                     pass
+                return True
 
         stations = self.search_stations(
             city,

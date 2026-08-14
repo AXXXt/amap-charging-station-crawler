@@ -43,7 +43,16 @@ FastAPI 服务，端口 8800：
 
 数据存储于 MySQL，表 `heavy_truck_stations` 自动建表。
 
-### 3. 视觉自检 (`visual_check.py`)
+### 3. MySQL 网格任务 (`mysql_scan_runner.py`)
+
+- 从 MySQL `scan_tasks` 原子领取 `pending` 网格任务，并更新为 `scanning`
+- 通过网格中心经纬度唤起高德地图，在当前位置搜索重卡充电站
+- 详情采集后按 `min_lng/max_lng/min_lat/max_lat` 过滤，只保留网格内站点
+- 将站点写入或更新到 `heavy_truck_stations`，并把执行记录写入 `collection_logs`
+- 成功更新任务为 `done`，异常更新为 `failed`，手动中断则释放回 `pending`
+- 默认只允许本机地址，以及名称为 `test`、以 `test_` 开头或以 `_test` 结尾的测试库，避免误消费远程正式任务
+
+### 4. 视觉自检 (`visual_check.py`)
 
 - `VisualChecker`：截图 → 判断页面状态 → 自动弹窗关闭/误触恢复
 - `VisualModelAdapter`：用户自定义视觉模型接入接口
@@ -160,7 +169,88 @@ resp = requests.post("http://localhost:8800/api/stations/batch", json=data["stat
 print(resp.json())  # {"inserted": N, "total": M}
 ```
 
-### 6. 接入视觉模型（可选）
+### 6. 本地 MySQL 网格任务测试
+
+先在 Navicat 中连接本机 MySQL，打开并执行 `dev-docs/evcs_local_test_schema.sql`。该脚本会无破坏性地创建 `evcs_local_test` 及以下三张表：
+
+- `heavy_truck_stations`
+- `scan_tasks`
+- `collection_logs`
+
+如果执行 `SHOW CREATE TABLE heavy_truck_stations` 时出现 `1146 - Table ... doesn't exist`，说明当前只创建了数据库、尚未创建业务表；执行上述脚本并刷新 Navicat 对象树即可。
+
+确认三张表存在后，设置本地连接：
+
+```powershell
+$env:DB_HOST="127.0.0.1"
+$env:DB_PORT="3306"
+$env:DB_USER="你的本地MySQL用户"
+$env:DB_PASSWORD="你的本地MySQL密码"
+$env:DB_NAME="evcs_local_test"
+$env:AMAP_API_KEY="你的高德Web服务Key"
+$env:DEVICE_SERIAL="你的设备序列号"
+```
+
+在 Navicat 中插入一条隔离测试任务：
+
+```sql
+USE evcs_local_test;
+
+INSERT INTO scan_tasks (
+    city, district, grid_index,
+    center_lng, center_lat,
+    min_lng, max_lng, min_lat, max_lat,
+    status
+) VALUES (
+    '郑州', '中原区', 900001,
+    113.608932, 34.752333,
+    113.588932, 113.624000, 34.732333, 34.772333,
+    'pending'
+)
+ON DUPLICATE KEY UPDATE
+    id = LAST_INSERT_ID(id),
+    center_lng = VALUES(center_lng),
+    center_lat = VALUES(center_lat),
+    min_lng = VALUES(min_lng),
+    max_lng = VALUES(max_lng),
+    min_lat = VALUES(min_lat),
+    max_lat = VALUES(max_lat),
+    status = 'pending',
+    assigned_device = NULL,
+    station_count = 0,
+    started_at = NULL,
+    completed_at = NULL;
+
+SELECT id, city, district, grid_index, status
+FROM scan_tasks
+WHERE city = '郑州' AND district = '中原区' AND grid_index = 900001;
+```
+
+记录查询出的任务 `id`，一次只执行这一条：
+
+```powershell
+python -X utf8 mysql_scan_runner.py status
+python -X utf8 mysql_scan_runner.py show --task-id <任务ID>
+python -X utf8 mysql_scan_runner.py run --task-id <任务ID> --device <设备序列号>
+```
+
+执行后在 Navicat 检查：
+
+```sql
+SELECT * FROM scan_tasks WHERE id = <任务ID>;
+SELECT * FROM heavy_truck_stations ORDER BY id DESC LIMIT 20;
+SELECT * FROM collection_logs ORDER BY id DESC LIMIT 20;
+```
+
+任务正常经历 `pending → scanning → done`。网格内没有符合条件的站点时，`done + station_count=0` 也是合法结果；执行异常时状态为 `failed`，错误写入 `collection_logs.error_msg`。需要重新测试时执行：
+
+```powershell
+python -X utf8 mysql_scan_runner.py reset --task-id <任务ID>
+```
+
+详细步骤和故障处理见 `dev-docs/mysql_local_grid_testing.md`。
+
+### 7. 接入视觉模型（可选）
 
 ```python
 from visual_check import VisualModelAdapter, integrate_with_crawler
@@ -182,8 +272,11 @@ crawler.run_all()
 adb-first/
 ├── crawler.py          # 采集引擎
 ├── api_server.py       # FastAPI 数据服务
+├── mysql_scan_runner.py # MySQL 网格任务本地联调执行器
+├── task_queue.py       # SQLite 单站点任务队列
+├── batch_runner.py     # SQLite 多设备执行器
 ├── visual_check.py     # 视觉模型自检模块
-├── batch_test_v2.py    # 端到端测试脚本
+├── dev-docs/           # 开发、部署、测试说明和本地 MySQL 建表脚本
 ├── .gitignore
 └── README.md
 ```

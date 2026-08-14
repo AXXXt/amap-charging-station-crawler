@@ -79,6 +79,49 @@ FUNCTIONAL_REGION_PREFIXES = (
 )
 
 
+def parse_grid_bounds(task):
+    field_names = ("min_lng", "max_lng", "min_lat", "max_lat")
+    missing = [name for name in field_names if task.get(name) in (None, "")]
+    if missing:
+        raise ValueError("网格任务缺少边界字段: " + ", ".join(missing))
+
+    bounds = {name: float(task[name]) for name in field_names}
+    if bounds["min_lng"] > bounds["max_lng"]:
+        raise ValueError("网格经度边界无效: min_lng > max_lng")
+    if bounds["min_lat"] > bounds["max_lat"]:
+        raise ValueError("网格纬度边界无效: min_lat > max_lat")
+    return bounds
+
+
+def point_in_grid(longitude, latitude, bounds):
+    if longitude in (None, "") or latitude in (None, ""):
+        return False
+    try:
+        longitude = float(longitude)
+        latitude = float(latitude)
+    except (TypeError, ValueError):
+        return False
+    return (
+        bounds["min_lng"] <= longitude <= bounds["max_lng"]
+        and bounds["min_lat"] <= latitude <= bounds["max_lat"]
+    )
+
+
+def grid_center(task, bounds=None):
+    bounds = bounds or parse_grid_bounds(task)
+    longitude = task.get("center_lng")
+    latitude = task.get("center_lat")
+    if longitude in (None, ""):
+        longitude = (bounds["min_lng"] + bounds["max_lng"]) / 2
+    if latitude in (None, ""):
+        latitude = (bounds["min_lat"] + bounds["max_lat"]) / 2
+    longitude = float(longitude)
+    latitude = float(latitude)
+    if not point_in_grid(longitude, latitude, bounds):
+        raise ValueError("网格中心点不在任务边界内")
+    return longitude, latitude
+
+
 def classify_district_match(city, district, *address_sources, target_hints=()):
     """按地址优先级判断站点属于目标区、其他区或无法确认。"""
     city_districts = CITY_DISTRICTS.get(city, [])
@@ -796,8 +839,15 @@ def geocode(address, city="郑州"):
 # DEVICE CONTROL
 # ============================================================
 class AmapCrawler:
-    def __init__(self, serial=DEVICE_SERIAL, visual_checker=None, stop_event=None):
+    def __init__(
+        self,
+        serial=DEVICE_SERIAL,
+        visual_checker=None,
+        stop_event=None,
+        adb_path=ADB_PATH,
+    ):
         self.serial = serial
+        self.adb_path = adb_path
         self.d = u2.connect(serial)
         self.results = []
         self.visual_checker = visual_checker  # 可选视觉自检器
@@ -887,7 +937,7 @@ class AmapCrawler:
         )
         try:
             completed = subprocess.run(
-                [ADB_PATH, "-s", self.serial, "shell", remote_command],
+                [getattr(self, "adb_path", ADB_PATH), "-s", self.serial, "shell", remote_command],
                 capture_output=True,
                 text=True,
                 timeout=20,
@@ -914,6 +964,44 @@ class AmapCrawler:
             f"{assessment.kind.value if assessment else 'unknown'}"
         )
         return False
+
+    def _open_map_location(self, longitude, latitude, label="网格中心"):
+        params = {
+            "sourceApplication": "adb-first",
+            "poiname": label,
+            "lat": f"{float(latitude):.6f}",
+            "lon": f"{float(longitude):.6f}",
+            "dev": "0",
+        }
+        uri = f"androidamap://viewMap?{urlencode(params)}"
+        remote_command = (
+            "am start -W -a android.intent.action.VIEW "
+            "-c android.intent.category.DEFAULT "
+            f"-d '{uri}' -p {AMAP_PACKAGE}"
+        )
+        try:
+            completed = subprocess.run(
+                [getattr(self, "adb_path", ADB_PATH), "-s", self.serial, "shell", remote_command],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+        except Exception as error:
+            print(f"    [网格] 中心点定位失败: {error}")
+            return False
+
+        if completed.returncode != 0 or "Error:" in completed.stdout:
+            message = (completed.stderr or completed.stdout).strip()
+            print(f"    [网格] 中心点定位失败: {message[:120]}")
+            return False
+
+        time.sleep(3)
+        try:
+            self._ensure_amap_foreground()
+        except Exception as error:
+            print(f"    [网格] 高德地图未正常打开: {error}")
+            return False
+        return True
 
     def _recover_to_search_results(self):
         for _ in range(3):
@@ -1613,7 +1701,7 @@ class AmapCrawler:
         
         return result
     
-    def _collect_district_search(self, city, district, query):
+    def _collect_district_search(self, city, district, query, result_filter=None):
         count = 0
         mismatch_count = 0
         attempted_count = 0
@@ -1655,6 +1743,10 @@ class AmapCrawler:
                     consecutive_outside_count = 0
                     return True
 
+                filter_match = (
+                    result_filter(result) if result_filter is not None else None
+                )
+
                 if district != city:
                     district_match = classify_district_match(
                         city,
@@ -1667,27 +1759,37 @@ class AmapCrawler:
                             station.get("name"),
                         ),
                     )
-                    if district_match != DISTRICT_MATCH_TARGET:
+                    if district_match == DISTRICT_MATCH_OUTSIDE:
                         mismatch_count += 1
-                        if district_match == DISTRICT_MATCH_OUTSIDE:
-                            consecutive_outside_count += 1
-                            print(f"      [{attempted_count}] SKIP: not in {district}")
-                            if (
-                                count > 0
-                                and consecutive_outside_count
-                                >= DISTRICT_OUTSIDE_TAIL_LIMIT
-                            ):
-                                print(
-                                    f"      连续{consecutive_outside_count}个明确跨区结果，"
-                                    "结束当前区县搜索"
-                                )
-                                return False
-                        else:
-                            consecutive_outside_count = 0
+                        consecutive_outside_count += 1
+                        print(f"      [{attempted_count}] SKIP: not in {district}")
+                        if (
+                            count > 0
+                            and consecutive_outside_count
+                            >= DISTRICT_OUTSIDE_TAIL_LIMIT
+                        ):
                             print(
-                                f"      [{attempted_count}] SKIP: district unknown"
+                                f"      连续{consecutive_outside_count}个明确跨区结果，"
+                                "结束当前区县搜索"
                             )
+                            return False
                         return True
+
+                if result_filter is not None and not filter_match:
+                    mismatch_count += 1
+                    consecutive_outside_count = 0
+                    print(f"      [{attempted_count}] SKIP: outside grid bounds")
+                    return True
+
+                if (
+                    district != city
+                    and district_match == DISTRICT_MATCH_UNKNOWN
+                    and result_filter is None
+                ):
+                    mismatch_count += 1
+                    consecutive_outside_count = 0
+                    print(f"      [{attempted_count}] SKIP: district unknown")
+                    return True
 
                 self.results.append(result)
                 count += 1
@@ -1720,6 +1822,57 @@ class AmapCrawler:
         count, mismatch_count = self._collect_district_search(city, district, query)
         print(f"  District {district} done: {count} stations, skipped {mismatch_count}")
         return count
+
+    def run_grid(self, task):
+        """按 scan_tasks 网格中心搜索，并仅保留边界内的站点。"""
+        bounds = parse_grid_bounds(task)
+        longitude, latitude = grid_center(task, bounds)
+        city = str(task.get("city") or "").strip()
+        district = str(task.get("district") or city).strip()
+        grid_index = task.get("grid_index")
+
+        if not city or not district:
+            raise ValueError("网格任务缺少 city 或 district")
+        if not AMAP_API_KEY:
+            raise RuntimeError(
+                "网格任务需要配置 AMAP_API_KEY，以校验站点坐标是否位于网格内"
+            )
+
+        print(
+            f"\n  [Grid] {city}/{district} #{grid_index} "
+            f"center={longitude:.6f},{latitude:.6f}"
+        )
+        if not self._open_map_location(
+            longitude,
+            latitude,
+            label=f"{city}{district}网格{grid_index}",
+        ):
+            raise RuntimeError("无法在高德地图中定位网格中心")
+
+        start_index = len(self.results)
+        query = str(task.get("query") or SEARCH_KEYWORD).strip()
+        count, mismatch_count = self._collect_district_search(
+            city,
+            district,
+            query,
+            result_filter=lambda result: point_in_grid(
+                result.get("longitude"),
+                result.get("latitude"),
+                bounds,
+            ),
+        )
+        grid_results = self.results[start_index:]
+        for result in grid_results:
+            result["scan_task_id"] = task.get("id")
+            result["grid_index"] = grid_index
+            result["grid_center_lng"] = longitude
+            result["grid_center_lat"] = latitude
+
+        print(
+            f"  Grid #{grid_index} done: {count} stations, "
+            f"skipped {mismatch_count}"
+        )
+        return grid_results
     
     def run_city(self, city):
         """采集单个城市的全部充电站（按区县遍历）"""

@@ -223,6 +223,7 @@ class DeviceWorker(threading.Thread):
         watch=False,
         log_path=None,
         failure_dir="debug_runs/batch_failures",
+        adb_path=ADB_PATH,
     ):
         super().__init__(name=f"device-{device['serial']}")
         self.queue = queue
@@ -235,6 +236,7 @@ class DeviceWorker(threading.Thread):
         self.watch = watch
         self.log_path = log_path
         self.failure_dir = failure_dir
+        self.adb_path = adb_path
         self.worker_id = f"{socket.gethostname()}:{os.getpid()}:{self.device_serial}"
 
     def _collect(self, crawler, task):
@@ -269,6 +271,7 @@ class DeviceWorker(threading.Thread):
                 serial=self.device_serial,
                 visual_checker=checker,
                 stop_event=self.stop_event,
+                adb_path=self.adb_path,
             )
         except Exception as error:
             log(f"{self.device_serial} 初始化失败: {error}", self.log_path)
@@ -426,6 +429,7 @@ def run_command(args):
             watch=args.watch,
             log_path=args.log,
             failure_dir=args.failure_dir,
+            adb_path=args.adb_path,
         )
         for device in devices
     ]

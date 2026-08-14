@@ -18,14 +18,147 @@ from crawler import (
     classify_district_match,
     classify_detail_page,
     find_price_detail_entry,
+    grid_center,
     merge_price_periods,
+    parse_grid_bounds,
     parse_detail_xml,
     parse_price_detail_page,
+    point_in_grid,
 )
 from page_state import PageAssessment, PageKind
 
 
 class CrawlerRegressionTests(unittest.TestCase):
+    def test_grid_bounds_parse_and_center_fallback(self):
+        task = {
+            "min_lng": "113.60",
+            "max_lng": "113.70",
+            "min_lat": "34.70",
+            "max_lat": "34.80",
+            "center_lng": None,
+            "center_lat": None,
+        }
+
+        bounds = parse_grid_bounds(task)
+
+        self.assertEqual((113.65, 34.75), grid_center(task, bounds))
+        self.assertTrue(point_in_grid("113.65", "34.75", bounds))
+        self.assertFalse(point_in_grid("113.75", "34.75", bounds))
+
+    def test_grid_center_rejects_point_outside_bounds(self):
+        task = {
+            "min_lng": 113.60,
+            "max_lng": 113.70,
+            "min_lat": 34.70,
+            "max_lat": 34.80,
+            "center_lng": 114.00,
+            "center_lat": 34.75,
+        }
+
+        with self.assertRaisesRegex(ValueError, "中心点不在"):
+            grid_center(task)
+
+    def test_open_map_location_uses_coordinate_uri(self):
+        crawler = AmapCrawler.__new__(AmapCrawler)
+        crawler.serial = "device"
+        crawler._ensure_amap_foreground = MagicMock()
+
+        with patch("crawler.subprocess.run") as run, patch(
+            "crawler.time.sleep", return_value=None
+        ):
+            run.return_value.returncode = 0
+            run.return_value.stdout = ""
+            run.return_value.stderr = ""
+            opened = crawler._open_map_location(113.654321, 34.765432, "测试网格")
+
+        self.assertTrue(opened)
+        command = run.call_args.args[0][-1]
+        self.assertIn("androidamap://viewMap?", command)
+        self.assertIn("lon=113.654321", command)
+        self.assertIn("lat=34.765432", command)
+        crawler._ensure_amap_foreground.assert_called_once_with()
+
+    def test_run_grid_adds_task_metadata(self):
+        crawler = AmapCrawler.__new__(AmapCrawler)
+        crawler.results = []
+        crawler.stop_event = None
+        crawler._open_map_location = MagicMock(return_value=True)
+        task = {
+            "id": 21,
+            "city": "郑州",
+            "district": "中原区",
+            "grid_index": 3,
+            "center_lng": 113.65,
+            "center_lat": 34.75,
+            "min_lng": 113.60,
+            "max_lng": 113.70,
+            "min_lat": 34.70,
+            "max_lat": 34.80,
+        }
+
+        def collect(city, district, query, result_filter=None):
+            result = {
+                "station_name": "测试重卡充电站",
+                "longitude": 113.65,
+                "latitude": 34.75,
+            }
+            self.assertTrue(result_filter(result))
+            crawler.results.append(result)
+            return 1, 0
+
+        crawler._collect_district_search = collect
+
+        with patch("crawler.AMAP_API_KEY", "test-key"):
+            results = crawler.run_grid(task)
+
+        self.assertEqual(1, len(results))
+        self.assertEqual(21, results[0]["scan_task_id"])
+        self.assertEqual(3, results[0]["grid_index"])
+        crawler._open_map_location.assert_called_once_with(
+            113.65,
+            34.75,
+            label="郑州中原区网格3",
+        )
+
+    def test_grid_accepts_unknown_district_when_coordinates_match(self):
+        crawler = AmapCrawler.__new__(AmapCrawler)
+        crawler.results = []
+        crawler.stop_event = None
+        station = {"name": "测试重卡充电站", "address": "未知道路"}
+
+        def search_stations(city, query=None, station_handler=None, **kwargs):
+            station_handler(station)
+            return [station]
+
+        crawler.search_stations = search_stations
+        crawler.collect_detail = MagicMock(return_value={
+            "station_name": station["name"],
+            "address": "未知道路",
+            "longitude": 113.65,
+            "latitude": 34.75,
+        })
+        bounds = {
+            "min_lng": 113.60,
+            "max_lng": 113.70,
+            "min_lat": 34.70,
+            "max_lat": 34.80,
+        }
+
+        count, mismatch_count = crawler._collect_district_search(
+            "郑州",
+            "中原区",
+            "重卡充电站",
+            result_filter=lambda result: point_in_grid(
+                result.get("longitude"),
+                result.get("latitude"),
+                bounds,
+            ),
+        )
+
+        self.assertEqual(1, count)
+        self.assertEqual(0, mismatch_count)
+        self.assertEqual([station["name"]], [item["station_name"] for item in crawler.results])
+
     def test_basic_detail_address_and_missing_hours_are_normalized(self):
         xml = """<hierarchy>
             <node content-desc="汽车充电站(测试站)" />

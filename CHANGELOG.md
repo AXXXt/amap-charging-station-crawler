@@ -10,6 +10,19 @@
 - 最终生成独立 Excel 质量报告，包含覆盖率总览、站点明细、任务汇总、失败项、采集尝试和字段说明
 - 剩余 2 个高德侧无法进入详情的 POI 已在报告中保留：`B0LGXSBNFN`、`B0L2ZX4LMS`
 
+### MySQL 网格任务本地联调
+
+- 新增 `mysql_scan_runner.py`，支持从 MySQL `scan_tasks` 原子领取指定 `pending` 网格任务
+- 根据 `center_lng/center_lat` 唤起高德地图，并按 `min_lng/max_lng/min_lat/max_lat` 校验最终站点坐标
+- 网格内结果写入或更新 `heavy_truck_stations`，站点级和任务级执行记录写入 `collection_logs`
+- 任务成功更新为 `done`，异常更新为 `failed`，手动中断时尝试释放回 `pending`
+- 默认只允许本机地址和测试库，未指定 `--task-id` 时拒绝自动消费任务，降低误操作正式库的风险
+- 新增 `status`、`show`、`reset`、`run` 四个 CLI 子命令，默认单设备、单任务执行
+- `AmapCrawler` 新增网格边界解析、中心点校验、坐标 URI 定位和 `run_grid()` 入口
+- `ADB_PATH` 已贯通设备发现、POI 唤起和网格中心定位，不再出现命令行指定路径只对部分操作生效的问题
+- 新增 `dev-docs/mysql_local_grid_testing.md`，说明本地建任务、运行、验证、失败排查和重置步骤
+- 新增 `dev-docs/evcs_local_test_schema.sql`，可无破坏性创建本地测试库和三张业务表，并解决本地库仅创建数据库后出现的 MySQL `1146` 缺表错误
+
 ### 普查站点即时详情修复
 
 - 搜索结果改为增量处理：发现当前屏幕的第一个完整站点后立即进入详情，详情返回后再继续扫描，避免先滚完整个列表再点击
@@ -112,7 +125,7 @@
 ### 验证
 
 - `python -m compileall -q .` 编译检查通过
-- 页面状态、停止事件、API 路由、递归包装器、区县过滤、视觉回退、任务队列、报表处理、增量详情和分时电价流程共 **72 项自动化测试全部通过**，另有 **2 项 subtests 通过**
+- 页面状态、停止事件、API 路由、递归包装器、区县过滤、网格边界、MySQL 任务保护与回写、视觉回退、任务队列、报表处理、增量详情和分时电价流程共 **82 项自动化测试全部通过**，另有 **2 项 subtests 通过**
 - 2026-08-13 真机验证“云快充汽车充电站(易岸达物流园充电站)”：趋势入口首次出现时坐标 `(540,2083)` 被底部操作栏遮挡；第二次滚动后坐标变为 `(540,1650)`，成功进入价格详情并解析 **7 个**完整时段
 - 2026-08-13 真机验证“郑州中原区重卡充电站”：共发现 7 个候选，仅进入 2 个中原区站点详情；5 个明确跨区结果被预过滤，连续 4 个跨区尾部后仅滚动 2 次即停止
 - 真机补采的 5 个可恢复失败站点全部成功
@@ -124,11 +137,15 @@
 | `page_state.py` | 统一页面状态识别 |
 | `task_queue.py` | SQLite 多设备任务队列 |
 | `batch_runner.py` | 多设备 worker 与批量采集入口 |
+| `mysql_scan_runner.py` | MySQL 网格任务领取、采集和结果回写入口 |
 | `prepare_report_data.py` | 最终报表数据展开和行政区处理 |
+| `dev-docs/mysql_local_grid_testing.md` | MySQL 本地网格任务联调指南 |
+| `dev-docs/evcs_local_test_schema.sql` | 本地测试库和三张 MySQL 业务表初始化脚本 |
 | `test_page_state.py` | 页面状态测试 |
 | `test_regressions.py` | 核心问题回归测试 |
 | `test_visual_check.py` | 视觉审查测试 |
 | `test_task_queue.py` | 调度队列测试 |
+| `test_mysql_scan_runner.py` | MySQL 网格任务、安全保护和回写测试 |
 | `test_prepare_report_data.py` | 报表数据测试 |
 
 ---

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">重卡充电站采集器</string>
+    <string name="accessibility_service_label">高德充电站采集助手</string>
+    <string name="accessibility_service_description">通过无障碍服务读取高德地图页面节点并自动采集充电站详情，服务关闭后不会领取新任务。</string>
+    <string name="service_status">服务状态</string>
+    <string name="enable_service">开启无障碍服务</string>
+    <string name="start_collect">开始采集</string>
+    <string name="stop_collect">停止采集</string>
+    <string name="sync_now">立即同步</string>
+    <string name="log_title">运行日志</string>
+</resources>

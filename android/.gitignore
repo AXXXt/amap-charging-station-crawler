@@ -1,0 +1,15 @@
+*.iml
+.gradle/
+.kotlin/
+local.properties
+.idea/
+**/build/
+captures/
+.externalNativeBuild/
+.cxx/
+.DS_Store
+
+# Do not ignore Android source XML (root .gitignore has *.xml)
+!app/src/main/AndroidManifest.xml
+!app/src/main/res/
+!app/src/main/res/**/*.xml

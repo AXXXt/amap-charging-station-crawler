@@ -6,14 +6,18 @@ api_server.py — 重卡充电站数据API服务
   3. 支持数据导出
   4. MySQL持久化存储
 """
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 import pymysql
 import json
 import os
-from datetime import datetime, timezone
+import sqlite3
+import secrets
+import uuid
+import hashlib
+from datetime import datetime, timezone, timedelta
 
 app = FastAPI(
     title="重卡充电站数据服务",
@@ -145,6 +149,8 @@ def init_db():
 # ============================================================
 @app.on_event("startup")
 async def startup():
+    init_mobile_db()
+    seed_default_mobile_tasks()
     try:
         init_db()
         print("  MySQL connected")
@@ -175,6 +181,11 @@ async def root():
             ]
         }
     }
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 
@@ -756,6 +767,595 @@ async def dashboard():
         with open(dashboard_html, "r", encoding="utf-8") as f:
             return HTMLResponse(f.read())
     return HTMLResponse("<h1>dashboard.html not found</h1>")
+
+
+# ============================================================
+# MOBILE DEVICE CONTROL PLANE (SQLite fallback, no MySQL in APK)
+# ============================================================
+MOBILE_DB_PATH = os.getenv(
+    "MOBILE_CONTROL_DB",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "mobile_control.db"),
+)
+MOBILE_ACTIVATION_CODE = os.getenv("MOBILE_ACTIVATION_CODE", "dev-activate")
+MOBILE_LEASE_SECONDS = int(os.getenv("MOBILE_LEASE_SECONDS", "600"))
+
+
+class MobileRegisterRequest(BaseModel):
+    activationCode: str = ""
+    deviceCode: str = ""
+    name: str = ""
+    appVersion: str = ""
+    parserVersion: str = ""
+    targetAppVersion: str = ""
+    capabilities: dict = {}
+
+
+class MobileHeartbeatRequest(BaseModel):
+    status: str = "IDLE"
+    lastError: str = ""
+    appVersion: str = ""
+    parserVersion: str = ""
+    targetAppVersion: str = ""
+    capabilities: dict = {}
+
+
+class MobileClaimRequest(BaseModel):
+    deviceCode: str = ""
+
+
+class MobileTaskActionRequest(BaseModel):
+    deviceCode: str = ""
+    leaseToken: str = ""
+    progress: Optional[dict] = None
+    resultSummary: Optional[dict] = None
+    errorCode: str = ""
+    errorMessage: str = ""
+    retryable: Optional[bool] = True
+
+
+class MobileObservationUploadRequest(BaseModel):
+    deviceCode: str = ""
+    observations: List[dict] = []
+
+
+def mobile_conn():
+    os.makedirs(os.path.dirname(MOBILE_DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(MOBILE_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_mobile_db():
+    conn = mobile_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS collector_device (
+            id TEXT PRIMARY KEY,
+            device_code TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            token_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'IDLE',
+            capabilities TEXT NOT NULL DEFAULT '{}',
+            app_version TEXT NOT NULL DEFAULT '',
+            parser_version TEXT NOT NULL DEFAULT '',
+            target_app_version TEXT NOT NULL DEFAULT '',
+            last_heartbeat_at TEXT,
+            last_error TEXT NOT NULL DEFAULT '',
+            current_task_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS scan_task (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 30,
+            province TEXT NOT NULL DEFAULT '',
+            city TEXT NOT NULL DEFAULT '',
+            district TEXT NOT NULL DEFAULT '',
+            keyword TEXT NOT NULL DEFAULT '',
+            search_region TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL,
+            assigned_device_id TEXT,
+            lease_token TEXT,
+            lease_expires_at TEXT,
+            attempt INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 3,
+            progress TEXT NOT NULL DEFAULT '{}',
+            result_summary TEXT NOT NULL DEFAULT '{}',
+            available_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            last_error TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS station_observation (
+            observation_id TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            task_id TEXT,
+            station_id TEXT NOT NULL,
+            captured_at TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY(device_id, observation_id)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def seed_default_mobile_tasks():
+    conn = mobile_conn()
+    count = conn.execute("SELECT COUNT(*) AS c FROM scan_task").fetchone()["c"]
+    if count > 0:
+        conn.close()
+        return
+    regions = [
+        ("郑州", "中原区"), ("郑州", "二七区"), ("郑州", "管城回族区"),
+        ("郑州", "金水区"), ("郑州", "惠济区"), ("郑州", "中牟县"),
+        ("洛阳", "涧西区"), ("洛阳", "洛龙区"), ("洛阳", "偃师区"),
+        ("开封", "龙亭区"), ("南阳", "宛城区"), ("南阳", "卧龙区"),
+        ("许昌", "魏都区"), ("平顶山", "新华区"), ("新乡", "红旗区"),
+        ("安阳", "文峰区"), ("焦作", "解放区"), ("商丘", "梁园区"),
+        ("周口", "川汇区"), ("驻马店", "驿城区"), ("信阳", "浉河区"),
+        ("漯河", "源汇区"), ("三门峡", "湖滨区"), ("鹤壁", "淇滨区"),
+        ("濮阳", "华龙区"), ("济源", "济源"),
+    ]
+    now = _mobile_utc()
+    for city, district in regions:
+        keyword = "重卡充电站" if district == city else f"{city}{district}重卡充电站"
+        conn.execute(
+            """INSERT INTO scan_task (
+                   id, type, priority, province, city, district, keyword,
+                   search_region, status, attempt, max_attempts, available_at, created_at
+               ) VALUES (?, 'REGION_SCAN', 30, '河南省', ?, ?, ?, '', 'PENDING', 0, 3, ?, ?)""",
+            (
+                str(uuid.uuid4()),
+                city,
+                district,
+                keyword,
+                now,
+                now,
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+
+def _mobile_utc():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _mobile_token_hash(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _mobile_device_payload(row):
+    return {
+        "id": row["id"],
+        "deviceCode": row["device_code"],
+        "name": row["name"],
+        "status": row["status"],
+        "capabilities": json.loads(row["capabilities"] or "{}"),
+        "appVersion": row["app_version"],
+        "parserVersion": row["parser_version"],
+        "targetAppVersion": row["target_app_version"],
+        "lastHeartbeatAt": row["last_heartbeat_at"],
+        "lastError": row["last_error"],
+        "currentTaskId": row["current_task_id"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def _mobile_task_payload(row):
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "type": row["type"],
+        "priority": row["priority"],
+        "province": row["province"],
+        "city": row["city"],
+        "district": row["district"],
+        "keyword": row["keyword"],
+        "searchRegion": row["search_region"],
+        "status": row["status"],
+        "assignedDeviceId": row["assigned_device_id"],
+        "leaseToken": row["lease_token"],
+        "leaseExpiresAt": row["lease_expires_at"],
+        "attempt": row["attempt"],
+        "maxAttempts": row["max_attempts"],
+        "progress": json.loads(row["progress"] or "{}"),
+        "resultSummary": json.loads(row["result_summary"] or "{}"),
+        "availableAt": row["available_at"],
+        "createdAt": row["created_at"],
+        "startedAt": row["started_at"],
+        "finishedAt": row["finished_at"],
+        "lastError": row["last_error"],
+    }
+
+
+def _require_mobile_device(authorization):
+    token = ""
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:].strip()
+    if not token:
+        raise HTTPException(401, detail="DEVICE_TOKEN_REQUIRED")
+    conn = mobile_conn()
+    row = conn.execute(
+        "SELECT * FROM collector_device WHERE token_hash = ?",
+        (_mobile_token_hash(token),),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(401, detail="DEVICE_TOKEN_INVALID")
+    return row
+
+
+def _require_mobile_task(conn, device_id, task_id, lease_token):
+    task = conn.execute(
+        "SELECT * FROM scan_task WHERE id = ?",
+        (task_id,),
+    ).fetchone()
+    if task is None:
+        raise HTTPException(404, detail="TASK_NOT_FOUND")
+    if task["assigned_device_id"] != device_id or task["lease_token"] != lease_token:
+        raise HTTPException(409, detail="TASK_LEASE_STALE")
+    return task
+
+
+@app.post("/api/v1/devices/register")
+def mobile_register(request: MobileRegisterRequest):
+    if not secrets.compare_digest(request.activationCode or "", MOBILE_ACTIVATION_CODE):
+        raise HTTPException(403, detail="ACTIVATION_CODE_INVALID")
+    device_code = (request.deviceCode or "").strip()
+    if not device_code:
+        raise HTTPException(400, detail="DEVICE_CODE_REQUIRED")
+    now = _mobile_utc()
+    token = secrets.token_urlsafe(32)
+    conn = mobile_conn()
+    existing = conn.execute(
+        "SELECT id FROM collector_device WHERE device_code = ?",
+        (device_code,),
+    ).fetchone()
+    device_id = existing["id"] if existing else str(uuid.uuid4())
+    conn.execute(
+        """INSERT INTO collector_device (
+               id, device_code, name, token_hash, status, capabilities,
+               app_version, parser_version, target_app_version,
+               last_heartbeat_at, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, 'IDLE', ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(device_code) DO UPDATE SET
+               name = excluded.name,
+               token_hash = excluded.token_hash,
+               capabilities = excluded.capabilities,
+               app_version = excluded.app_version,
+               parser_version = excluded.parser_version,
+               target_app_version = excluded.target_app_version,
+               status = 'IDLE',
+               last_heartbeat_at = excluded.last_heartbeat_at,
+               updated_at = excluded.updated_at""",
+        (
+            device_id,
+            device_code,
+            request.name or device_code,
+            _mobile_token_hash(token),
+            json.dumps(request.capabilities, ensure_ascii=False),
+            request.appVersion,
+            request.parserVersion,
+            request.targetAppVersion,
+            now,
+            now,
+            now,
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM collector_device WHERE device_code = ?",
+        (device_code,),
+    ).fetchone()
+    conn.commit()
+    conn.close()
+    return {
+        "device": _mobile_device_payload(row),
+        "deviceToken": token,
+        "heartbeatIntervalSeconds": 15,
+        "taskPollIntervalSeconds": 5,
+    }
+
+
+@app.post("/api/v1/devices/heartbeat")
+def mobile_heartbeat(
+    request: MobileHeartbeatRequest,
+    authorization: Optional[str] = Header(None),
+):
+    device = _require_mobile_device(authorization)
+    now = _mobile_utc()
+    conn = mobile_conn()
+    conn.execute(
+        """UPDATE collector_device SET
+               status = ?, capabilities = ?, app_version = ?, parser_version = ?,
+               target_app_version = ?, last_error = ?, last_heartbeat_at = ?, updated_at = ?
+           WHERE id = ?""",
+        (
+            request.status or device["status"],
+            json.dumps(request.capabilities, ensure_ascii=False),
+            request.appVersion,
+            request.parserVersion,
+            request.targetAppVersion,
+            request.lastError[:500],
+            now,
+            now,
+            device["id"],
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM collector_device WHERE id = ?",
+        (device["id"],),
+    ).fetchone()
+    conn.commit()
+    conn.close()
+    return {"device": _mobile_device_payload(row)}
+
+
+@app.get("/api/v1/devices/me/config")
+def mobile_config(authorization: Optional[str] = Header(None)):
+    device = _require_mobile_device(authorization)
+    return {
+        "scanEnabled": True,
+        "ruleVersion": "1.0.0",
+        "pollIntervalSeconds": 5,
+        "leaseSeconds": MOBILE_LEASE_SECONDS,
+        "device": _mobile_device_payload(device),
+    }
+
+
+@app.post("/api/v1/device-tasks/claim")
+def mobile_claim_task(
+    request: MobileClaimRequest,
+    authorization: Optional[str] = Header(None),
+):
+    device = _require_mobile_device(authorization)
+    now = _mobile_utc()
+    conn = mobile_conn()
+    current = conn.execute(
+        "SELECT * FROM collector_device WHERE id = ?",
+        (device["id"],),
+    ).fetchone()
+    if current["current_task_id"]:
+        task = conn.execute(
+            "SELECT * FROM scan_task WHERE id = ?",
+            (current["current_task_id"],),
+        ).fetchone()
+        if (
+            task
+            and task["status"] in {"LEASED", "RUNNING"}
+            and task["lease_expires_at"]
+            and task["lease_expires_at"] >= now
+        ):
+            conn.close()
+            return {"task": _mobile_task_payload(task), "reason": "CURRENT_TASK"}
+        if task:
+            conn.execute(
+                "UPDATE collector_device SET current_task_id = NULL, updated_at = ? WHERE id = ?",
+                (now, device["id"]),
+            )
+    task = conn.execute(
+        """SELECT * FROM scan_task
+           WHERE status = 'PENDING' AND available_at <= ?
+           ORDER BY priority DESC, available_at, created_at
+           LIMIT 1""",
+        (now,),
+    ).fetchone()
+    if task is None:
+        conn.close()
+        return {"task": None, "reason": "QUEUE_EMPTY"}
+    lease_token = secrets.token_urlsafe(24)
+    lease_expires_at = (
+        datetime.now(timezone.utc) + timedelta(seconds=MOBILE_LEASE_SECONDS)
+    ).isoformat()
+    conn.execute(
+        """UPDATE scan_task
+           SET status = 'LEASED', assigned_device_id = ?, lease_token = ?,
+               lease_expires_at = ?, attempt = attempt + 1,
+               started_at = COALESCE(started_at, ?), last_error = ''
+           WHERE id = ? AND status = 'PENDING'""",
+        (device["id"], lease_token, lease_expires_at, now, task["id"]),
+    )
+    conn.execute(
+        """UPDATE collector_device SET current_task_id = ?, status = 'RUNNING', updated_at = ?
+           WHERE id = ?""",
+        (task["id"], now, device["id"]),
+    )
+    conn.commit()
+    claimed = conn.execute(
+        "SELECT * FROM scan_task WHERE id = ?",
+        (task["id"],),
+    ).fetchone()
+    conn.close()
+    return {"task": _mobile_task_payload(claimed), "reason": "CLAIMED"}
+
+
+@app.post("/api/v1/device-tasks/{task_id}/ack")
+def mobile_ack_task(
+    task_id: str,
+    request: MobileTaskActionRequest,
+    authorization: Optional[str] = Header(None),
+):
+    device = _require_mobile_device(authorization)
+    conn = mobile_conn()
+    _require_mobile_task(conn, device["id"], task_id, request.leaseToken)
+    conn.execute(
+        "UPDATE scan_task SET status = 'RUNNING' WHERE id = ?",
+        (task_id,),
+    )
+    conn.commit()
+    task = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return {"task": _mobile_task_payload(task)}
+
+
+@app.post("/api/v1/device-tasks/{task_id}/progress")
+def mobile_progress_task(
+    task_id: str,
+    request: MobileTaskActionRequest,
+    authorization: Optional[str] = Header(None),
+):
+    device = _require_mobile_device(authorization)
+    conn = mobile_conn()
+    task = _require_mobile_task(conn, device["id"], task_id, request.leaseToken)
+    merged = json.loads(task["progress"] or "{}")
+    merged.update(request.progress or {})
+    lease_expires_at = (
+        datetime.now(timezone.utc) + timedelta(seconds=MOBILE_LEASE_SECONDS)
+    ).isoformat()
+    conn.execute(
+        """UPDATE scan_task SET status = 'RUNNING', progress = ?,
+               lease_expires_at = ?
+           WHERE id = ?""",
+        (json.dumps(merged, ensure_ascii=False), lease_expires_at, task_id),
+    )
+    conn.commit()
+    task = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return {"task": _mobile_task_payload(task)}
+
+
+@app.post("/api/v1/device-tasks/{task_id}/complete")
+def mobile_complete_task(
+    task_id: str,
+    request: MobileTaskActionRequest,
+    authorization: Optional[str] = Header(None),
+):
+    device = _require_mobile_device(authorization)
+    now = _mobile_utc()
+    conn = mobile_conn()
+    _require_mobile_task(conn, device["id"], task_id, request.leaseToken)
+    conn.execute(
+        """UPDATE scan_task SET status = 'COMPLETED', result_summary = ?,
+               lease_token = NULL, lease_expires_at = NULL, finished_at = ?
+           WHERE id = ?""",
+        (json.dumps(request.resultSummary or {}, ensure_ascii=False), now, task_id),
+    )
+    conn.execute(
+        """UPDATE collector_device SET current_task_id = NULL, status = 'IDLE', updated_at = ?
+           WHERE id = ? AND current_task_id = ?""",
+        (now, device["id"], task_id),
+    )
+    conn.commit()
+    task = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return {"task": _mobile_task_payload(task)}
+
+
+@app.post("/api/v1/device-tasks/{task_id}/fail")
+def mobile_fail_task(
+    task_id: str,
+    request: MobileTaskActionRequest,
+    authorization: Optional[str] = Header(None),
+):
+    device = _require_mobile_device(authorization)
+    now_value = datetime.now(timezone.utc)
+    now = now_value.isoformat()
+    conn = mobile_conn()
+    task = _require_mobile_task(conn, device["id"], task_id, request.leaseToken)
+    should_retry = bool(request.retryable) and task["attempt"] < task["max_attempts"]
+    next_status = "PENDING" if should_retry else "FAILED"
+    available_at = (
+        now_value + timedelta(seconds=max(15, task["attempt"] * 30))
+    ).isoformat() if should_retry else now
+    conn.execute(
+        """UPDATE scan_task SET status = ?, assigned_device_id = NULL,
+               lease_token = NULL, lease_expires_at = NULL, last_error = ?,
+               available_at = ?, finished_at = CASE WHEN ? = 'FAILED' THEN ? ELSE NULL END
+           WHERE id = ?""",
+        (
+            next_status,
+            f"{request.errorCode}:{request.errorMessage}"[:1000],
+            available_at,
+            next_status,
+            now,
+            task_id,
+        ),
+    )
+    conn.execute(
+        """UPDATE collector_device SET current_task_id = NULL,
+               status = CASE WHEN ? = 'FAILED' THEN 'FAULT' ELSE 'IDLE' END,
+               last_error = ?, updated_at = ?
+           WHERE id = ?""",
+        (next_status, request.errorMessage[:500], now, device["id"]),
+    )
+    conn.commit()
+    task = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return {"task": _mobile_task_payload(task), "requeued": should_retry}
+
+
+@app.post("/api/v1/observations/batches")
+def mobile_upload_observations(
+    request: MobileObservationUploadRequest,
+    authorization: Optional[str] = Header(None),
+):
+    device = _require_mobile_device(authorization)
+    now = _mobile_utc()
+    conn = mobile_conn()
+    accepted = 0
+    duplicates = 0
+    for item in request.observations:
+        observation_id = str(item.get("observationId", ""))
+        station_id = str(item.get("stationId", ""))
+        task_id = str(item.get("taskId", "") or "")
+        payload = item.get("payload", {})
+        if not observation_id or not station_id:
+            continue
+        try:
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO station_observation (
+                       observation_id, device_id, task_id, station_id,
+                       captured_at, received_at, payload
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    observation_id,
+                    device["id"],
+                    task_id,
+                    station_id,
+                    str(item.get("capturedAt", now)),
+                    now,
+                    json.dumps(payload, ensure_ascii=False),
+                ),
+            )
+            if cur.rowcount > 0:
+                accepted += 1
+            else:
+                duplicates += 1
+        except sqlite3.IntegrityError:
+            duplicates += 1
+    conn.commit()
+    conn.close()
+    return {"accepted": accepted, "duplicates": duplicates}
+
+
+@app.get("/api/v1/admin/tasks")
+def mobile_admin_tasks(
+    status: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=1000),
+):
+    conn = mobile_conn()
+    if status:
+        rows = conn.execute(
+            "SELECT * FROM scan_task WHERE status = ? ORDER BY created_at LIMIT ?",
+            (status, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM scan_task ORDER BY created_at LIMIT ?",
+            (limit,),
+        ).fetchall()
+    conn.close()
+    return {"tasks": [_mobile_task_payload(row) for row in rows]}
 
 
 if __name__ == "__main__":

@@ -62,7 +62,7 @@ class SyncManager(
                 val task = claim.task
                 claimedTask = task
                 if (task == null) {
-                    uploadPendingResults(api, deviceCode)
+                    uploadPendingResults(api, deviceCode, "")
                     return@withContext SyncOutcome.NoTask
                 }
 
@@ -70,6 +70,7 @@ class SyncManager(
                     task.id,
                     TaskActionRequest(deviceCode = deviceCode, leaseToken = task.leaseToken),
                 )
+                val taskStartedAt = System.currentTimeMillis()
                 val details = engine.runRegion(
                     city = task.city,
                     district = task.district,
@@ -88,7 +89,12 @@ class SyncManager(
                         resultSummary = summary,
                     ),
                 )
-                uploadPendingResults(api, deviceCode)
+                uploadPendingResults(
+                    api = api,
+                    deviceCode = deviceCode,
+                    taskId = claimedTask?.id.orEmpty(),
+                    taskStartedAt = taskStartedAt,
+                )
                 SyncOutcome.Completed(details.size)
             } catch (error: Exception) {
                 claimedTask?.let { task ->
@@ -112,13 +118,21 @@ class SyncManager(
         }
     }
 
-    private suspend fun uploadPendingResults(api: ServerApi, deviceCode: String) {
-        val pending = repository.pendingResults()
+    private suspend fun uploadPendingResults(
+        api: ServerApi,
+        deviceCode: String,
+        taskId: String,
+        taskStartedAt: Long? = null,
+    ) {
+        val pending = repository.pendingResults().filter { item ->
+            taskId.isBlank() || taskStartedAt == null || item.createdAt >= taskStartedAt
+        }
         if (pending.isEmpty()) return
         val observations = pending.map { item ->
             mapOf(
                 "observationId" to item.idempotencyKey,
                 "stationId" to item.stationId,
+                "taskId" to taskId,
                 "deviceId" to deviceCode,
                 "payload" to item.resultJson,
             )

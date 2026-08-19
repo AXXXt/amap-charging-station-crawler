@@ -181,6 +181,13 @@
             android:layout_marginTop="10dp"
             android:text="开始本机扫描" />
 
+        <Button
+            android:id="@+id/stop_run_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="停止运行" />
+
         <TextView
             android:id="@+id/status_text"
             android:layout_width="match_parent"
@@ -201,6 +208,12 @@
             android:textSize="16sp"
             android:textStyle="bold" />
 
+        <Button
+            android:id="@+id/clear_log_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="清空日志" />
         <TextView
             android:id="@+id/log_text"
             android:layout_width="match_parent"

@@ -56,6 +56,12 @@ fun interface CollectionListener {
     )
 }
 
+private sealed interface PriceEntryResult {
+    data class Opened(val snapshot: NodeSnapshot) : PriceEntryResult
+    object UniformPrice : PriceEntryResult
+    object NotFound : PriceEntryResult
+}
+
 class CollectionEngine(
     private val context: Context,
     private val repository: CollectorRepository,
@@ -71,6 +77,9 @@ class CollectionEngine(
 
     @Volatile
     private var collectedCount = 0
+
+    private val listLoadingKeywords = listOf("正在加载", "加载中", "加载更多")
+    private val listEndKeywords = listOf("暂无更多内容", "没有更多了", "没有更多结果", "已经到底了")
 
     fun addListener(listener: CollectionListener) {
         listeners.addIfAbsent(listener)
@@ -139,7 +148,9 @@ class CollectionEngine(
 
                 val collected = mutableListOf<StationDetail>()
                 val seenCards = mutableSetOf<String>()
-                var consecutiveEmptyScrolls = 0
+                var unchangedScrolls = 0
+                var lastPageSignature: String? = null
+                var loadingWaits = 0
 
                 while (!stopRequested) {
                     snapshot = waitForPage(6000, 550) { root ->
@@ -153,11 +164,38 @@ class CollectionEngine(
                             collected.size,
                             "",
                         )
+                        when (service.freshPageKind()) {
+                            PageKind.HOME -> openSearchFromHome(service, query)
+                            PageKind.POPUP -> dismissPopup(service)
+                            PageKind.SEARCH_RESULTS -> Unit
+                            else -> clickBackToSearch(service)
+                        }
+                        snapshot = waitForPage(4000, 550) { root ->
+                            val kind = PageAssessor.assess(root).kind
+                            kind == PageKind.SEARCH_RESULTS || kind == PageKind.POPUP
+                        }
+                        if (snapshot != null) continue
                         service.openAmapSearch(query)
                         snapshot = waitForPage(10000, 650) { root ->
-                            PageAssessor.assess(root).kind == PageKind.SEARCH_RESULTS
+                            val kind = PageAssessor.assess(root).kind
+                            kind == PageKind.SEARCH_RESULTS || kind == PageKind.POPUP
                         }
                         if (snapshot == null) break
+                        unchangedScrolls = 0
+                        lastPageSignature = null
+                        loadingWaits = 0
+                        if (PageAssessor.assess(snapshot).kind == PageKind.POPUP) {
+                            dismissPopup(service)
+                            continue
+                        }
+                        ensureListTop(service, snapshot)
+                        emit(
+                            CollectionState.SCANNING_RESULTS,
+                            "重新搜索完成，继续扫描新结果",
+                            collected.size,
+                            "",
+                        )
+                        continue
                     }
 
                     if (PageAssessor.assess(snapshot).kind == PageKind.POPUP) {
@@ -167,14 +205,51 @@ class CollectionEngine(
 
                     val cards = StationMatcher.visibleStationCards(snapshot)
                     val nextCard = cards.firstOrNull { card ->
+                        card.clickVisible &&
                         cardFingerprint(card) !in seenCards
                     }
                     if (nextCard == null) {
-                        consecutiveEmptyScrolls += 1
-                        if (consecutiveEmptyScrolls >= 2) {
+                        if (isListLoading(snapshot)) {
+                            loadingWaits += 1
+                            if (loadingWaits < 4) {
+                                emit(
+                                    CollectionState.SCANNING_RESULTS,
+                                    "列表加载中，等待更多站点",
+                                    collected.size,
+                                    "",
+                                )
+                                delay(1200)
+                                continue
+                            }
+                            loadingWaits = 0
+                        }
+                        if (isListEnd(snapshot)) {
                             emit(
                                 CollectionState.DONE,
-                                "连续两次滚动无新站点，结束扫描",
+                                "列表已加载到末尾，结束扫描",
+                                collected.size,
+                                "",
+                            )
+                            break
+                        }
+                        val currentSignature = cards.joinToString("|") { cardFingerprint(it) }
+                        if (currentSignature != lastPageSignature) {
+                            lastPageSignature = currentSignature
+                            unchangedScrolls = 0
+                            emit(
+                                CollectionState.SCANNING_RESULTS,
+                                "当前页均为已采集站点，继续向下滚动",
+                                collected.size,
+                                "",
+                            )
+                            scrollResultsDown(service, snapshot)
+                            continue
+                        }
+                        unchangedScrolls += 1
+                        if (unchangedScrolls >= 2) {
+                            emit(
+                                CollectionState.DONE,
+                                "连续滚动页面无变化，结束扫描",
                                 collected.size,
                                 "",
                             )
@@ -186,14 +261,12 @@ class CollectionEngine(
                             collected.size,
                             "",
                         )
-                        if (!service.scrollForward()) {
-                            delay(250)
-                            service.scrollForward()
-                        }
-                        delay(850)
+                        scrollResultsDown(service, snapshot)
                         continue
                     }
-                    consecutiveEmptyScrolls = 0
+                    unchangedScrolls = 0
+                    loadingWaits = 0
+                    lastPageSignature = null
 
                     seenCards.add(cardFingerprint(nextCard))
                     val detail = collectStation(service, nextCard, city, district, query)
@@ -229,7 +302,8 @@ class CollectionEngine(
             collectedCount,
             card.name,
         )
-        val clicked = service.clickAt(centerX, centerY) ||
+        val clicked = service.clickStationCard(card.name) ||
+            service.clickAt(centerX, centerY) ||
             service.clickNodeByText(card.name)
         var detailSnapshot = waitForPage(14000, 700) { root ->
             val assessment = PageAssessor.assess(root, card.name)
@@ -245,7 +319,7 @@ class CollectionEngine(
                 collectedCount,
                 card.name,
             )
-            service.clickAt(centerX, centerY)
+            service.clickStationCard(card.name)
             detailSnapshot = waitForPage(14000, 700) { root ->
                 val assessment = PageAssessor.assess(root, card.name)
                 assessment.kind == PageKind.DETAIL ||
@@ -281,8 +355,8 @@ class CollectionEngine(
             else -> minOf(maxOf(pageInfo.scrollsNeeded, 1), 3)
         }
 
-        var priceSnapshot = openPriceDetail(service, card.name)
-        if (priceSnapshot == null) {
+        var priceEntry = openPriceDetail(service, card.name)
+        if (priceEntry !is PriceEntryResult.Opened) {
             for (scrollIndex in 1..scrolls) {
                 if (stopRequested) break
                 emit(
@@ -309,61 +383,92 @@ class CollectionEngine(
                 } else if (assessment.kind == PageKind.SEARCH_RESULTS) {
                     break
                 }
-                priceSnapshot = openPriceDetail(service, card.name)
-                if (priceSnapshot != null) break
+                if (priceEntry is PriceEntryResult.NotFound) {
+                    priceEntry = openPriceDetail(service, card.name)
+                    if (priceEntry is PriceEntryResult.Opened) break
+                }
             }
-        }
-        if (priceSnapshot == null) {
-            emit(
-                CollectionState.READING_DETAIL,
-                "未找到可点击的价格入口",
-                collectedCount,
-                card.name,
-            )
         }
 
-        if (priceSnapshot != null) {
-            emit(
-                CollectionState.READING_PRICE,
-                "读取分时电价",
-                collectedCount,
-                card.name,
-            )
-            val periods = PriceDetailParser.parse(priceSnapshot)
-            merged = merged.copy(
-                fastPrices = mergePricePeriods(merged.fastPrices, periods),
-            )
-            service.globalBack()
-            waitForPage(7000, 650) { root ->
-                val assessment = PageAssessor.assess(root, card.name)
-                assessment.kind == PageKind.DETAIL ||
-                    (assessment.expectedStationVisible &&
-                        assessment.kind != PageKind.SEARCH_RESULTS &&
-                        assessment.kind != PageKind.POPUP)
+        when (priceEntry) {
+            is PriceEntryResult.Opened -> {
+                emit(
+                    CollectionState.READING_PRICE,
+                    "读取分时电价",
+                    collectedCount,
+                    card.name,
+                )
+                val periods = PriceDetailParser.parse(priceEntry.snapshot)
+                merged = merged.copy(
+                    fastPrices = mergePricePeriods(merged.fastPrices, periods),
+                )
+                backOneLevel(service)
+                waitForPage(7000, 650) { root ->
+                    val assessment = PageAssessor.assess(root, card.name)
+                    assessment.kind == PageKind.DETAIL ||
+                        (assessment.expectedStationVisible &&
+                            assessment.kind != PageKind.SEARCH_RESULTS &&
+                            assessment.kind != PageKind.POPUP)
+                }
+                delay(600)
             }
-            delay(600)
-        } else {
-            service.globalBack()
-            delay(800)
+            is PriceEntryResult.UniformPrice -> {
+                emit(
+                    CollectionState.READING_DETAIL,
+                    "全时段统一价，无需点击分时入口",
+                    collectedCount,
+                    card.name,
+                )
+                backOneLevel(service)
+                delay(800)
+            }
+            is PriceEntryResult.NotFound -> {
+                emit(
+                    CollectionState.READING_DETAIL,
+                    "未找到可点击的价格入口",
+                    collectedCount,
+                    card.name,
+                )
+                backOneLevel(service)
+                delay(800)
+            }
         }
 
         emit(CollectionState.SAVING, "保存站点: ${merged.stationName}", collectedCount, merged.stationName)
         saveDetail(card, merged, city, district, query)
         emit(CollectionState.RETURNING, "返回搜索结果", collectedCount, card.name)
-        val backSnapshot = service.snapshot()
-        val backKind = if (backSnapshot != null) PageAssessor.assess(backSnapshot, card.name).kind else PageKind.UNKNOWN
+        val backKind = service.freshPageKind(card.name)
         if (backKind == PageKind.DETAIL || backKind == PageKind.PRICE_DETAIL || backKind == PageKind.UNKNOWN) {
-            service.globalBack()
+            backOneLevel(service)
         } else {
             emit(CollectionState.RETURNING, "当前页非详情($backKind)，不再返回", collectedCount, card.name)
         }
-        var returned = waitForPage(8000, 600) { root ->
-            PageAssessor.assess(root).kind == PageKind.SEARCH_RESULTS
-        }
-        if (returned == null) {
-            service.globalBack()
-            returned = waitForPage(6000, 600) { root ->
-                PageAssessor.assess(root).kind == PageKind.SEARCH_RESULTS
+        var returned: NodeSnapshot? = null
+        repeat(4) {
+            if (stopRequested || returned != null) return@repeat
+            returned = waitForPage(5000, 600) { root ->
+                val kind = PageAssessor.assess(root).kind
+                kind == PageKind.SEARCH_RESULTS || kind == PageKind.POPUP
+            }
+            if (returned == null) {
+                val currentKind = service.freshPageKind()
+                when (currentKind) {
+                    PageKind.SEARCH_RESULTS -> Unit
+                    PageKind.POPUP -> dismissPopup(service)
+                    PageKind.HOME -> {
+                        emit(
+                            CollectionState.RETURNING,
+                            "已返回高德首页，重新打开搜索列表",
+                            collectedCount,
+                            card.name,
+                        )
+                        openSearchFromHome(service, query)
+                    }
+                    else -> clickBackToSearch(service)
+                }
+            } else if (PageAssessor.assess(returned).kind == PageKind.POPUP) {
+                dismissPopup(service)
+                returned = null
             }
         }
         if (returned == null) {
@@ -375,7 +480,21 @@ class CollectionEngine(
     private suspend fun openPriceDetail(
         service: ChargingAccessibilityService,
         stationName: String,
-    ): NodeSnapshot? {
+    ): PriceEntryResult {
+        if (stopRequested) return PriceEntryResult.NotFound
+        val root = service.snapshot()
+        if (root != null && DetailPageClassifier.hasUniformPrice(root)) {
+            emit(
+                CollectionState.OPENING_PRICE,
+                "检测到全时段统一价，无需点击",
+                collectedCount,
+                stationName,
+            )
+            AppPreferences.appendLog(context, "检测到全时段统一价，无需点击")
+            return PriceEntryResult.UniformPrice
+        }
+        val hasTrendTitle = root != null &&
+            DetailPageClassifier.classify(root).features.getValue("has_price_trend")
         val screenHeight = service.screenHeightPx()
         val priceBounds = service.findNodeBounds("涨至|降至")
         if (priceBounds != null &&
@@ -388,31 +507,42 @@ class CollectionEngine(
                 collectedCount,
                 stationName,
             )
-            return null
+            return PriceEntryResult.NotFound
         }
-        val candidates = listOf(
-            "涨至|降至",
-            "价格趋势",
-            "24小时价格趋势图",
-        )
-        for (candidate in candidates) {
-            if (stopRequested) return null
+        if (priceBounds == null && hasTrendTitle) {
             emit(
                 CollectionState.OPENING_PRICE,
-                "打开分时电价入口: $candidate",
+                "检测到24小时价格趋势图，继续小幅滚动查找涨至/降至",
                 collectedCount,
                 stationName,
             )
-            if (!service.clickNodeByRegex(candidate)) {
-                continue
-            }
-            val snapshot = waitForPage(8000, 650) { root ->
-                PageAssessor.assess(root).kind == PageKind.PRICE_DETAIL
-            }
-            AppPreferences.appendLog(context, if (snapshot != null) "分时电价页已打开" else "点击后未识别到分时电价页")
-            if (snapshot != null) return snapshot
+            return PriceEntryResult.NotFound
         }
-        return null
+        if (stopRequested) return PriceEntryResult.NotFound
+        emit(
+            CollectionState.OPENING_PRICE,
+            "打开分时电价入口: 涨至|降至",
+            collectedCount,
+            stationName,
+        )
+        if (!service.clickNodeByRegex("涨至|降至")) {
+            return PriceEntryResult.NotFound
+        }
+        val snapshot = waitForPage(8000, 650) { root ->
+            PageAssessor.assess(root).kind == PageKind.PRICE_DETAIL
+        }
+        AppPreferences.appendLog(context, if (snapshot != null) "分时电价页已打开" else "点击涨至|降至后未识别到分时电价页")
+        if (snapshot != null) return PriceEntryResult.Opened(snapshot)
+        val afterClick = service.snapshot()
+        val afterClickKind = if (afterClick != null) PageAssessor.assess(afterClick).kind else PageKind.UNKNOWN
+        if (afterClickKind == PageKind.PRICE_DETAIL ||
+            afterClickKind == PageKind.UNKNOWN ||
+            afterClickKind == PageKind.POPUP
+        ) {
+            service.globalBack()
+            delay(800)
+        }
+        return PriceEntryResult.NotFound
     }
     private suspend fun saveDetail(
         card: StationCandidate,
@@ -547,8 +677,13 @@ class CollectionEngine(
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (stopRequested) return null
-            val snapshot = ChargingAccessibilityService.current()?.snapshot()
-            if (snapshot != null && predicate(snapshot)) return snapshot
+            val service = ChargingAccessibilityService.current()
+            if (service != null) {
+                val snapshot = service.snapshot()
+                if (snapshot != null && predicate(snapshot)) return snapshot
+                val fresh = service.freshSnapshot()
+                if (fresh != null && predicate(fresh)) return fresh
+            }
             delay(intervalMs)
         }
         return null
@@ -556,17 +691,94 @@ class CollectionEngine(
 
     private fun buildQuery(city: String, district: String, keyword: String): String {
         if (keyword.isNotBlank()) return keyword.trim()
-        return if (district.isNotBlank()) {
-            "${city}${district}重卡充电站"
-        } else if (city.isNotBlank()) {
-            "${city}重卡充电站"
-        } else {
-            "重卡充电站"
+        if (district.isNotBlank()) {
+            return if (city.isNotBlank()) "${city}${district}重卡充电站" else "${district}重卡充电站"
         }
+        if (city.isNotBlank()) return "${city}重卡充电站"
+        return "重卡充电站"
     }
 
     private fun cardFingerprint(card: StationCandidate): String =
         StationNameNormalizer.normalize(card.name)
+
+    private suspend fun scrollResultsDown(
+        service: ChargingAccessibilityService,
+        root: NodeSnapshot,
+    ) {
+        val viewport = StationMatcher.listViewport(root)
+        val dispatched = if (viewport != null) {
+            service.scrollWithin(viewport)
+        } else {
+            service.scrollForward()
+        }
+        if (!dispatched) {
+            delay(250)
+            if (viewport != null) {
+                service.scrollWithin(viewport)
+            } else {
+                service.scrollForward()
+            }
+        }
+        delay(850)
+    }
+
+    private fun backOneLevel(service: ChargingAccessibilityService) {
+        if (!service.clickBackButton()) {
+            service.globalBack()
+        }
+    }
+
+    private suspend fun openSearchFromHome(service: ChargingAccessibilityService, query: String) {
+        service.openAmapSearch(query)
+        delay(1200)
+        val kind = service.freshPageKind()
+        if (kind == PageKind.SEARCH_RESULTS || kind == PageKind.POPUP) return
+        AppPreferences.appendLog(context, "深链未返回列表，改用搜索框输入: $query")
+        service.clickNodeByViewId("com.autonavi.minimap:id/maphome_searchbar_bg")
+        delay(900)
+        service.setFocusedText(query)
+        delay(400)
+        if (!service.clickNodeByText("搜索")) {
+            service.clickNodeByRegex("搜索")
+        }
+    }
+
+    private fun clickBackToSearch(service: ChargingAccessibilityService) {
+        backOneLevel(service)
+    }
+
+    private suspend fun ensureListTop(service: ChargingAccessibilityService, root: NodeSnapshot) {
+        val pageText = collectPageText(root)
+        if ("展开列表" in pageText || "扫码充电补贴" in pageText) return
+        val viewportTop = StationMatcher.listViewport(root)?.top ?: 0
+        val topY = StationMatcher.visibleStationCards(root).minOfOrNull { it.bounds?.top ?: 0 } ?: 0
+        if (topY <= viewportTop + 52) return
+        repeat(4) {
+            service.scrollSmallUp()
+            delay(350)
+            val snapshot = service.snapshot() ?: return
+            val nextViewportTop = StationMatcher.listViewport(snapshot)?.top ?: viewportTop
+            val nextTop = StationMatcher.visibleStationCards(snapshot).minOfOrNull { it.bounds?.top ?: 0 } ?: 0
+            if (nextTop <= nextViewportTop + 52) return
+        }
+    }
+
+    private fun isListLoading(root: NodeSnapshot): Boolean =
+        listLoadingKeywords.any { it in collectPageText(root) }
+
+    private fun isListEnd(root: NodeSnapshot): Boolean =
+        listEndKeywords.any { it in collectPageText(root) }
+
+    private fun collectPageText(root: NodeSnapshot): String {
+        val values = mutableListOf<String>()
+        fun walk(node: NodeSnapshot) {
+            if (node.text.isNotBlank()) values.add(node.text)
+            if (node.contentDescription.isNotBlank()) values.add(node.contentDescription)
+            node.children.forEach { walk(it) }
+        }
+        walk(root)
+        return values.joinToString("\n")
+    }
 
     private fun mergePricePeriods(
         existing: List<PricePeriod>,

@@ -36,7 +36,13 @@ class CollectorKeepAliveService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP || !AppPreferences.isScanning(this)) {
+        if (intent?.action == ACTION_STOP) {
+            AppPreferences.setScanning(this, false)
+            engine?.stop()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (!AppPreferences.isScanning(this)) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -46,6 +52,7 @@ class CollectorKeepAliveService : Service() {
     }
 
     override fun onDestroy() {
+        engine?.stop()
         loopJob?.cancel()
         engine = null
         AppPreferences.setScanning(this, false)

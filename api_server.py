@@ -17,6 +17,7 @@ import sqlite3
 import secrets
 import uuid
 import hashlib
+import time
 from datetime import datetime, timezone, timedelta
 
 app = FastAPI(
@@ -151,6 +152,7 @@ def init_db():
 async def startup():
     init_mobile_db()
     seed_default_mobile_tasks()
+    threading.Thread(target=_lease_reaper_loop, daemon=True).start()
     try:
         init_db()
         print("  MySQL connected")
@@ -778,6 +780,9 @@ MOBILE_DB_PATH = os.getenv(
 )
 MOBILE_ACTIVATION_CODE = os.getenv("MOBILE_ACTIVATION_CODE", "dev-activate")
 MOBILE_LEASE_SECONDS = int(os.getenv("MOBILE_LEASE_SECONDS", "600"))
+MOBILE_ADMIN_API_KEY = os.getenv("MOBILE_ADMIN_API_KEY", "dev-admin-key")
+MOBILE_LEASE_RECLAIM_SECONDS = int(os.getenv("MOBILE_LEASE_RECLAIM_SECONDS", "30"))
+MOBILE_CLAIM_MAX_RETRIES = int(os.getenv("MOBILE_CLAIM_MAX_RETRIES", "3"))
 
 
 class MobileRegisterRequest(BaseModel):
@@ -816,6 +821,22 @@ class MobileTaskActionRequest(BaseModel):
 class MobileObservationUploadRequest(BaseModel):
     deviceCode: str = ""
     observations: List[dict] = []
+
+
+class MobileTaskCreateItem(BaseModel):
+    type: str = "REGION_SCAN"
+    priority: int = 30
+    province: str = ""
+    city: str = ""
+    district: str = ""
+    keyword: str = ""
+    searchRegion: str = ""
+    maxAttempts: int = 3
+    availableAt: str = ""
+
+
+class MobileTaskBatchCreateRequest(BaseModel):
+    tasks: List[MobileTaskCreateItem] = []
 
 
 def mobile_conn():
@@ -883,6 +904,29 @@ def init_mobile_db():
             PRIMARY KEY(device_id, observation_id)
         )
     """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scan_task_claim "
+        "ON scan_task(status, available_at, priority DESC, created_at)"
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_task_device_active "
+        "ON scan_task(assigned_device_id) "
+        "WHERE status IN ('LEASED', 'RUNNING')"
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_device_current_task "
+        "ON collector_device(current_task_id) "
+        "WHERE current_task_id IS NOT NULL AND current_task_id != ''"
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_obs_task_station "
+        "ON station_observation(task_id, station_id) "
+        "WHERE task_id IS NOT NULL AND task_id != ''"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_obs_received "
+        "ON station_observation(received_at)"
+    )
     conn.commit()
     conn.close()
 
@@ -1008,6 +1052,199 @@ def _require_mobile_task(conn, device_id, task_id, lease_token):
     return task
 
 
+def _require_admin_key(x_admin_key):
+    expected = MOBILE_ADMIN_API_KEY
+    if expected and (not x_admin_key or not secrets.compare_digest(x_admin_key, expected)):
+        raise HTTPException(401, detail="ADMIN_API_KEY_REQUIRED")
+
+
+def _mysql_configured():
+    return all(DB_CONFIG.get(key) for key in ("host", "user", "database"))
+
+
+def _normalize_payload(payload):
+    if not isinstance(payload, str):
+        return payload
+    try:
+        value = json.loads(payload)
+        return value if isinstance(value, dict) else {"raw": payload}
+    except (ValueError, TypeError):
+        return {"raw": payload}
+
+def _mysql_datetime(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(value)[:19].replace("T", " ")
+
+
+def _sync_mysql_task(task):
+    if task is None or not _mysql_configured():
+        return
+    try:
+        conn = pymysql.connect(**DB_CONFIG)
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO scan_task (
+                           id, type, priority, province, city, district, keyword,
+                           search_region, status, assigned_device_id, lease_token,
+                           lease_expires_at, attempt, max_attempts, progress,
+                           result_summary, available_at, created_at, started_at,
+                           finished_at, last_error
+                       ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                 %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       ON DUPLICATE KEY UPDATE
+                           type = VALUES(type), priority = VALUES(priority),
+                           province = VALUES(province), city = VALUES(city),
+                           district = VALUES(district), keyword = VALUES(keyword),
+                           search_region = VALUES(search_region), status = VALUES(status),
+                           assigned_device_id = VALUES(assigned_device_id),
+                           lease_token = VALUES(lease_token),
+                           lease_expires_at = VALUES(lease_expires_at),
+                           attempt = VALUES(attempt), max_attempts = VALUES(max_attempts),
+                           progress = VALUES(progress), result_summary = VALUES(result_summary),
+                           available_at = VALUES(available_at), created_at = VALUES(created_at),
+                           started_at = VALUES(started_at), finished_at = VALUES(finished_at),
+                           last_error = VALUES(last_error)""",
+                    (
+                        task["id"], task["type"], task["priority"], task["province"],
+                        task["city"], task["district"], task["keyword"], task["search_region"],
+                        task["status"], task["assigned_device_id"], task["lease_token"],
+                        _mysql_datetime(task["lease_expires_at"]), task["attempt"],
+                        task["max_attempts"], task["progress"], task["result_summary"],
+                        _mysql_datetime(task["available_at"]), _mysql_datetime(task["created_at"]),
+                        _mysql_datetime(task["started_at"]), _mysql_datetime(task["finished_at"]),
+                        task["last_error"],
+                    ),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as error:
+        print(f"MySQL task sync error: {error}", file=sys.stderr)
+
+
+def _sync_mysql_observation(
+    observation_id,
+    station_id,
+    task_id,
+    device_id,
+    payload,
+    captured_at=None,
+    received_at=None,
+):
+    if not _mysql_configured() or not observation_id or not station_id:
+        return
+    try:
+        conn = pymysql.connect(**DB_CONFIG)
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO station_result (
+                           idempotency_key, station_id, task_id, device_id,
+                           result_json, uploaded, created_at, updated_at
+                       ) VALUES (%s, %s, %s, %s, %s, 1, %s, %s)
+                       ON DUPLICATE KEY UPDATE
+                           station_id = VALUES(station_id), task_id = VALUES(task_id),
+                           device_id = VALUES(device_id), result_json = VALUES(result_json),
+                           uploaded = 1, updated_at = CURRENT_TIMESTAMP""",
+                    (
+                        observation_id,
+                        station_id,
+                        task_id,
+                        device_id,
+                        json.dumps(payload, ensure_ascii=False) if payload else None,
+                        _mysql_datetime(captured_at or received_at),
+                        _mysql_datetime(received_at),
+                    ),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as error:
+        print(f"MySQL observation sync error: {error}", file=sys.stderr)
+
+
+def _sync_scan_task_by_id(task_id):
+    if not _mysql_configured():
+        return
+    conn = mobile_conn()
+    try:
+        row = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
+    finally:
+        conn.close()
+    _sync_mysql_task(row)
+
+
+def _reap_expired_leases_once():
+    now = _mobile_utc()
+    conn = mobile_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        stale = conn.execute(
+            """SELECT id, assigned_device_id FROM scan_task
+               WHERE status IN ('LEASED', 'RUNNING')
+                 AND lease_expires_at IS NOT NULL
+                 AND lease_expires_at < ?""",
+            (now,),
+        ).fetchall()
+        for task in stale:
+            row = conn.execute(
+                """SELECT id, assigned_device_id, attempt, max_attempts
+                   FROM scan_task
+                   WHERE id = ? AND status IN ('LEASED', 'RUNNING')
+                     AND lease_expires_at IS NOT NULL
+                     AND lease_expires_at < ?""",
+                (task["id"], now),
+            ).fetchone()
+            if row is None:
+                continue
+            will_retry = row["attempt"] < row["max_attempts"]
+            next_status = "PENDING" if will_retry else "FAILED"
+            available_at = now
+            if will_retry:
+                available_at = (
+                    datetime.now(timezone.utc) + timedelta(seconds=min(30, 10 * row["attempt"]))
+                ).isoformat()
+            conn.execute(
+                """UPDATE scan_task
+                   SET status = ?, assigned_device_id = NULL,
+                       lease_token = NULL, lease_expires_at = NULL,
+                       available_at = ?,
+                       finished_at = CASE WHEN ? = 'FAILED' THEN ? ELSE NULL END,
+                       last_error = CASE WHEN ? = 'FAILED' THEN 'LEASE_EXPIRED' ELSE '' END
+                   WHERE id = ? AND status IN ('LEASED', 'RUNNING')""",
+                (next_status, available_at, next_status, now, next_status, row["id"]),
+            )
+            if row["assigned_device_id"]:
+                conn.execute(
+                    """UPDATE collector_device
+                       SET current_task_id = NULL, status = 'IDLE',
+                           last_error = 'LEASE_EXPIRED', updated_at = ?
+                       WHERE id = ? AND current_task_id = ?""",
+                    (now, row["assigned_device_id"], row["id"]),
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _lease_reaper_loop():
+    while True:
+        try:
+            _reap_expired_leases_once()
+        except Exception as e:
+            print(f"  Lease reaper error: {e}", file=sys.stderr)
+        time.sleep(MOBILE_LEASE_RECLAIM_SECONDS)
+
+
 @app.post("/api/v1/devices/register")
 def mobile_register(request: MobileRegisterRequest):
     if not secrets.compare_digest(request.activationCode or "", MOBILE_ACTIVATION_CODE):
@@ -1121,61 +1358,79 @@ def mobile_claim_task(
     device = _require_mobile_device(authorization)
     now = _mobile_utc()
     conn = mobile_conn()
-    current = conn.execute(
-        "SELECT * FROM collector_device WHERE id = ?",
-        (device["id"],),
-    ).fetchone()
-    if current["current_task_id"]:
-        task = conn.execute(
-            "SELECT * FROM scan_task WHERE id = ?",
-            (current["current_task_id"],),
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute(
+            "SELECT * FROM collector_device WHERE id = ?",
+            (device["id"],),
         ).fetchone()
-        if (
-            task
-            and task["status"] in {"LEASED", "RUNNING"}
-            and task["lease_expires_at"]
-            and task["lease_expires_at"] >= now
-        ):
-            conn.close()
-            return {"task": _mobile_task_payload(task), "reason": "CURRENT_TASK"}
-        if task:
-            conn.execute(
-                "UPDATE collector_device SET current_task_id = NULL, updated_at = ? WHERE id = ?",
-                (now, device["id"]),
+        if current["current_task_id"]:
+            task = conn.execute(
+                "SELECT * FROM scan_task WHERE id = ?",
+                (current["current_task_id"],),
+            ).fetchone()
+            if (
+                task
+                and task["status"] in {"LEASED", "RUNNING"}
+                and task["lease_expires_at"]
+                and task["lease_expires_at"] >= now
+            ):
+                conn.commit()
+                return {"task": _mobile_task_payload(task), "reason": "CURRENT_TASK"}
+            if task:
+                conn.execute(
+                    """UPDATE collector_device
+                       SET current_task_id = NULL, updated_at = ?
+                       WHERE id = ? AND current_task_id = ?""",
+                    (now, device["id"], current["current_task_id"]),
+                )
+
+        claimed = None
+        for _ in range(MOBILE_CLAIM_MAX_RETRIES):
+            task = conn.execute(
+                """SELECT * FROM scan_task
+                   WHERE status = 'PENDING' AND available_at <= ?
+                   ORDER BY priority DESC, available_at, created_at
+                   LIMIT 1""",
+                (now,),
+            ).fetchone()
+            if task is None:
+                break
+            lease_token = secrets.token_urlsafe(24)
+            lease_expires_at = (
+                datetime.now(timezone.utc) + timedelta(seconds=MOBILE_LEASE_SECONDS)
+            ).isoformat()
+            cur = conn.execute(
+                """UPDATE scan_task
+                   SET status = 'LEASED', assigned_device_id = ?, lease_token = ?,
+                       lease_expires_at = ?, attempt = attempt + 1,
+                       started_at = COALESCE(started_at, ?), last_error = ''
+                   WHERE id = ? AND status = 'PENDING'""",
+                (device["id"], lease_token, lease_expires_at, now, task["id"]),
             )
-    task = conn.execute(
-        """SELECT * FROM scan_task
-           WHERE status = 'PENDING' AND available_at <= ?
-           ORDER BY priority DESC, available_at, created_at
-           LIMIT 1""",
-        (now,),
-    ).fetchone()
-    if task is None:
+            if cur.rowcount != 1:
+                continue
+            conn.execute(
+                """UPDATE collector_device
+                   SET current_task_id = ?, status = 'RUNNING', updated_at = ?
+                   WHERE id = ?""",
+                (task["id"], now, device["id"]),
+            )
+            claimed = conn.execute(
+                "SELECT * FROM scan_task WHERE id = ?",
+                (task["id"],),
+            ).fetchone()
+            break
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
         conn.close()
+    if claimed is not None:
+        _sync_mysql_task(claimed)
+    if claimed is None:
         return {"task": None, "reason": "QUEUE_EMPTY"}
-    lease_token = secrets.token_urlsafe(24)
-    lease_expires_at = (
-        datetime.now(timezone.utc) + timedelta(seconds=MOBILE_LEASE_SECONDS)
-    ).isoformat()
-    conn.execute(
-        """UPDATE scan_task
-           SET status = 'LEASED', assigned_device_id = ?, lease_token = ?,
-               lease_expires_at = ?, attempt = attempt + 1,
-               started_at = COALESCE(started_at, ?), last_error = ''
-           WHERE id = ? AND status = 'PENDING'""",
-        (device["id"], lease_token, lease_expires_at, now, task["id"]),
-    )
-    conn.execute(
-        """UPDATE collector_device SET current_task_id = ?, status = 'RUNNING', updated_at = ?
-           WHERE id = ?""",
-        (task["id"], now, device["id"]),
-    )
-    conn.commit()
-    claimed = conn.execute(
-        "SELECT * FROM scan_task WHERE id = ?",
-        (task["id"],),
-    ).fetchone()
-    conn.close()
     return {"task": _mobile_task_payload(claimed), "reason": "CLAIMED"}
 
 
@@ -1195,6 +1450,7 @@ def mobile_ack_task(
     conn.commit()
     task = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
     conn.close()
+    _sync_mysql_task(task)
     return {"task": _mobile_task_payload(task)}
 
 
@@ -1221,6 +1477,7 @@ def mobile_progress_task(
     conn.commit()
     task = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
     conn.close()
+    _sync_mysql_task(task)
     return {"task": _mobile_task_payload(task)}
 
 
@@ -1248,6 +1505,7 @@ def mobile_complete_task(
     conn.commit()
     task = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
     conn.close()
+    _sync_mysql_task(task)
     return {"task": _mobile_task_payload(task)}
 
 
@@ -1291,6 +1549,7 @@ def mobile_fail_task(
     conn.commit()
     task = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
     conn.close()
+    _sync_mysql_task(task)
     return {"task": _mobile_task_payload(task), "requeued": should_retry}
 
 
@@ -1304,11 +1563,15 @@ def mobile_upload_observations(
     conn = mobile_conn()
     accepted = 0
     duplicates = 0
+    mysql_observations = []
     for item in request.observations:
         observation_id = str(item.get("observationId", ""))
         station_id = str(item.get("stationId", ""))
         task_id = str(item.get("taskId", "") or "")
+        if not task_id:
+            task_id = str(device["current_task_id"] or "")
         payload = item.get("payload", {})
+        payload = _normalize_payload(payload)
         if not observation_id or not station_id:
             continue
         try:
@@ -1331,10 +1594,18 @@ def mobile_upload_observations(
                 accepted += 1
             else:
                 duplicates += 1
+            mysql_observations.append(
+                (observation_id, station_id, task_id, payload, str(item.get("capturedAt", now)))
+            )
         except sqlite3.IntegrityError:
             duplicates += 1
     conn.commit()
     conn.close()
+    for observation in mysql_observations:
+        _sync_mysql_observation(
+            observation[0], observation[1], observation[2],
+            device["id"], observation[3], observation[4], now,
+        )
     return {"accepted": accepted, "duplicates": duplicates}
 
 
@@ -1342,7 +1613,9 @@ def mobile_upload_observations(
 def mobile_admin_tasks(
     status: Optional[str] = None,
     limit: int = Query(200, ge=1, le=1000),
+    x_admin_key: Optional[str] = Header(None),
 ):
+    _require_admin_key(x_admin_key)
     conn = mobile_conn()
     if status:
         rows = conn.execute(
@@ -1356,6 +1629,100 @@ def mobile_admin_tasks(
         ).fetchall()
     conn.close()
     return {"tasks": [_mobile_task_payload(row) for row in rows]}
+
+
+@app.post("/api/v1/admin/tasks")
+def mobile_admin_create_tasks(
+    request: MobileTaskBatchCreateRequest,
+    x_admin_key: Optional[str] = Header(None),
+):
+    _require_admin_key(x_admin_key)
+    now = _mobile_utc()
+    conn = mobile_conn()
+    created_ids = []
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for item in request.tasks:
+            task_id = str(uuid.uuid4())
+            available_at = item.availableAt or now
+            conn.execute(
+                """INSERT INTO scan_task (
+                       id, type, priority, province, city, district, keyword,
+                       search_region, status, attempt, max_attempts,
+                       available_at, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?, ?)""",
+                (
+                    task_id,
+                    item.type,
+                    item.priority,
+                    item.province,
+                    item.city,
+                    item.district,
+                    item.keyword,
+                    item.searchRegion,
+                    item.maxAttempts,
+                    available_at,
+                    now,
+                ),
+            )
+            created_ids.append(task_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    if not created_ids:
+        return {"created": 0, "tasks": []}
+    conn = mobile_conn()
+    placeholders = ",".join("?" for _ in created_ids)
+    rows = conn.execute(
+        f"SELECT * FROM scan_task WHERE id IN ({placeholders}) ORDER BY created_at",
+        created_ids,
+    ).fetchall()
+    conn.close()
+    for row in rows:
+        _sync_mysql_task(row)
+    return {
+        "created": len(created_ids),
+        "tasks": [_mobile_task_payload(row) for row in rows],
+    }
+
+
+@app.get("/api/v1/admin/observations")
+def mobile_admin_observations(
+    task_id: Optional[str] = None,
+    device_id: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=1000),
+    x_admin_key: Optional[str] = Header(None),
+):
+    _require_admin_key(x_admin_key)
+    conn = mobile_conn()
+    sql = "SELECT * FROM station_observation WHERE 1=1"
+    params = []
+    if task_id:
+        sql += " AND task_id = ?"
+        params.append(task_id)
+    if device_id:
+        sql += " AND device_id = ?"
+        params.append(device_id)
+    sql += " ORDER BY received_at DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    observations = []
+    for row in rows:
+        observations.append({
+            "observationId": row["observation_id"],
+            "deviceId": row["device_id"],
+            "taskId": row["task_id"],
+            "stationId": row["station_id"],
+            "capturedAt": row["captured_at"],
+            "receivedAt": row["received_at"],
+            "payload": json.loads(row["payload"] or "{}"),
+        })
+    return {"observations": observations, "count": len(observations)}
 
 
 if __name__ == "__main__":

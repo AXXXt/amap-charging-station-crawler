@@ -15,7 +15,10 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import java.util.regex.Pattern
 import com.tigercode.evcollector.core.model.NodeSnapshot
+import com.tigercode.evcollector.core.model.PageKind
+import com.tigercode.evcollector.core.model.Rect as SnapshotRect
 import com.tigercode.evcollector.core.model.StationCandidate
+import com.tigercode.evcollector.core.parser.PageAssessor
 
 class ChargingAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -80,11 +83,72 @@ class ChargingAccessibilityService : AccessibilityService() {
 
     fun snapshot(): NodeSnapshot? = latestRoot
 
+    fun freshSnapshot(): NodeSnapshot? {
+        val root = rootInActiveWindow ?: return null
+        return try {
+            NodeSnapshotReader.toSnapshot(root)
+        } finally {
+            root.recycle()
+        }
+    }
+
+    fun freshPageKind(expectedStation: String? = null): PageKind {
+        val snapshot = freshSnapshot() ?: return PageKind.UNKNOWN
+        return PageAssessor.assess(snapshot, expectedStation).kind
+    }
+
+    fun clickBackButton(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        try {
+            val node = findNodeByTextOrDescription(root, "返回") ?: return false
+            val bounds = android.graphics.Rect()
+            node.getBoundsInScreen(bounds)
+            val centerX = bounds.centerX()
+            val centerY = bounds.centerY()
+            val clickedByGesture = !bounds.isEmpty && clickAt(centerX, centerY)
+            val clickedByAction = !clickedByGesture && clickNodeOrAncestor(node)
+            Log.i(
+                "EvCollector",
+                "返回按钮 bounds=${bounds.toShortString()} 坐标点击($centerX,$centerY)=$clickedByGesture 动作点击=$clickedByAction",
+            )
+            node.recycle()
+            return clickedByGesture || clickedByAction
+        } finally {
+            root.recycle()
+        }
+    }
+
     fun clickAt(x: Int, y: Int): Boolean {
-        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+        val path = Path().apply {
+            moveTo(x.toFloat(), y.toFloat())
+            lineTo(x.toFloat(), y.toFloat())
+        }
         val stroke = GestureDescription.StrokeDescription(path, 0, 90)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
-        return dispatchGesture(gesture, null, null)
+        val dispatched = dispatchGesture(gesture, null, null)
+        Log.i("EvCollector", "Coordinate click($x,$y)=$dispatched")
+        return dispatched
+    }
+
+    fun clickStationCard(name: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        try {
+            val node = findNodeByTextOrDescription(root, name) ?: return false
+            val bounds = android.graphics.Rect()
+            node.getBoundsInScreen(bounds)
+            val centerX = bounds.centerX()
+            val centerY = bounds.centerY()
+            val clickedByGesture = !bounds.isEmpty && clickAt(centerX, centerY)
+            val clickedByAction = !clickedByGesture && clickNodeOrAncestor(node)
+            Log.i(
+                "EvCollector",
+                "Station card[$name] bounds=${bounds.toShortString()} actionClick=$clickedByAction coordinateClick=$clickedByGesture",
+            )
+            node.recycle()
+            return clickedByAction || clickedByGesture
+        } finally {
+            root.recycle()
+        }
     }
 
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long) {
@@ -160,7 +224,7 @@ class ChargingAccessibilityService : AccessibilityService() {
             val node = findNodeByRegex(root, pattern)
             if (node == null) {
                 val matches = mutableListOf<String>()
-                collectMatchingTexts(root, Regex("涨至|降至|价格趋势"), matches)
+                collectMatchingTexts(root, Regex("涨至|降至"), matches)
                 Log.i("EvCollector", "未找到节点[$patternText]，现有价格文本: ${matches.take(8).joinToString(" | ")}")
                 return false
             }
@@ -189,6 +253,27 @@ class ChargingAccessibilityService : AccessibilityService() {
         } finally {
             root.recycle()
         }
+    }
+
+    fun clickNodeByViewId(viewId: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        try {
+            val nodes = root.findAccessibilityNodeInfosByViewId(viewId) ?: return false
+            for (node in nodes) {
+                val bounds = android.graphics.Rect()
+                node.getBoundsInScreen(bounds)
+                val clickedByGesture = !bounds.isEmpty && clickAt(bounds.centerX(), bounds.centerY())
+                val clickedByAction = !clickedByGesture && clickNodeOrAncestor(node)
+                if (clickedByGesture || clickedByAction) {
+                    node.recycle()
+                    return true
+                }
+                node.recycle()
+            }
+        } finally {
+            root.recycle()
+        }
+        return false
     }
 
     private fun hasClickableAncestor(node: AccessibilityNodeInfo): Boolean {
@@ -221,6 +306,22 @@ class ChargingAccessibilityService : AccessibilityService() {
             val child = node.getChild(index) ?: continue
             val match = findNodeByRegex(child, pattern)
             if (match != null) return match
+        }
+        return null
+    }
+
+    private fun findNodeByTextOrDescription(
+        node: AccessibilityNodeInfo,
+        text: String,
+    ): AccessibilityNodeInfo? {
+        if (node.text?.toString() == text || node.contentDescription?.toString() == text) {
+            return node
+        }
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            val match = findNodeByTextOrDescription(child, text)
+            if (match != null) return match
+            child.recycle()
         }
         return null
     }
@@ -270,6 +371,28 @@ class ChargingAccessibilityService : AccessibilityService() {
     }
 
     fun scrollForward(): Boolean = gestureScroll(0.83f, 0.27f, 420)
+
+    fun scrollWithin(bounds: SnapshotRect): Boolean {
+        if (!bounds.isValid) return scrollForward()
+        val margin = minOf(180, maxOf(100, bounds.height / 8))
+        val startY = (bounds.bottom - margin).coerceAtMost(screenHeightPx() - 1)
+        val endY = (bounds.top + margin).coerceAtLeast(0)
+        if (startY <= endY + 80) return scrollForward()
+
+        val x = bounds.centerX.coerceIn(40, resources.displayMetrics.widthPixels - 40)
+        val path = Path().apply {
+            moveTo(x.toFloat(), startY.toFloat())
+            lineTo(x.toFloat(), endY.toFloat())
+        }
+        val stroke = GestureDescription.StrokeDescription(path, 0, 420)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        val dispatched = dispatchGesture(gesture, null, null)
+        Log.i(
+            "EvCollector",
+            "列表区域滑动 bounds=$bounds 起点=($x,$startY) 终点=($x,$endY) dispatched=$dispatched",
+        )
+        return dispatched
+    }
 
     fun scrollSmallDown(): Boolean = gestureScroll(0.72f, 0.46f, 320)
 
@@ -345,3 +468,4 @@ class ChargingAccessibilityService : AccessibilityService() {
     }
 
 }
+

@@ -28,6 +28,17 @@ object DetailPageClassifier {
         "has_price_section" to listOf("/度", "￥"),
     )
 
+    private val uniformPriceRegex = Regex(
+        """(全时段|全天|各时段|所有时段|任意时段|不分时段)?(价格|电价).{0,6}(一致|统一)|统一(价|电价|价格)"""
+    )
+
+    fun hasUniformPrice(root: NodeSnapshot): Boolean {
+        val joined = collectText(root)
+        if (uniformPriceRegex.containsMatchIn(joined)) return true
+        // 高德有时会把固定文案拆成多个相邻节点，去掉空白后仍要能识别。
+        return uniformPriceRegex.containsMatchIn(joined.replace(Regex("\\s+"), ""))
+    }
+
     fun classify(root: NodeSnapshot): DetailPageInfo {
         val joined = collectText(root)
         val features = markers.mapValues { (_, keywords) -> keywords.any { it in joined } }

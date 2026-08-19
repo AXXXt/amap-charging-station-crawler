@@ -101,6 +101,96 @@ class ParserAndEngineTest {
     }
 
     @Test
+    fun mapBottomSheetUsesRecyclerViewAndKeepsVisibleStations() {
+        val xml = """
+            <hierarchy>
+                <node content-desc="展开列表" bounds="[0,619][1080,708]" />
+                <node class="androidx.recyclerview.widget.RecyclerView"
+                      scrollable="true"
+                      bounds="[0,703][1080,2068]">
+                    <node clickable="true"
+                          content-desc="郑州公用集团中原超级充电站"
+                          bounds="[33,729][1047,1209]">
+                        <node text="16.6公里" />
+                        <node text="￥0.95/度" />
+                    </node>
+                    <node clickable="true"
+                          content-desc="云快充超级充电站(汇能重卡超充站)"
+                          bounds="[33,1209][1047,1689]">
+                        <node text="30.9公里" />
+                        <node text="停车费：免费" />
+                    </node>
+                </node>
+            </hierarchy>
+        """.trimIndent()
+
+        val snapshot = root(xml)
+        val viewport = StationMatcher.listViewport(snapshot)
+        val cards = StationMatcher.visibleStationCards(snapshot)
+
+        assertEquals(703, viewport?.top)
+        assertEquals(2068, viewport?.bottom)
+        assertEquals(2, cards.size)
+        assertEquals("郑州公用集团中原超级充电站", cards[0].name)
+    }
+
+    @Test
+    fun promotionHeaderIsNotAStationCard() {
+        val xml = """
+            <hierarchy>
+                <node class="androidx.recyclerview.widget.RecyclerView"
+                      scrollable="true"
+                      bounds="[0,230][1080,2068]">
+                    <node clickable="true"
+                          content-desc="高德扫码充电补贴 扫描充电桩二维码可用"
+                          bounds="[33,375][1047,562]">
+                        <node text="领取" />
+                        <node text="满20减10" />
+                    </node>
+                    <node clickable="true"
+                          content-desc="特来电郑州新密白寨万禾重卡超充站"
+                          bounds="[33,584][1047,1054]">
+                        <node text="33.6公里" />
+                        <node text="停车费：停车免费" />
+                        <node text="￥0.78/度" />
+                    </node>
+                </node>
+            </hierarchy>
+        """.trimIndent()
+
+        val cards = StationMatcher.visibleStationCards(root(xml))
+
+        assertEquals(1, cards.size)
+        assertEquals("特来电郑州新密白寨万禾重卡超充站", cards[0].name)
+    }
+
+    @Test
+    fun tinyCardFragmentAtBottomIsKeptForLaterScrollButNotClicked() {
+        val xml = """
+            <hierarchy>
+                <node class="androidx.recyclerview.widget.RecyclerView"
+                      scrollable="true"
+                      bounds="[0,703][1080,2068]">
+                    <node clickable="true"
+                          content-desc="完整可见重卡充电站"
+                          bounds="[33,729][1047,1209]" />
+                    <node clickable="true"
+                          content-desc="底部只露出一点的充电站"
+                          bounds="[33,2002][1047,2068]" />
+                </node>
+            </hierarchy>
+        """.trimIndent()
+
+        val cards = StationMatcher.visibleStationCards(root(xml))
+
+        assertEquals(2, cards.size)
+        assertEquals("完整可见重卡充电站", cards[0].name)
+        assertTrue(cards[0].clickVisible)
+        assertEquals("底部只露出一点的充电站", cards[1].name)
+        assertTrue(!cards[1].clickVisible)
+    }
+
+    @Test
     fun deduplicatorMergesSameNameCloseStations() {
         val records = listOf(
             StationRecord("甲充电站", 113.1, 34.1, 5),

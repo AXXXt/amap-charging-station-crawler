@@ -62,7 +62,7 @@ class MainActivity : AppCompatActivity() {
         binding.serverUrlInput.setText(AppPreferences.serverUrl(this))
         binding.activationCodeInput.setText(AppPreferences.activationCode(this))
         binding.deviceNameInput.setText(AppPreferences.deviceName(this))
-        binding.cityInput.setText("郑州")
+        binding.cityInput.setText("")
         binding.districtInput.setText("")
         binding.keywordInput.setText("")
 
@@ -73,6 +73,8 @@ class MainActivity : AppCompatActivity() {
         binding.stopCollectButton.setOnClickListener { stopCollector() }
         binding.syncNowButton.setOnClickListener { syncNow() }
         binding.localScanButton.setOnClickListener { startLocalScan() }
+        binding.stopRunButton.setOnClickListener { stopRunning() }
+        binding.clearLogButton.setOnClickListener { clearLogs() }
 
         refreshHandler.post(refreshRunnable)
         refreshUi()
@@ -158,10 +160,24 @@ class MainActivity : AppCompatActivity() {
             openAccessibilitySettings()
             return
         }
-        val city = binding.cityInput.text?.toString()?.trim().orEmpty().ifBlank { "郑州" }
+        val city = binding.cityInput.text?.toString()?.trim().orEmpty()
         val district = binding.districtInput.text?.toString()?.trim().orEmpty()
         val keyword = binding.keywordInput.text?.toString()?.trim().orEmpty()
         engine.startLocal(city, district, keyword, engineListener)
+        refreshUi()
+    }
+
+    private fun stopRunning() {
+        engine.stop()
+        AppPreferences.setScanning(this, false)
+        CollectorKeepAliveService.stop(this)
+        AppPreferences.setRemoteStatus(this, "运行已停止")
+        AppPreferences.appendLog(this, "用户手动停止运行")
+        refreshUi()
+    }
+
+    private fun clearLogs() {
+        AppPreferences.clearLogs(this)
         refreshUi()
     }
 

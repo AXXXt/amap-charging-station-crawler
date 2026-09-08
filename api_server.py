@@ -19,6 +19,13 @@ import uuid
 import hashlib
 import time
 from datetime import datetime, timezone, timedelta
+import urllib.parse
+import urllib.request
+from site_exploration_bridge import (
+    SiteExplorationBridge,
+    parse_mysql_database_url,
+    station_source_key,
+)
 
 app = FastAPI(
     title="重卡充电站数据服务",
@@ -28,9 +35,29 @@ app = FastAPI(
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+
+def _load_local_env(path):
+    """Load ignored local .env values without adding a runtime dependency."""
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8-sig") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip("\"").strip("\'")
+            if key:
+                os.environ.setdefault(key, value)
+
+
+_load_local_env(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
 # ============================================================
 # MySQL CONFIG
 # ============================================================
+DATABASE_URL_CONFIG = parse_mysql_database_url(os.getenv("EVCS_DATABASE_URL", ""))
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", ""),
     "port": int(os.getenv("DB_PORT", "3306")),
@@ -40,6 +67,31 @@ DB_CONFIG = {
     "charset": os.getenv("DB_CHARSET", "utf8mb4"),
     "connect_timeout": int(os.getenv("DB_CONNECT_TIMEOUT", "5")),
 }
+# DB_* is the local MySQL used by the local scan results.  EVCS_DATABASE_URL
+# may override DB_CONFIG for the remote site-exploration bridge, but local
+# results must keep going to the operator's own 3306 database.
+LOCAL_DB_CONFIG = dict(DB_CONFIG)
+if DATABASE_URL_CONFIG:
+    DB_CONFIG.update(DATABASE_URL_CONFIG)
+LOCAL_RESULT_SYNC_ENABLED = os.getenv(
+    "LOCAL_RESULT_SYNC_ENABLED", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+
+SITE_EXPLORATION_TASKS_ENABLED = os.getenv(
+    "SITE_EXPLORATION_TASKS_ENABLED", "0"
+).strip().lower() not in {"0", "false", "no", "off"}
+# The site-exploration flow has its own MySQL schema and bridge.  Do not send
+# mobile-control UUID tasks/observations to the legacy scan_task/station_result
+# tables unless that legacy integration is explicitly enabled.
+LEGACY_MYSQL_SYNC_ENABLED = os.getenv(
+    "LEGACY_MYSQL_SYNC_ENABLED", "0"
+).strip().lower() not in {"0", "false", "no", "off"}
+site_exploration_bridge = SiteExplorationBridge(
+    DB_CONFIG,
+    enabled=SITE_EXPLORATION_TASKS_ENABLED and bool(DATABASE_URL_CONFIG or all(
+        DB_CONFIG.get(key) for key in ("host", "user", "database")
+    )),
+)
 
 def get_db():
     if not all(DB_CONFIG.get(key) for key in ("host", "user", "database")):
@@ -151,7 +203,30 @@ def init_db():
 @app.on_event("startup")
 async def startup():
     init_mobile_db()
-    seed_default_mobile_tasks()
+    try:
+        task_conn = mobile_conn()
+        try:
+            henan_rows = task_conn.execute(
+                "SELECT * FROM scan_task WHERE type = ? ORDER BY source_sequence, created_at, id",
+                (HENAN_POI_DETAIL_TASK,),
+            ).fetchall()
+        finally:
+            task_conn.close()
+        # Use one remote transaction instead of opening one MySQL connection per
+        # task.  This keeps startup bounded even when hundreds of POIs exist.
+        _sync_henan_task_rows(henan_rows)
+        print(f"  Henan POI task table ready ({len(henan_rows)} tasks)")
+    except Exception as e:
+        print(f"  Henan POI task table unavailable: {e}")
+    if site_exploration_bridge.enabled:
+        try:
+            site_exploration_bridge.ensure_result_table()
+            site_exploration_bridge.sync_next_site(mobile_conn)
+            print("  Site exploration task source ready")
+        except Exception as e:
+            print(f"  Site exploration task source unavailable: {e}")
+    else:
+        seed_default_mobile_tasks()
     threading.Thread(target=_lease_reaper_loop, daemon=True).start()
     try:
         init_db()
@@ -783,6 +858,94 @@ MOBILE_LEASE_SECONDS = int(os.getenv("MOBILE_LEASE_SECONDS", "600"))
 MOBILE_ADMIN_API_KEY = os.getenv("MOBILE_ADMIN_API_KEY", "dev-admin-key")
 MOBILE_LEASE_RECLAIM_SECONDS = int(os.getenv("MOBILE_LEASE_RECLAIM_SECONDS", "30"))
 MOBILE_CLAIM_MAX_RETRIES = int(os.getenv("MOBILE_CLAIM_MAX_RETRIES", "3"))
+HENAN_POI_DETAIL_TASK = "HENAN_POI_DETAIL"
+AMAP_API_KEY = os.getenv("AMAP_API_KEY", "")
+AMAP_POI_PAGE_SIZE = int(os.getenv("AMAP_POI_PAGE_SIZE", "25"))
+AMAP_POI_IMPORT_QPS_DELAY_SECONDS = float(os.getenv("AMAP_POI_IMPORT_QPS_DELAY_SECONDS", "0.35"))
+HENAN_CITY_IMPORT_ORDER = [
+    ("郑州市", "410100"),
+    ("洛阳市", "410300"),
+    ("开封市", "410200"),
+    ("平顶山市", "410400"),
+    ("安阳市", "410500"),
+    ("鹤壁市", "410600"),
+    ("新乡市", "410700"),
+    ("焦作市", "410800"),
+    ("濮阳市", "410900"),
+    ("许昌市", "411000"),
+    ("漯河市", "411100"),
+    ("三门峡市", "411200"),
+    ("南阳市", "411300"),
+    ("商丘市", "411400"),
+    ("信阳市", "411500"),
+    ("周口市", "411600"),
+    ("驻马店市", "411700"),
+    ("济源市", "419001"),
+]
+_henan_import_state_lock = threading.Lock()
+_henan_import_thread = None
+_henan_import_state = {
+    "jobId": "",
+    "status": "IDLE",
+    "ready": False,
+    "currentCity": "",
+    "citiesCompleted": 0,
+    "citiesTotal": len(HENAN_CITY_IMPORT_ORDER),
+    "reportedTotal": 0,
+    "fetched": 0,
+    "created": 0,
+    "skippedTask": 0,
+    "skippedResult": 0,
+    "skippedDuplicatePoi": 0,
+    "failedCities": [],
+    "message": "尚未开始导入",
+    "startedAt": "",
+    "updatedAt": "",
+    "finishedAt": "",
+}
+
+# One physical station may be present in several source exploration rows.
+# Keep only the earliest task for that station eligible for claiming.  The
+# lease transaction below still provides the exact-task concurrency guarantee;
+# this clause additionally prevents historical duplicate station tasks from
+# being processed one after another.
+SITE_TASK_CANONICAL_CLAUSE = """
+                       AND (
+                           COALESCE(scan_task.source_station_id, '') = ''
+                           OR NOT EXISTS (
+                               SELECT 1
+                               FROM scan_task AS other_task
+                               WHERE other_task.type = 'SITE_STATION_DETAIL'
+                                 AND other_task.source_station_id = scan_task.source_station_id
+                                 AND other_task.source_station_id <> ''
+                                 AND other_task.id <> scan_task.id
+                                 AND (
+                                     other_task.status IN ('LEASED', 'RUNNING', 'COMPLETED')
+                                     OR (
+                                         other_task.status NOT IN ('FAILED', 'CANCELLED')
+                                         AND (
+                                             other_task.source_site_order < scan_task.source_site_order
+                                             OR (
+                                                 other_task.source_site_order = scan_task.source_site_order
+                                                 AND other_task.source_sequence < scan_task.source_sequence
+                                             )
+                                             OR (
+                                                 other_task.source_site_order = scan_task.source_site_order
+                                                 AND other_task.source_sequence = scan_task.source_sequence
+                                                 AND other_task.created_at < scan_task.created_at
+                                             )
+                                             OR (
+                                                 other_task.source_site_order = scan_task.source_site_order
+                                                 AND other_task.source_sequence = scan_task.source_sequence
+                                                 AND other_task.created_at = scan_task.created_at
+                                                 AND other_task.id < scan_task.id
+                                             )
+                                         )
+                                     )
+                                 )
+                           )
+                       )
+"""
 
 
 class MobileRegisterRequest(BaseModel):
@@ -793,6 +956,7 @@ class MobileRegisterRequest(BaseModel):
     parserVersion: str = ""
     targetAppVersion: str = ""
     capabilities: dict = {}
+    adbSerial: str = ""
 
 
 class MobileHeartbeatRequest(BaseModel):
@@ -820,6 +984,9 @@ class MobileTaskActionRequest(BaseModel):
 
 class MobileObservationUploadRequest(BaseModel):
     deviceCode: str = ""
+    # Needed when uploading the currently active task. A stale worker cannot
+    # upload after another device has reclaimed that lease.
+    leaseToken: str = ""
     observations: List[dict] = []
 
 
@@ -835,14 +1002,30 @@ class MobileTaskCreateItem(BaseModel):
     availableAt: str = ""
 
 
+class HenanPoiImportRequest(BaseModel):
+    keyword: str = "重卡充电站"
+    province: str = "河南省"
+    adcode: str = "410000"
+    priority: int = 80
+    maxAttempts: int = 3
+    skipExistingResults: bool = True
+
+
 class MobileTaskBatchCreateRequest(BaseModel):
     tasks: List[MobileTaskCreateItem] = []
 
 
 def mobile_conn():
-    os.makedirs(os.path.dirname(MOBILE_DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(MOBILE_DB_PATH)
+    directory = os.path.dirname(os.path.abspath(MOBILE_DB_PATH))
+    os.makedirs(directory, exist_ok=True)
+    conn = sqlite3.connect(MOBILE_DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    # WAL allows heartbeats/uploads to proceed around the short claim lock;
+    # busy_timeout turns transient contention into a wait instead of a lost
+    # polling cycle.
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -860,6 +1043,7 @@ def init_mobile_db():
             app_version TEXT NOT NULL DEFAULT '',
             parser_version TEXT NOT NULL DEFAULT '',
             target_app_version TEXT NOT NULL DEFAULT '',
+            adb_serial TEXT NOT NULL DEFAULT '',
             last_heartbeat_at TEXT,
             last_error TEXT NOT NULL DEFAULT '',
             current_task_id TEXT,
@@ -887,6 +1071,7 @@ def init_mobile_db():
             result_summary TEXT NOT NULL DEFAULT '{}',
             available_at TEXT NOT NULL,
             created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT '',
             started_at TEXT,
             finished_at TEXT,
             last_error TEXT NOT NULL DEFAULT ''
@@ -904,9 +1089,32 @@ def init_mobile_db():
             PRIMARY KEY(device_id, observation_id)
         )
     """)
+    device_columns = {
+        row[1] for row in cur.execute("PRAGMA table_info(collector_device)").fetchall()
+    }
+    if "adb_serial" not in device_columns:
+        cur.execute(
+            "ALTER TABLE collector_device "
+            "ADD COLUMN adb_serial TEXT NOT NULL DEFAULT ''"
+        )
+    task_columns = {row[1] for row in cur.execute("PRAGMA table_info(scan_task)").fetchall()}
+    if "updated_at" not in task_columns:
+        cur.execute("ALTER TABLE scan_task ADD COLUMN updated_at TEXT")
+        cur.execute("UPDATE scan_task SET updated_at = created_at WHERE updated_at IS NULL")
+    if "source_station_id" not in task_columns:
+        cur.execute("ALTER TABLE scan_task ADD COLUMN source_station_id TEXT NOT NULL DEFAULT ''")
+    if "source_payload" not in task_columns:
+        cur.execute("ALTER TABLE scan_task ADD COLUMN source_payload TEXT NOT NULL DEFAULT '{}'")
+    if "source_sequence" not in task_columns:
+        cur.execute("ALTER TABLE scan_task ADD COLUMN source_sequence INTEGER NOT NULL DEFAULT 0")
+    site_exploration_bridge.ensure_local_schema(conn)
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_scan_task_claim "
         "ON scan_task(status, available_at, priority DESC, created_at)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scan_task_station_claim "
+        "ON scan_task(type, source_station_id, source_site_order, source_sequence, created_at)"
     )
     cur.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_task_device_active "
@@ -954,13 +1162,14 @@ def seed_default_mobile_tasks():
         conn.execute(
             """INSERT INTO scan_task (
                    id, type, priority, province, city, district, keyword,
-                   search_region, status, attempt, max_attempts, available_at, created_at
-               ) VALUES (?, 'REGION_SCAN', 30, '河南省', ?, ?, ?, '', 'PENDING', 0, 3, ?, ?)""",
+                   search_region, status, attempt, max_attempts, available_at, created_at, updated_at
+               ) VALUES (?, 'REGION_SCAN', 30, '河南省', ?, ?, ?, '', 'PENDING', 0, 3, ?, ?, ?)""",
             (
                 str(uuid.uuid4()),
                 city,
                 district,
                 keyword,
+                now,
                 now,
                 now,
             ),
@@ -1020,6 +1229,26 @@ def _mobile_task_payload(row):
         "startedAt": row["started_at"],
         "finishedAt": row["finished_at"],
         "lastError": row["last_error"],
+        **site_exploration_bridge.task_payload_fields(row),
+        **_henan_poi_task_payload_fields(row),
+    }
+
+
+def _henan_poi_task_payload_fields(row):
+    """Expose POI identity data for the mobile station-detail collector."""
+    if row is None or row["type"] != HENAN_POI_DETAIL_TASK:
+        return {}
+    source_payload = _normalize_payload(row["source_payload"] if "source_payload" in row.keys() else {})
+    source_payload = source_payload if isinstance(source_payload, dict) else {}
+    return {
+        "sourceStationId": str(row["source_station_id"] if "source_station_id" in row.keys() else ""),
+        "stationId": str(row["source_station_id"] if "source_station_id" in row.keys() else ""),
+        "stationName": str(source_payload.get("name") or row["keyword"] or ""),
+        "stationAddress": str(source_payload.get("address") or ""),
+        "stationLatitude": _optional_float(source_payload.get("latitude")),
+        "stationLongitude": _optional_float(source_payload.get("longitude")),
+        "stationSequence": int(row["source_sequence"] if "source_sequence" in row.keys() else 0),
+        "sourcePayload": source_payload,
     }
 
 
@@ -1030,14 +1259,39 @@ def _require_mobile_device(authorization):
     if not token:
         raise HTTPException(401, detail="DEVICE_TOKEN_REQUIRED")
     conn = mobile_conn()
-    row = conn.execute(
-        "SELECT * FROM collector_device WHERE token_hash = ?",
-        (_mobile_token_hash(token),),
-    ).fetchone()
-    conn.close()
+    try:
+        row = conn.execute(
+            "SELECT * FROM collector_device WHERE token_hash = ?",
+            (_mobile_token_hash(token),),
+        ).fetchone()
+    finally:
+        conn.close()
     if row is None:
         raise HTTPException(401, detail="DEVICE_TOKEN_INVALID")
     return row
+
+
+def _validate_device_code(device, requested_code):
+    requested_code = (requested_code or "").strip()
+    if requested_code and requested_code != device["device_code"]:
+        raise HTTPException(403, detail="DEVICE_CODE_MISMATCH")
+
+
+def _task_lease_is_active(task, device_id, lease_token, now=None):
+    if task is None or task["status"] not in {"LEASED", "RUNNING"}:
+        return False
+    if task["assigned_device_id"] != device_id or task["lease_token"] != lease_token:
+        return False
+    expires_at = task["lease_expires_at"]
+    if not expires_at:
+        return False
+    try:
+        expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        return expires.astimezone(timezone.utc) >= (now or datetime.now(timezone.utc))
+    except (TypeError, ValueError):
+        return False
 
 
 def _require_mobile_task(conn, device_id, task_id, lease_token):
@@ -1045,10 +1299,33 @@ def _require_mobile_task(conn, device_id, task_id, lease_token):
         "SELECT * FROM scan_task WHERE id = ?",
         (task_id,),
     ).fetchone()
+
+    def reject(status_code, detail):
+        # Endpoint callers intentionally do not need a second finally block
+        # just for validation failures; close this short-lived connection here.
+        try:
+            conn.rollback()
+        finally:
+            conn.close()
+        raise HTTPException(status_code, detail=detail)
+
     if task is None:
-        raise HTTPException(404, detail="TASK_NOT_FOUND")
+        reject(404, "TASK_NOT_FOUND")
     if task["assigned_device_id"] != device_id or task["lease_token"] != lease_token:
-        raise HTTPException(409, detail="TASK_LEASE_STALE")
+        reject(409, "TASK_LEASE_STALE")
+    if task["status"] not in {"LEASED", "RUNNING"}:
+        reject(409, "TASK_NOT_ACTIVE")
+    expires_at = task["lease_expires_at"]
+    if not expires_at:
+        reject(409, "TASK_LEASE_EXPIRED")
+    try:
+        expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires.astimezone(timezone.utc) < datetime.now(timezone.utc):
+            reject(409, "TASK_LEASE_EXPIRED")
+    except (TypeError, ValueError):
+        reject(409, "TASK_LEASE_INVALID")
     return task
 
 
@@ -1074,6 +1351,19 @@ def _normalize_payload(payload):
 def _mysql_datetime(value):
     if not value:
         return None
+    # Android outbox rows may use epoch milliseconds; normalize them before
+    # inserting into MySQL DATETIME columns.
+    try:
+        epoch_value = int(value)
+    except (TypeError, ValueError):
+        epoch_value = None
+    if epoch_value is not None:
+        if epoch_value > 10_000_000_000:
+            epoch_value /= 1000
+        return datetime.fromtimestamp(
+            epoch_value,
+            timezone.utc,
+        ).strftime("%Y-%m-%d %H:%M:%S")
     try:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -1082,7 +1372,11 @@ def _mysql_datetime(value):
 
 
 def _sync_mysql_task(task):
-    if task is None or not _mysql_configured():
+    if (
+        task is None
+        or not LEGACY_MYSQL_SYNC_ENABLED
+        or not _mysql_configured()
+    ):
         return
     try:
         conn = pymysql.connect(**DB_CONFIG)
@@ -1128,6 +1422,127 @@ def _sync_mysql_task(task):
         print(f"MySQL task sync error: {error}", file=sys.stderr)
 
 
+def _optional_float(value):
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _json_column(value):
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return value
+
+
+def _local_db_configured():
+    return all(LOCAL_DB_CONFIG.get(key) for key in ("host", "user", "database"))
+
+
+def _local_result_exists(station_name: str) -> bool:
+    """Whether the local table already contains a result for this station."""
+    conn = pymysql.connect(**LOCAL_DB_CONFIG)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM heavy_truck_stations WHERE station_name = %s LIMIT 1",
+                (station_name,),
+            )
+            return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def _sync_local_station_result(
+    observation_id,
+    station_id,
+    device_id,
+    payload,
+    captured_at=None,
+    received_at=None,
+):
+    """Upsert one local-scan result into the configured local MySQL table."""
+    if (
+        not LOCAL_RESULT_SYNC_ENABLED
+        or not _local_db_configured()
+        or not observation_id
+        or not station_id
+        or not isinstance(payload, dict)
+    ):
+        return
+    station_name = str(payload.get("stationName") or "").strip()
+    if not station_name:
+        station_name = str(payload.get("requestedStationName") or "").strip()
+    if not station_name:
+        return
+    # Remote SITE_STATION_DETAIL results belong to the remote site-exploration
+    # table. Never overwrite the local scan table with those results.
+    if str(payload.get("remoteTaskId") or "").strip():
+        return
+    if _local_result_exists(station_name):
+        return
+
+    values = {
+        "station_name": station_name,
+        "operator": str(payload.get("operator") or ""),
+        "address": str(payload.get("address") or ""),
+        "city": str(payload.get("city") or ""),
+        "business_hours": str(payload.get("businessHours") or ""),
+        "current_price": str(payload.get("currentPrice") or ""),
+        "parking_fee": str(payload.get("parkingFee") or ""),
+        "occupancy_fee": str(payload.get("occupancyFee") or ""),
+        "longitude": _optional_float(payload.get("longitude")),
+        "latitude": _optional_float(payload.get("latitude")),
+        "fast_available": str(payload.get("fastAvailable") or ""),
+        "fast_total": str(payload.get("fastTotal") or ""),
+        "fast_power": str(payload.get("fastPower") or ""),
+        "super_available": str(payload.get("superAvailable") or ""),
+        "super_total": str(payload.get("superTotal") or ""),
+        "super_power": str(payload.get("superPower") or ""),
+        "slow_available": str(payload.get("slowAvailable") or ""),
+        "slow_total": str(payload.get("slowTotal") or ""),
+        "slow_power": str(payload.get("slowPower") or ""),
+        "fast_prices": _json_column(payload.get("fastPrices")),
+        "slow_prices": _json_column(payload.get("slowPrices")),
+        "facilities": _json_column(payload.get("facilities")),
+        "tags": _json_column(payload.get("tags")),
+        "favorite_count": str(payload.get("favoriteCount") or ""),
+        "collected_at": _mysql_datetime(captured_at or received_at),
+    }
+
+    conn = pymysql.connect(**LOCAL_DB_CONFIG)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM heavy_truck_stations "
+                "WHERE station_name = %s ORDER BY id DESC LIMIT 1",
+                (station_name,),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                assignments = ", ".join(
+                    f"{column} = %s" for column in values
+                )
+                cursor.execute(
+                    f"UPDATE heavy_truck_stations SET {assignments} "
+                    "WHERE id = %s",
+                    (*values.values(), row[0]),
+                )
+            else:
+                columns = ", ".join(values)
+                placeholders = ", ".join("%s" for _ in values)
+                cursor.execute(
+                    f"INSERT INTO heavy_truck_stations ({columns}) "
+                    f"VALUES ({placeholders})",
+                    tuple(values.values()),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _sync_mysql_observation(
     observation_id,
     station_id,
@@ -1137,7 +1552,12 @@ def _sync_mysql_observation(
     captured_at=None,
     received_at=None,
 ):
-    if not _mysql_configured() or not observation_id or not station_id:
+    if (
+        not LEGACY_MYSQL_SYNC_ENABLED
+        or not _mysql_configured()
+        or not observation_id
+        or not station_id
+    ):
         return
     try:
         conn = pymysql.connect(**DB_CONFIG)
@@ -1205,20 +1625,19 @@ def _reap_expired_leases_once():
                 continue
             will_retry = row["attempt"] < row["max_attempts"]
             next_status = "PENDING" if will_retry else "FAILED"
+            # A lease expiry means the worker is presumed dead/offline. Make
+            # the task immediately available so another device can take over;
+            # explicit fail/retry still keeps its short backoff.
             available_at = now
-            if will_retry:
-                available_at = (
-                    datetime.now(timezone.utc) + timedelta(seconds=min(30, 10 * row["attempt"]))
-                ).isoformat()
             conn.execute(
                 """UPDATE scan_task
                    SET status = ?, assigned_device_id = NULL,
                        lease_token = NULL, lease_expires_at = NULL,
-                       available_at = ?,
+                       available_at = ?, updated_at = ?,
                        finished_at = CASE WHEN ? = 'FAILED' THEN ? ELSE NULL END,
                        last_error = CASE WHEN ? = 'FAILED' THEN 'LEASE_EXPIRED' ELSE '' END
                    WHERE id = ? AND status IN ('LEASED', 'RUNNING')""",
-                (next_status, available_at, next_status, now, next_status, row["id"]),
+                (next_status, available_at, now, next_status, now, next_status, row["id"]),
             )
             if row["assigned_device_id"]:
                 conn.execute(
@@ -1264,8 +1683,8 @@ def mobile_register(request: MobileRegisterRequest):
         """INSERT INTO collector_device (
                id, device_code, name, token_hash, status, capabilities,
                app_version, parser_version, target_app_version,
-               last_heartbeat_at, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, 'IDLE', ?, ?, ?, ?, ?, ?, ?)
+               adb_serial, last_heartbeat_at, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, 'IDLE', ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(device_code) DO UPDATE SET
                name = excluded.name,
                token_hash = excluded.token_hash,
@@ -1273,6 +1692,7 @@ def mobile_register(request: MobileRegisterRequest):
                app_version = excluded.app_version,
                parser_version = excluded.parser_version,
                target_app_version = excluded.target_app_version,
+               adb_serial = COALESCE(NULLIF(excluded.adb_serial, ''), collector_device.adb_serial),
                status = 'IDLE',
                last_heartbeat_at = excluded.last_heartbeat_at,
                updated_at = excluded.updated_at""",
@@ -1285,6 +1705,7 @@ def mobile_register(request: MobileRegisterRequest):
             request.appVersion,
             request.parserVersion,
             request.targetAppVersion,
+            request.adbSerial,
             now,
             now,
             now,
@@ -1356,7 +1777,15 @@ def mobile_claim_task(
     authorization: Optional[str] = Header(None),
 ):
     device = _require_mobile_device(authorization)
+    _validate_device_code(device, request.deviceCode)
+    # Do not wait for the periodic reaper before taking over expired work.
+    _reap_expired_leases_once()
     now = _mobile_utc()
+    if site_exploration_bridge.enabled:
+        try:
+            site_exploration_bridge.sync_next_site(mobile_conn)
+        except Exception as error:
+            raise HTTPException(503, detail=f"SITE_TASK_SOURCE_UNAVAILABLE: {error}")
     conn = mobile_conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -1374,6 +1803,11 @@ def mobile_claim_task(
                 and task["status"] in {"LEASED", "RUNNING"}
                 and task["lease_expires_at"]
                 and task["lease_expires_at"] >= now
+                and (
+                    not site_exploration_bridge.enabled
+                    or task["type"]
+                    in {"SITE_STATION_DETAIL", HENAN_POI_DETAIL_TASK}
+                )
             ):
                 conn.commit()
                 return {"task": _mobile_task_payload(task), "reason": "CURRENT_TASK"}
@@ -1387,13 +1821,45 @@ def mobile_claim_task(
 
         claimed = None
         for _ in range(MOBILE_CLAIM_MAX_RETRIES):
-            task = conn.execute(
-                """SELECT * FROM scan_task
-                   WHERE status = 'PENDING' AND available_at <= ?
-                   ORDER BY priority DESC, available_at, created_at
-                   LIMIT 1""",
-                (now,),
-            ).fetchone()
+            canonical = site_exploration_bridge.enabled
+            henan_pending = any(
+                row["type"] == HENAN_POI_DETAIL_TASK
+                for row in conn.execute(
+                    "SELECT type FROM scan_task "
+                    "WHERE type = ? AND status = 'PENDING' LIMIT 1",
+                    (HENAN_POI_DETAIL_TASK,),
+                ).fetchall()
+            )
+            if henan_pending:
+                task = conn.execute(
+                    """SELECT * FROM scan_task
+                       WHERE status = 'PENDING' AND attempt < max_attempts
+                         AND available_at <= ? AND type = ?
+                       ORDER BY source_sequence, created_at, id
+                       LIMIT 1""",
+                    (now, HENAN_POI_DETAIL_TASK),
+                ).fetchone()
+            elif canonical:
+                task = conn.execute(
+                    f"""SELECT * FROM scan_task
+                       WHERE status = 'PENDING' AND attempt < max_attempts
+                         AND available_at <= ?
+                          AND type = 'SITE_STATION_DETAIL'
+                       {SITE_TASK_CANONICAL_CLAUSE}
+                       ORDER BY source_site_order, source_sequence, created_at, id
+                       LIMIT 1""",
+                    (now,),
+                ).fetchone()
+            else:
+                task = conn.execute(
+                    f"""SELECT * FROM scan_task
+                       WHERE status = 'PENDING' AND attempt < max_attempts
+                         AND available_at <= ?
+                       {SITE_TASK_CANONICAL_CLAUSE}
+                       ORDER BY priority DESC, available_at, created_at, id
+                       LIMIT 1""",
+                    (now,),
+                ).fetchone()
             if task is None:
                 break
             lease_token = secrets.token_urlsafe(24)
@@ -1404,12 +1870,18 @@ def mobile_claim_task(
                 """UPDATE scan_task
                    SET status = 'LEASED', assigned_device_id = ?, lease_token = ?,
                        lease_expires_at = ?, attempt = attempt + 1,
-                       started_at = COALESCE(started_at, ?), last_error = ''
-                   WHERE id = ? AND status = 'PENDING'""",
-                (device["id"], lease_token, lease_expires_at, now, task["id"]),
+                       started_at = COALESCE(started_at, ?), last_error = '', updated_at = ?
+                   WHERE id = ? AND status = 'PENDING' AND attempt < max_attempts""",
+                (device["id"], lease_token, lease_expires_at, now, now, task["id"]),
             )
             if cur.rowcount != 1:
                 continue
+            conn.execute(
+                """UPDATE collector_device
+                   SET current_task_id = NULL, status = 'IDLE', updated_at = ?
+                   WHERE current_task_id = ? AND id != ?""",
+                (now, task["id"], device["id"]),
+            )
             conn.execute(
                 """UPDATE collector_device
                    SET current_task_id = ?, status = 'RUNNING', updated_at = ?
@@ -1429,6 +1901,7 @@ def mobile_claim_task(
         conn.close()
     if claimed is not None:
         _sync_mysql_task(claimed)
+        _sync_henan_task(claimed)
     if claimed is None:
         return {"task": None, "reason": "QUEUE_EMPTY"}
     return {"task": _mobile_task_payload(claimed), "reason": "CLAIMED"}
@@ -1441,16 +1914,25 @@ def mobile_ack_task(
     authorization: Optional[str] = Header(None),
 ):
     device = _require_mobile_device(authorization)
+    _validate_device_code(device, request.deviceCode)
     conn = mobile_conn()
     _require_mobile_task(conn, device["id"], task_id, request.leaseToken)
-    conn.execute(
-        "UPDATE scan_task SET status = 'RUNNING' WHERE id = ?",
-        (task_id,),
+    cur = conn.execute(
+        """UPDATE scan_task SET status = 'RUNNING', updated_at = ?
+           WHERE id = ? AND assigned_device_id = ? AND lease_token = ?
+             AND status IN ('LEASED', 'RUNNING')
+             AND lease_expires_at >= ?""",
+        (_mobile_utc(), task_id, device["id"], request.leaseToken, _mobile_utc()),
     )
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        raise HTTPException(409, detail="TASK_LEASE_STALE")
     conn.commit()
     task = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
     conn.close()
     _sync_mysql_task(task)
+    _sync_henan_task(task)
     return {"task": _mobile_task_payload(task)}
 
 
@@ -1461,6 +1943,7 @@ def mobile_progress_task(
     authorization: Optional[str] = Header(None),
 ):
     device = _require_mobile_device(authorization)
+    _validate_device_code(device, request.deviceCode)
     conn = mobile_conn()
     task = _require_mobile_task(conn, device["id"], task_id, request.leaseToken)
     merged = json.loads(task["progress"] or "{}")
@@ -1468,16 +1951,31 @@ def mobile_progress_task(
     lease_expires_at = (
         datetime.now(timezone.utc) + timedelta(seconds=MOBILE_LEASE_SECONDS)
     ).isoformat()
-    conn.execute(
+    cur = conn.execute(
         """UPDATE scan_task SET status = 'RUNNING', progress = ?,
-               lease_expires_at = ?
-           WHERE id = ?""",
-        (json.dumps(merged, ensure_ascii=False), lease_expires_at, task_id),
+               lease_expires_at = ?, updated_at = ?
+           WHERE id = ? AND assigned_device_id = ? AND lease_token = ?
+             AND status IN ('LEASED', 'RUNNING')
+             AND lease_expires_at >= ?""",
+        (
+            json.dumps(merged, ensure_ascii=False),
+            lease_expires_at,
+            _mobile_utc(),
+            task_id,
+            device["id"],
+            request.leaseToken,
+            _mobile_utc(),
+        ),
     )
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        raise HTTPException(409, detail="TASK_LEASE_STALE")
     conn.commit()
     task = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
     conn.close()
     _sync_mysql_task(task)
+    _sync_henan_task(task)
     return {"task": _mobile_task_payload(task)}
 
 
@@ -1488,15 +1986,30 @@ def mobile_complete_task(
     authorization: Optional[str] = Header(None),
 ):
     device = _require_mobile_device(authorization)
+    _validate_device_code(device, request.deviceCode)
     now = _mobile_utc()
     conn = mobile_conn()
     _require_mobile_task(conn, device["id"], task_id, request.leaseToken)
-    conn.execute(
+    cur = conn.execute(
         """UPDATE scan_task SET status = 'COMPLETED', result_summary = ?,
-               lease_token = NULL, lease_expires_at = NULL, finished_at = ?
-           WHERE id = ?""",
-        (json.dumps(request.resultSummary or {}, ensure_ascii=False), now, task_id),
+               lease_token = NULL, lease_expires_at = NULL, finished_at = ?, updated_at = ?
+           WHERE id = ? AND assigned_device_id = ? AND lease_token = ?
+             AND status IN ('LEASED', 'RUNNING')
+             AND lease_expires_at >= ?""",
+        (
+            json.dumps(request.resultSummary or {}, ensure_ascii=False),
+            now,
+            now,
+            task_id,
+            device["id"],
+            request.leaseToken,
+            now,
+        ),
     )
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        raise HTTPException(409, detail="TASK_LEASE_STALE")
     conn.execute(
         """UPDATE collector_device SET current_task_id = NULL, status = 'IDLE', updated_at = ?
            WHERE id = ? AND current_task_id = ?""",
@@ -1506,6 +2019,7 @@ def mobile_complete_task(
     task = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
     conn.close()
     _sync_mysql_task(task)
+    _sync_henan_task(task)
     return {"task": _mobile_task_payload(task)}
 
 
@@ -1516,6 +2030,7 @@ def mobile_fail_task(
     authorization: Optional[str] = Header(None),
 ):
     device = _require_mobile_device(authorization)
+    _validate_device_code(device, request.deviceCode)
     now_value = datetime.now(timezone.utc)
     now = now_value.isoformat()
     conn = mobile_conn()
@@ -1525,20 +2040,30 @@ def mobile_fail_task(
     available_at = (
         now_value + timedelta(seconds=max(15, task["attempt"] * 30))
     ).isoformat() if should_retry else now
-    conn.execute(
+    cur = conn.execute(
         """UPDATE scan_task SET status = ?, assigned_device_id = NULL,
                lease_token = NULL, lease_expires_at = NULL, last_error = ?,
-               available_at = ?, finished_at = CASE WHEN ? = 'FAILED' THEN ? ELSE NULL END
-           WHERE id = ?""",
+               available_at = ?, updated_at = ?, finished_at = CASE WHEN ? = 'FAILED' THEN ? ELSE NULL END
+           WHERE id = ? AND assigned_device_id = ? AND lease_token = ?
+             AND status IN ('LEASED', 'RUNNING')
+             AND lease_expires_at >= ?""",
         (
             next_status,
             f"{request.errorCode}:{request.errorMessage}"[:1000],
             available_at,
+            now,
             next_status,
             now,
             task_id,
+            device["id"],
+            request.leaseToken,
+            now,
         ),
     )
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        raise HTTPException(409, detail="TASK_LEASE_STALE")
     conn.execute(
         """UPDATE collector_device SET current_task_id = NULL,
                status = CASE WHEN ? = 'FAILED' THEN 'FAULT' ELSE 'IDLE' END,
@@ -1550,7 +2075,65 @@ def mobile_fail_task(
     task = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
     conn.close()
     _sync_mysql_task(task)
+    _sync_henan_task(task)
     return {"task": _mobile_task_payload(task), "requeued": should_retry}
+# ============================================================
+# ADB coordinate tap fallback for AMap overlay close buttons
+# ============================================================
+class MobileAdbTapRequest(BaseModel):
+    deviceCode: str = ""
+    x: int
+    y: int
+    reason: str = ""
+
+
+def _resolve_adb_device_path() -> Optional[str]:
+    candidates = [
+        r"C:\Users\12495\.cache\codex-runtimes\android-build\sdk\platform-tools\adb.exe",
+        r"C:\Users\12495\AppData\Local\Android\Sdk\platform-tools\adb.exe",
+        "adb",
+    ]
+    for path in candidates:
+        try:
+            if path == "adb" or os.path.exists(path):
+                return path
+        except Exception:
+            continue
+    return None
+
+
+@app.post("/api/v1/device/adb-tap")
+def mobile_adb_tap(request: MobileAdbTapRequest, authorization: Optional[str] = Header(None)):
+    device = _require_mobile_device(authorization)
+    _validate_device_code(device, request.deviceCode)
+    adb_path = _resolve_adb_device_path()
+    if not adb_path:
+        raise HTTPException(503, detail="ADB_NOT_AVAILABLE")
+    serial = str(device.get("adb_serial") or "").strip() if isinstance(device, dict) else str(device["adb_serial"] or "").strip()
+    if not serial:
+        try:
+            proc = subprocess.run(
+                [adb_path, "devices"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            lines = [line.strip() for line in proc.stdout.splitlines() if "\tdevice" in line]
+            serial = lines[0].split("\t")[0] if lines else ""
+        except Exception:
+            serial = ""
+    if not serial:
+        raise HTTPException(503, detail="ADB_DEVICE_NOT_FOUND")
+    try:
+        proc = subprocess.run(
+            [adb_path, "-s", serial, "shell", "input", "tap", str(request.x), str(request.y)],
+            capture_output=True,
+            timeout=5,
+        )
+        success = proc.returncode == 0
+    except Exception:
+        success = False
+    return {"success": success, "serial": serial, "reason": request.reason}
 
 
 @app.post("/api/v1/observations/batches")
@@ -1559,54 +2142,742 @@ def mobile_upload_observations(
     authorization: Optional[str] = Header(None),
 ):
     device = _require_mobile_device(authorization)
+    _validate_device_code(device, request.deviceCode)
     now = _mobile_utc()
+    now_value = datetime.now(timezone.utc)
     conn = mobile_conn()
     accepted = 0
     duplicates = 0
+    accepted_ids = []
+    duplicate_ids = []
+    failed_ids = []
+    errors = []
     mysql_observations = []
-    for item in request.observations:
-        observation_id = str(item.get("observationId", ""))
-        station_id = str(item.get("stationId", ""))
-        task_id = str(item.get("taskId", "") or "")
-        if not task_id:
-            task_id = str(device["current_task_id"] or "")
-        payload = item.get("payload", {})
-        payload = _normalize_payload(payload)
-        if not observation_id or not station_id:
-            continue
-        try:
-            cur = conn.execute(
-                """INSERT OR IGNORE INTO station_observation (
-                       observation_id, device_id, task_id, station_id,
-                       captured_at, received_at, payload
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    observation_id,
-                    device["id"],
-                    task_id,
-                    station_id,
-                    str(item.get("capturedAt", now)),
-                    now,
-                    json.dumps(payload, ensure_ascii=False),
-                ),
-            )
-            if cur.rowcount > 0:
-                accepted += 1
-            else:
+    task_cache = {}
+    try:
+        for item in request.observations:
+            observation_id = str(item.get("observationId", ""))
+            station_id = str(item.get("stationId", ""))
+            task_id = str(item.get("taskId", "") or "")
+            if not task_id:
+                task_id = str(device["current_task_id"] or "")
+            source_task = None
+            if task_id:
+                if task_id not in task_cache:
+                    task_cache[task_id] = conn.execute(
+                        "SELECT * FROM scan_task WHERE id = ?",
+                        (task_id,),
+                    ).fetchone()
+                source_task = task_cache[task_id]
+                # Active/requeued tasks require the current lease. Terminal
+                # task retries remain idempotent so an outbox can drain after
+                # a successful status update.
+                if source_task is None:
+                    failed_ids.append(observation_id)
+                    errors.append(f"{observation_id}: TASK_NOT_FOUND")
+                    continue
+                if source_task["status"] not in {"COMPLETED", "FAILED", "CANCELLED"} and not _task_lease_is_active(
+                    source_task, device["id"], request.leaseToken, now_value
+                ):
+                    failed_ids.append(observation_id)
+                    errors.append(f"{observation_id}: TASK_LEASE_STALE")
+                    continue
+            payload = item.get("payload", {})
+            payload = _normalize_payload(payload)
+            if not observation_id or not station_id:
+                if observation_id:
+                    failed_ids.append(observation_id)
+                errors.append("observationId and stationId are required")
+                continue
+            captured_at = str(item.get("capturedAt", now))
+            existing = conn.execute(
+                """SELECT * FROM station_observation
+                   WHERE device_id = ? AND observation_id = ?""",
+                (device["id"], observation_id),
+            ).fetchone()
+            existing_for_task_station = None
+            if task_id:
+                existing_for_task_station = conn.execute(
+                    """SELECT * FROM station_observation
+                       WHERE task_id = ? AND station_id = ?
+                       LIMIT 1""",
+                    (task_id, station_id),
+                ).fetchone()
+
+            payload_json = json.dumps(payload, ensure_ascii=False)
+            if existing is not None:
+                # Same device/idempotency key: refresh the durable local copy,
+                # then let the remote upsert repair a previously interrupted
+                # network delivery without creating a second row.
+                conn.execute(
+                    """UPDATE station_observation
+                       SET task_id = ?, station_id = ?, captured_at = ?,
+                           received_at = ?, payload = ?
+                       WHERE device_id = ? AND observation_id = ?""",
+                    (
+                        task_id,
+                        station_id,
+                        captured_at,
+                        now,
+                        payload_json,
+                        device["id"],
+                        observation_id,
+                    ),
+                )
                 duplicates += 1
-            mysql_observations.append(
-                (observation_id, station_id, task_id, payload, str(item.get("capturedAt", now)))
-            )
-        except sqlite3.IntegrityError:
-            duplicates += 1
-    conn.commit()
-    conn.close()
+                duplicate_ids.append(observation_id)
+                sync_observation = (
+                    observation_id,
+                    station_id,
+                    task_id,
+                    payload,
+                    captured_at,
+                    source_task,
+                    device["id"],
+                )
+            elif existing_for_task_station is not None:
+                # A replacement device may submit the same task/station with a
+                # different local key. Do not use INSERT OR REPLACE here: that
+                # would delete the first device's row and make the result look
+                # newly accepted. Keep the first durable observation and return
+                # a duplicate acknowledgement for the replacement outbox.
+                duplicates += 1
+                duplicate_ids.append(observation_id)
+                existing_payload = _normalize_payload(existing_for_task_station["payload"])
+                existing_task = source_task
+                if existing_for_task_station["task_id"] and existing_for_task_station["task_id"] != task_id:
+                    existing_task = conn.execute(
+                        "SELECT * FROM scan_task WHERE id = ?",
+                        (existing_for_task_station["task_id"],),
+                    ).fetchone()
+                sync_observation = (
+                    existing_for_task_station["observation_id"],
+                    existing_for_task_station["station_id"],
+                    existing_for_task_station["task_id"] or task_id,
+                    existing_payload,
+                    existing_for_task_station["captured_at"],
+                    existing_task,
+                    existing_for_task_station["device_id"],
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO station_observation (
+                           observation_id, device_id, task_id, station_id,
+                           captured_at, received_at, payload
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        observation_id,
+                        device["id"],
+                        task_id,
+                        station_id,
+                        captured_at,
+                        now,
+                        payload_json,
+                    ),
+                )
+                accepted += 1
+                accepted_ids.append(observation_id)
+                sync_observation = (
+                    observation_id,
+                    station_id,
+                    task_id,
+                    payload,
+                    captured_at,
+                    source_task,
+                    device["id"],
+                )
+
+            mysql_observations.append(sync_observation)
+        conn.commit()
+    finally:
+        conn.close()
+
     for observation in mysql_observations:
         _sync_mysql_observation(
             observation[0], observation[1], observation[2],
-            device["id"], observation[3], observation[4], now,
+            observation[6], observation[3], observation[4], now,
         )
-    return {"accepted": accepted, "duplicates": duplicates}
+        if (
+            observation[5] is None
+            or observation[5]["type"] != HENAN_POI_DETAIL_TASK
+        ) and LOCAL_RESULT_SYNC_ENABLED:
+            try:
+                _sync_local_station_result(
+                    observation[0],
+                    observation[1],
+                    observation[6],
+                    observation[3],
+                    observation[4],
+                    now,
+                )
+            except Exception as error:
+                raise HTTPException(
+                    503,
+                    detail=f"LOCAL_RESULT_SYNC_UNAVAILABLE: {error}",
+                )
+        if site_exploration_bridge.enabled and observation[5] is not None:
+            try:
+                site_exploration_bridge.upsert_result(
+                    task=observation[5],
+                    observation_id=observation[0],
+                    station_id=observation[1],
+                    device_id=observation[6],
+                    payload=observation[3],
+                    captured_at=observation[4],
+                    received_at=now,
+                )
+            except Exception as error:
+                raise HTTPException(
+                    503,
+                    detail=f"SITE_RESULT_SYNC_UNAVAILABLE: {error}",
+                )
+    return {
+        "accepted": accepted,
+        "duplicates": duplicates,
+        "acceptedIds": accepted_ids,
+        "duplicateIds": duplicate_ids,
+        "failedIds": failed_ids,
+        "errors": errors,
+    }
+
+
+def _amap_get_json(path, params):
+    query = urllib.parse.urlencode({"key": AMAP_API_KEY, **params})
+    request = urllib.request.Request(
+        f"https://restapi.amap.com{path}?{query}",
+        headers={"User-Agent": "evcs-collector/1.0"},
+    )
+    with urllib.request.urlopen(request, timeout=12) as response:
+        body = json.loads(response.read().decode("utf-8"))
+    if str(body.get("status")) != "1":
+        raise RuntimeError(f"AMAP_REQUEST_FAILED:{body.get('info', 'unknown')}")
+    return body
+
+
+def _amap_search_pois(keyword, adcode):
+    """Fetch all pages exposed by Amap for one administrative area."""
+    pois = []
+    seen_page_ids = set()
+    page = 1
+    total = 0
+    while True:
+        body = _amap_get_json(
+            "/v3/place/text",
+            {
+                "keywords": keyword,
+                "city": adcode,
+                "citylimit": "true",
+                "extensions": "all",
+                "offset": str(AMAP_POI_PAGE_SIZE),
+                "page": str(page),
+            },
+        )
+        page_pois = body.get("pois") or []
+        try:
+            total = int(body.get("count") or total or len(pois))
+        except (TypeError, ValueError):
+            total = len(pois)
+        new_on_page = 0
+        for poi in page_pois:
+            poi_id = str(poi.get("id") or "").strip()
+            dedupe_key = poi_id or json.dumps(poi, ensure_ascii=False, sort_keys=True)
+            if dedupe_key in seen_page_ids:
+                continue
+            seen_page_ids.add(dedupe_key)
+            pois.append(poi)
+            new_on_page += 1
+        if (
+            not page_pois
+            or new_on_page == 0
+            or len(pois) >= total
+            or page >= 200
+        ):
+            break
+        page += 1
+        time.sleep(AMAP_POI_IMPORT_QPS_DELAY_SECONDS)
+    return pois, total, total > len(pois)
+
+
+def _amap_district_children(adcode):
+    """Return direct district/county children for a saturated city query."""
+    body = _amap_get_json(
+        "/v3/config/district",
+        {
+            "keywords": adcode,
+            "subdistrict": "1",
+            "extensions": "base",
+        },
+    )
+    roots = body.get("districts") or []
+    children = roots[0].get("districts") or [] if roots else []
+    result = []
+    seen = set()
+    for item in children:
+        child_code = str(item.get("adcode") or "").strip()
+        child_name = str(item.get("name") or "").strip()
+        if not child_code or child_code in seen:
+            continue
+        seen.add(child_code)
+        result.append((child_name, child_code))
+    return result
+
+
+def _result_identity_sets():
+    """Load unified results once so an import does not query MySQL per POI."""
+    poi_ids = set()
+    source_keys = set()
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"SELECT source_station_id, requested_name, matched_station_name "
+                f"FROM `{site_exploration_bridge.result_table}`"
+            )
+            for station_id, requested_name, matched_name in cursor.fetchall():
+                station_id = str(station_id or "").strip()
+                if station_id:
+                    poi_ids.add(station_id)
+                source_keys.add(
+                    station_source_key(station_id, matched_name or requested_name or "")
+                )
+    finally:
+        conn.close()
+    return poi_ids, source_keys
+
+
+def _henan_result_exists(poi_id, station_name=""):
+    source_key = station_source_key(poi_id, station_name)
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"SELECT 1 FROM `{site_exploration_bridge.result_table}` "
+                "WHERE source_key = %s OR (%s <> '' AND source_station_id = %s) LIMIT 1",
+                (source_key, str(poi_id or ""), str(poi_id or "")),
+            )
+            return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def _henan_import_snapshot():
+    with _henan_import_state_lock:
+        snapshot = dict(_henan_import_state)
+        snapshot["failedCities"] = list(_henan_import_state.get("failedCities") or [])
+        return snapshot
+
+
+def _update_henan_import_state(**changes):
+    with _henan_import_state_lock:
+        _henan_import_state.update(changes)
+        _henan_import_state["updatedAt"] = _mobile_utc()
+        return dict(_henan_import_state)
+
+
+def _ensure_henan_task_table():
+    """Create the normalized remote task table for Henan Amap POI jobs."""
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS henan_heavy_truck_charging_station_task (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+                    task_key CHAR(64) COLLATE utf8mb4_general_ci NOT NULL COMMENT '任务稳定唯一键（高德POI编号SHA-256）',
+                    local_task_id VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '本地调度表scan_task中的任务编号',
+                    amap_poi_id VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '高德POI编号',
+                    station_name VARCHAR(512) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '待采集充电站名称',
+                    province VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '省份',
+                    city VARCHAR(128) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '城市',
+                    district VARCHAR(128) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '区县',
+                    address VARCHAR(1000) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '高德POI地址',
+                    longitude DECIMAL(12,8) NOT NULL DEFAULT 0.00000000 COMMENT '高德POI经度',
+                    latitude DECIMAL(12,8) NOT NULL DEFAULT 0.00000000 COMMENT '高德POI纬度',
+                    station_sequence INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '导入时的任务顺序',
+                    priority INT UNSIGNED NOT NULL DEFAULT 80 COMMENT '任务优先级，数值越大越优先',
+                    status VARCHAR(32) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'PENDING' COMMENT '任务状态：PENDING/LEASED/RUNNING/COMPLETED/FAILED/CANCELLED',
+                    attempt SMALLINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '已执行次数',
+                    max_attempts SMALLINT UNSIGNED NOT NULL DEFAULT 3 COMMENT '最大执行次数',
+                    lease_device_id VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '当前租约设备编号',
+                    lease_token VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '当前租约令牌',
+                    lease_expires_at DATETIME NULL DEFAULT NULL COMMENT '租约到期时间',
+                    available_at DATETIME NULL DEFAULT NULL COMMENT '最早可领取时间',
+                    started_at DATETIME NULL DEFAULT NULL COMMENT '首次开始时间',
+                    finished_at DATETIME NULL DEFAULT NULL COMMENT '终态时间',
+                    last_error VARCHAR(1000) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '最近一次错误说明',
+                    source_payload JSON NOT NULL COMMENT '导入来源原始数据',
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_henan_station_task_key (task_key),
+                    KEY idx_henan_station_task_amap_poi (amap_poi_id),
+                    KEY idx_henan_station_task_claim (status, available_at, station_sequence),
+                    KEY idx_henan_station_task_lease (lease_expires_at),
+                    KEY idx_henan_station_task_created (created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                  COLLATE=utf8mb4_general_ci
+                  COMMENT='河南省重卡充电站采集任务表'
+                """
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _henan_task_values(row):
+    """Normalize one SQLite scan_task row for the remote Henan task table."""
+    import json as _json
+
+    payload = {}
+    try:
+        payload = _json.loads(row["source_payload"] or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+    payload = payload if isinstance(payload, dict) else {}
+    station_name = str(payload.get("name") or row["keyword"] or "")
+    task_key = hashlib.sha256(str(row["source_station_id"] or station_name).encode("utf-8")).hexdigest()
+    longitude = _optional_float(payload.get("longitude"))
+    latitude = _optional_float(payload.get("latitude"))
+    return {
+        "task_key": task_key,
+        "local_task_id": str(row["id"] or ""),
+        "amap_poi_id": str(row["source_station_id"] or payload.get("id") or ""),
+        "station_name": station_name,
+        "province": str(row["province"] or ""),
+        "city": str(row["city"] or ""),
+        "district": str(row["district"] or ""),
+        "address": str(payload.get("address") or row["search_region"] or ""),
+        "longitude": 0 if longitude is None else longitude,
+        "latitude": 0 if latitude is None else latitude,
+        "station_sequence": int(row["source_sequence"] if "source_sequence" in row.keys() else 0),
+        "priority": int(row["priority"] or 80),
+        "status": str(row["status"] or "PENDING"),
+        "attempt": int(row["attempt"] or 0),
+        "max_attempts": int(row["max_attempts"] or 3),
+        "lease_device_id": str(row["assigned_device_id"] or ""),
+        "lease_token": str(row["lease_token"] or ""),
+        "lease_expires_at": _mysql_datetime(row["lease_expires_at"]),
+        "available_at": _mysql_datetime(row["available_at"]),
+        "started_at": _mysql_datetime(row["started_at"]),
+        "finished_at": _mysql_datetime(row["finished_at"]),
+        "last_error": str(row["last_error"] or "")[:1000],
+        "source_payload": _json_column(payload) or "{}",
+    }
+
+
+def _sync_henan_task_rows(rows):
+    """Mirror Henan POI task lifecycle rows using one remote transaction."""
+    rows = [row for row in rows if row is not None and row["type"] == HENAN_POI_DETAIL_TASK]
+    if not rows:
+        return
+    _ensure_henan_task_table()
+    normalized = [_henan_task_values(row) for row in rows]
+    columns = list(normalized[0])
+    sql = """INSERT INTO henan_heavy_truck_charging_station_task
+                 ({columns})
+             VALUES ({placeholders})
+             ON DUPLICATE KEY UPDATE {updates}""".format(
+        columns=", ".join(columns),
+        placeholders=", ".join("%s" for _ in columns),
+        updates=", ".join(
+            f"{column} = VALUES({column})"
+            for column in columns
+            if column not in {"task_key", "created_at"}
+        ),
+    )
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        with conn.cursor() as cursor:
+            cursor.executemany(
+                sql,
+                [tuple(values[column] for column in columns) for values in normalized],
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _sync_henan_task(row):
+    _sync_henan_task_rows([row] if row is not None else [])
+
+
+def _insert_henan_poi_tasks(
+    pois,
+    request_data,
+    scope_name,
+    scope_adcode,
+    existing_task_ids,
+    existing_result_ids,
+    existing_result_keys,
+    seen_job_ids,
+    sequence_holder,
+):
+    counters = {
+        "fetched": len(pois),
+        "created": 0,
+        "skippedTask": 0,
+        "skippedResult": 0,
+        "skippedDuplicatePoi": 0,
+    }
+    now = _mobile_utc()
+    created_ids = []
+    conn = mobile_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for poi in pois:
+            poi_id = str(poi.get("id") or "").strip()
+            poi_name = str(poi.get("name") or "").strip()
+            if not poi_id or not poi_name:
+                counters["skippedDuplicatePoi"] += 1
+                continue
+            if poi_id in seen_job_ids:
+                counters["skippedDuplicatePoi"] += 1
+                continue
+            seen_job_ids.add(poi_id)
+            if poi_id in existing_task_ids:
+                counters["skippedTask"] += 1
+                continue
+            result_key = station_source_key(poi_id, poi_name)
+            if request_data.get("skipExistingResults", True) and (
+                poi_id in existing_result_ids or result_key in existing_result_keys
+            ):
+                counters["skippedResult"] += 1
+                continue
+            location = str(poi.get("location") or "")
+            location_parts = location.split(",", 1)
+            longitude = _optional_float(location_parts[0] if location_parts else None)
+            latitude = _optional_float(location_parts[1] if len(location_parts) > 1 else None)
+            poi_payload = {
+                "id": poi_id,
+                "name": poi_name,
+                "address": str(poi.get("address") or ""),
+                "latitude": latitude,
+                "longitude": longitude,
+                "province": poi.get("pname") or request_data.get("province") or "河南省",
+                "city": poi.get("cityname") or scope_name,
+                "district": poi.get("adname") or "",
+                "type": poi.get("type") or "",
+                "importScope": scope_name,
+                "importAdcode": scope_adcode,
+            }
+            sequence_holder[0] += 1
+            task_id = str(uuid.uuid4())
+            conn.execute(
+                """INSERT INTO scan_task (
+                       id, type, priority, province, city, district, keyword,
+                       search_region, status, attempt, max_attempts,
+                       available_at, created_at, updated_at,
+                       source_station_id, source_sequence, source_payload
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    task_id,
+                    HENAN_POI_DETAIL_TASK,
+                    int(request_data.get("priority") or 80),
+                    str(poi_payload.get("province") or "河南省"),
+                    str(poi_payload.get("city") or scope_name),
+                    str(poi_payload.get("district") or ""),
+                    poi_name,
+                    str(poi_payload.get("address") or ""),
+                    int(request_data.get("maxAttempts") or 3),
+                    now,
+                    now,
+                    now,
+                    poi_id,
+                    sequence_holder[0],
+                    json.dumps(poi_payload, ensure_ascii=False),
+                ),
+            )
+            created_ids.append(task_id)
+            existing_task_ids.add(poi_id)
+        conn.commit()
+        if created_ids:
+            placeholders = ",".join("?" for _ in created_ids)
+            rows = conn.execute(
+                f"SELECT * FROM scan_task WHERE id IN ({placeholders})",
+                created_ids,
+            ).fetchall()
+        else:
+            rows = []
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    _sync_henan_task_rows(rows)
+    counters["created"] = len(created_ids)
+    return counters
+
+
+def _add_henan_import_counters(counters, reported_total=0):
+    with _henan_import_state_lock:
+        _henan_import_state["reportedTotal"] += int(reported_total or 0)
+        for key in (
+            "fetched", "created", "skippedTask",
+            "skippedResult", "skippedDuplicatePoi",
+        ):
+            _henan_import_state[key] += int(counters.get(key) or 0)
+        _henan_import_state["updatedAt"] = _mobile_utc()
+
+
+def _run_henan_import_job(request_data, city_scopes):
+    try:
+        site_exploration_bridge.ensure_result_table()
+        _ensure_henan_task_table()
+        conn = mobile_conn()
+        try:
+            rows = conn.execute(
+                "SELECT source_station_id FROM scan_task "
+                "WHERE type = ? AND source_station_id <> ''",
+                (HENAN_POI_DETAIL_TASK,),
+            ).fetchall()
+            existing_task_ids = {str(row[0]) for row in rows}
+            max_sequence = conn.execute(
+                "SELECT COALESCE(MAX(source_sequence), 0) FROM scan_task WHERE type = ?",
+                (HENAN_POI_DETAIL_TASK,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        existing_result_ids, existing_result_keys = _result_identity_sets()
+        seen_job_ids = set()
+        sequence_holder = [int(max_sequence or 0)]
+        successful_cities = 0
+        failed_cities = []
+        keyword = str(request_data.get("keyword") or "重卡充电站").strip()
+
+        for city_index, (city_name, city_adcode) in enumerate(city_scopes):
+            _update_henan_import_state(
+                currentCity=city_name,
+                message=f"正在导入{city_name}候选站点",
+            )
+            try:
+                pois, total, truncated = _amap_search_pois(keyword, city_adcode)
+                counters = _insert_henan_poi_tasks(
+                    pois, request_data, city_name, city_adcode,
+                    existing_task_ids, existing_result_ids, existing_result_keys,
+                    seen_job_ids, sequence_holder,
+                )
+                _add_henan_import_counters(counters, total)
+
+                if truncated:
+                    for district_name, district_adcode in _amap_district_children(city_adcode):
+                        _update_henan_import_state(
+                            currentCity=city_name,
+                            message=f"{city_name}结果超限，正在补充{district_name}",
+                        )
+                        try:
+                            district_pois, district_total, _ = _amap_search_pois(
+                                keyword, district_adcode
+                            )
+                            district_counters = _insert_henan_poi_tasks(
+                                district_pois, request_data, district_name, district_adcode,
+                                existing_task_ids, existing_result_ids, existing_result_keys,
+                                seen_job_ids, sequence_holder,
+                            )
+                            _add_henan_import_counters(district_counters, district_total)
+                        except Exception as district_error:
+                            failed_cities.append(
+                                f"{city_name}/{district_name}: {district_error}"
+                            )
+                successful_cities += 1
+                ready = _henan_import_snapshot().get("ready") or city_index == 0
+                _update_henan_import_state(
+                    ready=ready,
+                    citiesCompleted=city_index + 1,
+                    failedCities=failed_cities,
+                    message=(
+                        f"{city_name}导入完成，可开始采集；后台继续导入下一地市"
+                        if city_index < len(city_scopes) - 1
+                        else f"{city_name}导入完成"
+                    ),
+                )
+            except Exception as city_error:
+                failed_cities.append(f"{city_name}: {city_error}")
+                _update_henan_import_state(
+                    citiesCompleted=city_index + 1,
+                    failedCities=failed_cities,
+                    message=f"{city_name}导入失败，后台继续下一地市",
+                )
+
+        status = "COMPLETED" if not failed_cities else "COMPLETED_WITH_ERRORS"
+        _update_henan_import_state(
+            status=status,
+            ready=successful_cities > 0,
+            currentCity="",
+            failedCities=failed_cities,
+            message=(
+                "河南省各地市候选站点导入完成"
+                if not failed_cities
+                else f"导入完成，{len(failed_cities)}个区域需要重试"
+            ),
+            finishedAt=_mobile_utc(),
+        )
+    except Exception as error:
+        _update_henan_import_state(
+            status="FAILED",
+            currentCity="",
+            message=f"河南POI后台导入失败: {error}",
+            finishedAt=_mobile_utc(),
+        )
+
+
+@app.post("/api/v1/admin/henan-poi/import")
+def mobile_admin_import_henan_pois(
+    request: HenanPoiImportRequest,
+    x_admin_key: Optional[str] = Header(None),
+):
+    """Start a city-by-city background import; Zhengzhou is always first."""
+    global _henan_import_thread
+    _require_admin_key(x_admin_key)
+    if not AMAP_API_KEY:
+        raise HTTPException(503, detail="AMAP_API_KEY_NOT_CONFIGURED")
+
+    with _henan_import_state_lock:
+        if _henan_import_thread is not None and _henan_import_thread.is_alive():
+            snapshot = dict(_henan_import_state)
+            snapshot["failedCities"] = list(_henan_import_state.get("failedCities") or [])
+            snapshot["started"] = False
+            return snapshot
+
+        job_id = str(uuid.uuid4())
+        started_at = _mobile_utc()
+        _henan_import_state.update({
+            "jobId": job_id,
+            "status": "RUNNING",
+            "ready": False,
+            "currentCity": HENAN_CITY_IMPORT_ORDER[0][0],
+            "citiesCompleted": 0,
+            "citiesTotal": len(HENAN_CITY_IMPORT_ORDER),
+            "reportedTotal": 0,
+            "fetched": 0,
+            "created": 0,
+            "skippedTask": 0,
+            "skippedResult": 0,
+            "skippedDuplicatePoi": 0,
+            "failedCities": [],
+            "message": "后台导入已启动，正在导入郑州市",
+            "startedAt": started_at,
+            "updatedAt": started_at,
+            "finishedAt": "",
+        })
+        request_data = request.dict()
+        _henan_import_thread = threading.Thread(
+            target=_run_henan_import_job,
+            args=(request_data, list(HENAN_CITY_IMPORT_ORDER)),
+            name=f"henan-poi-import-{job_id[:8]}",
+            daemon=True,
+        )
+        _henan_import_thread.start()
+        snapshot = dict(_henan_import_state)
+    snapshot["started"] = True
+    return snapshot
+
+
+@app.get("/api/v1/admin/henan-poi/import-status")
+def mobile_admin_henan_poi_import_status(
+    x_admin_key: Optional[str] = Header(None),
+):
+    _require_admin_key(x_admin_key)
+    return _henan_import_snapshot()
 
 
 @app.get("/api/v1/admin/tasks")
@@ -1649,8 +2920,8 @@ def mobile_admin_create_tasks(
                 """INSERT INTO scan_task (
                        id, type, priority, province, city, district, keyword,
                        search_region, status, attempt, max_attempts,
-                       available_at, created_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?, ?)""",
+                       available_at, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?, ?, ?)""",
                 (
                     task_id,
                     item.type,
@@ -1662,6 +2933,7 @@ def mobile_admin_create_tasks(
                     item.searchRegion,
                     item.maxAttempts,
                     available_at,
+                    now,
                     now,
                 ),
             )
@@ -1688,6 +2960,70 @@ def mobile_admin_create_tasks(
         "created": len(created_ids),
         "tasks": [_mobile_task_payload(row) for row in rows],
     }
+
+
+@app.post("/api/v1/admin/site-tasks/rerun")
+def mobile_admin_rerun_site_tasks(
+    x_admin_key: Optional[str] = Header(None),
+):
+    """Reset every site task so collection restarts from the first source row.
+
+    Existing observations and site_exploration_charging_station_result rows are
+    intentionally preserved. Their stable source_key upsert will be overwritten
+    as each station is collected again.
+    """
+    _require_admin_key(x_admin_key)
+    now = _mobile_utc()
+    conn = mobile_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        active = conn.execute(
+            """SELECT id, keyword FROM scan_task
+               WHERE type = ? AND status IN ('LEASED', 'RUNNING')
+               LIMIT 1""",
+            ('SITE_STATION_DETAIL',),
+        ).fetchone()
+        if active is not None:
+            raise HTTPException(
+                409,
+                detail=f"SITE_TASK_ACTIVE: {active['keyword'] or active['id']}",
+            )
+        cur = conn.execute(
+            """UPDATE scan_task
+               SET status = 'PENDING', assigned_device_id = NULL,
+                   lease_token = NULL, lease_expires_at = NULL,
+                   attempt = 0, progress = '{}', result_summary = '{}',
+                   available_at = ?, started_at = NULL, finished_at = NULL,
+                   last_error = ''
+               WHERE type = ?""",
+            (now, 'SITE_STATION_DETAIL'),
+        )
+        conn.execute(
+            """UPDATE collector_device
+               SET current_task_id = NULL, status = 'IDLE', updated_at = ?
+               WHERE current_task_id IN (
+                   SELECT id FROM scan_task WHERE type = ?
+               )""",
+            (now, 'SITE_STATION_DETAIL'),
+        )
+        rows = conn.execute(
+            """SELECT * FROM scan_task WHERE type = ?
+               ORDER BY source_site_order, source_sequence""",
+            ('SITE_STATION_DETAIL',),
+        ).fetchall()
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    for row in rows:
+        _sync_mysql_task(row)
+    return {"reset": cur.rowcount, "firstTask": _mobile_task_payload(rows[0]) if rows else None}
 
 
 @app.get("/api/v1/admin/observations")

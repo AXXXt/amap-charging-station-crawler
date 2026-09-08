@@ -101,6 +101,51 @@ class ParserAndEngineTest {
     }
 
     @Test
+    fun stationNameInsideTopSearchInputIsNotMatchedAsAResultCard() {
+        val stationName = "新电途汽车充电站(林州市秒能快充集中式快速充电站有限公司)"
+        val xml = """
+            <hierarchy bounds="[0,0][1080,2280]">
+                <node clickable="true"
+                      text="$stationName"
+                      bounds="[144,111][1021,199]" />
+                <node clickable="true"
+                      content-desc="$stationName(货车专用)"
+                      bounds="[65,390][1015,565]">
+                    <node text="刚刚浏览" />
+                    <node text="充电站" />
+                </node>
+            </hierarchy>
+        """.trimIndent()
+
+        val snapshot = root(xml)
+        val cards = StationMatcher.visibleStationCards(snapshot)
+        val match = StationMatcher.bestMatch(snapshot, stationName)
+
+        assertEquals(1, cards.size)
+        assertTrue(checkNotNull(match).centerY > 300)
+    }
+
+    @Test
+    fun wideFirstResultCardNearTopIsStillMatched() {
+        val stationName = "测试重卡充电站"
+        val xml = """
+            <hierarchy bounds="[0,0][1080,2280]">
+                <node clickable="true"
+                      content-desc="$stationName"
+                      bounds="[33,250][1047,520]">
+                    <node text="河南省安阳市林州市" />
+                    <node text="停车费：免费" />
+                </node>
+            </hierarchy>
+        """.trimIndent()
+
+        val snapshot = root(xml)
+
+        assertEquals(1, StationMatcher.visibleStationCards(snapshot).size)
+        assertEquals(385, StationMatcher.bestMatch(snapshot, stationName)?.centerY)
+    }
+
+    @Test
     fun mapBottomSheetUsesRecyclerViewAndKeepsVisibleStations() {
         val xml = """
             <hierarchy>
@@ -188,6 +233,39 @@ class ParserAndEngineTest {
         assertTrue(cards[0].clickVisible)
         assertEquals("底部只露出一点的充电站", cards[1].name)
         assertTrue(!cards[1].clickVisible)
+    }
+
+    @Test
+    fun recommendedListScrollUsesCardStepInsteadOfFullViewportFling() {
+        val xml = """
+            <hierarchy>
+                <node class="androidx.recyclerview.widget.RecyclerView"
+                      scrollable="true"
+                      bounds="[0,240][1080,2240]">
+                    <node clickable="true"
+                          content-desc="甲重卡充电站"
+                          bounds="[32,240][1048,700]">
+                        <node text="停车费：免费" />
+                    </node>
+                    <node clickable="true"
+                          content-desc="乙重卡充电站"
+                          bounds="[32,700][1048,1160]">
+                        <node text="停车费：免费" />
+                    </node>
+                    <node clickable="true"
+                          content-desc="丙重卡充电站"
+                          bounds="[32,1160][1048,1620]">
+                        <node text="停车费：免费" />
+                    </node>
+                </node>
+            </hierarchy>
+        """.trimIndent()
+
+        val distance = StationMatcher.recommendedScrollDistance(root(xml))
+
+        assertTrue(distance != null)
+        assertTrue(distance!! >= 460)
+        assertTrue(distance < 900)
     }
 
     @Test

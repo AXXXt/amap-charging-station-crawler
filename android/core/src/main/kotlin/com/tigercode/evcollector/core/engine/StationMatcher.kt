@@ -68,7 +68,7 @@ object StationMatcher {
             val text = node.text.trim()
             val label = description.ifEmpty { text }
             val subtreeText = collectText(node)
-            if (node.clickable && isStationCard(node, label, subtreeText, viewport)) {
+            if (node.clickable && isStationCard(node, label, subtreeText, viewport, root.bounds)) {
                 val clickVisible = node.bounds.height >= 180
                 cards.add(
                     StationCandidate(
@@ -89,6 +89,33 @@ object StationMatcher {
             .sortedWith(compareBy({ it.centerY ?: 0 }, { it.centerX ?: 0 }))
     }
 
+    /**
+     * Return a conservative swipe distance for a paged search-result list.
+     *
+     * A full-screen swipe is not a stable unit across devices: on a 2400 px
+     * screen it can move several AMap cards at once. Use the typical visible
+     * card height instead so that previous cards remain on screen as an
+     * overlap anchor after the swipe.
+     */
+    fun recommendedScrollDistance(root: NodeSnapshot): Int? {
+        val viewport = listViewport(root) ?: return null
+        val cardHeights = visibleStationCards(root)
+            .mapNotNull { it.bounds?.height }
+            .filter { it in 160..760 }
+
+        if (cardHeights.isEmpty()) {
+            // A missing card height is normally a transient accessibility
+            // snapshot. Do not fling through a full page in that case.
+            return (viewport.height * 0.28f).toInt().coerceIn(260, 620)
+        }
+
+        val sorted = cardHeights.sorted()
+        val median = sorted[sorted.size / 2]
+        val overlapMargin = maxOf(18, median / 12)
+        val viewportCap = maxOf(260, (viewport.height * 0.42f).toInt())
+        return (median + overlapMargin).coerceIn(260, viewportCap)
+    }
+
     fun bestMatch(root: NodeSnapshot, stationName: String): StationMatch? {
         val targetName = StationNameNormalizer.normalize(stationName)
         var best: StationMatch? = null
@@ -98,7 +125,7 @@ object StationMatcher {
                 val description = node.contentDescription.trim()
                 val text = node.text.trim()
                 val label = description.ifEmpty { text }
-                if (isStationCard(node, label, collectText(node), null)) {
+                if (isStationCard(node, label, collectText(node), null, root.bounds)) {
                     val candidateName = StationNameNormalizer.normalize(label)
                     val score = when {
                         candidateName.isEmpty() -> 0
@@ -132,15 +159,29 @@ object StationMatcher {
         label: String,
         subtreeText: String,
         viewport: com.tigercode.evcollector.core.model.Rect?,
+        rootBounds: com.tigercode.evcollector.core.model.Rect,
     ): Boolean {
         if (!node.clickable || label.isBlank() || !node.bounds.isValid) return false
         if (excludedKeywords.any { it in label || it in subtreeText }) return false
+        if (isTopSearchInput(node, rootBounds)) return false
         val hasStationName =
             (label.contains("充") && label.contains("站")) || label.contains("电站")
         if (!hasStationName) return false
         if (viewport != null && visibleHeight(node.bounds, viewport) <= 0) return false
         if (node.bounds.height < 48) return false
         return stationDetailKeywords.any { it in subtreeText } || node.children.isEmpty()
+    }
+
+    private fun isTopSearchInput(
+        node: NodeSnapshot,
+        rootBounds: com.tigercode.evcollector.core.model.Rect,
+    ): Boolean {
+        val screenWidth = rootBounds.width.takeIf { it > 0 } ?: 1080
+        val screenHeight = rootBounds.height.takeIf { it > 0 } ?: 2280
+        val topLimit = rootBounds.top + maxOf(220, screenHeight / 7)
+        return node.bounds.top < topLimit &&
+            node.bounds.height <= maxOf(180, screenHeight / 10) &&
+            node.bounds.width >= (screenWidth * 0.55f).toInt()
     }
 
     private fun visibleHeight(

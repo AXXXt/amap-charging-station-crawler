@@ -39,6 +39,7 @@ object XmlSnapshotParser {
             scrollable = element.getAttribute("scrollable") == "true",
             enabled = element.getAttribute("enabled") != "false",
             selected = element.getAttribute("selected") == "true",
+            focused = element.getAttribute("focused") == "true",
             children = children,
         )
     }

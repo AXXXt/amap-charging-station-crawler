@@ -32,6 +32,7 @@ object NodeSnapshotReader {
             scrollable = node.isScrollable,
             enabled = node.isEnabled,
             selected = node.isSelected,
+            focused = node.isFocused,
             children = children,
         )
     }

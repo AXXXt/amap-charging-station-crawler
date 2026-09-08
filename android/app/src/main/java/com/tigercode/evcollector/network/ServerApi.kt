@@ -3,6 +3,7 @@ package com.tigercode.evcollector.network
 import com.google.gson.annotations.SerializedName
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.POST
 import retrofit2.http.Path
 
@@ -49,6 +50,15 @@ data class RemoteTaskDto(
     @SerializedName("leaseToken") val leaseToken: String,
     @SerializedName("attempt") val attempt: Int,
     @SerializedName("maxAttempts") val maxAttempts: Int,
+    @SerializedName("sourceSiteId") val sourceSiteId: String = "",
+    @SerializedName("sourceSiteOrder") val sourceSiteOrder: Long = 0,
+    @SerializedName("stationId") val stationId: String = "",
+    @SerializedName("stationName") val stationName: String = "",
+    @SerializedName("stationAddress") val stationAddress: String = "",
+    @SerializedName("stationLatitude") val stationLatitude: Double? = null,
+    @SerializedName("stationLongitude") val stationLongitude: Double? = null,
+    @SerializedName("stationSequence") val stationSequence: Int = 0,
+    @SerializedName("sourcePayload") val sourcePayload: Map<String, Any> = emptyMap(),
 )
 
 data class ClaimTaskResponse(
@@ -67,12 +77,43 @@ data class TaskActionRequest(
 
 data class ObservationUploadRequest(
     @SerializedName("deviceCode") val deviceCode: String,
+    @SerializedName("leaseToken") val leaseToken: String = "",
     @SerializedName("observations") val observations: List<Map<String, Any>>,
 )
 
 data class ObservationUploadResponse(
-    @SerializedName("accepted") val accepted: Int,
-    @SerializedName("duplicates") val duplicates: Int,
+    @SerializedName("accepted") val accepted: Int = 0,
+    @SerializedName("duplicates") val duplicates: Int = 0,
+    @SerializedName("acceptedIds") val acceptedIds: List<String> = emptyList(),
+    @SerializedName("duplicateIds") val duplicateIds: List<String> = emptyList(),
+    @SerializedName("failedIds") val failedIds: List<String> = emptyList(),
+)
+
+data class HenanPoiImportRequest(
+    @SerializedName("keyword") val keyword: String = "重卡充电站",
+    @SerializedName("province") val province: String = "河南省",
+    @SerializedName("adcode") val adcode: String = "410000",
+    @SerializedName("priority") val priority: Int = 80,
+    @SerializedName("maxAttempts") val maxAttempts: Int = 3,
+    @SerializedName("skipExistingResults") val skipExistingResults: Boolean = true,
+)
+
+data class HenanPoiImportResponse(
+    @SerializedName("jobId") val jobId: String = "",
+    @SerializedName("status") val status: String = "",
+    @SerializedName("ready") val ready: Boolean = false,
+    @SerializedName("started") val started: Boolean = false,
+    @SerializedName("currentCity") val currentCity: String = "",
+    @SerializedName("citiesCompleted") val citiesCompleted: Int = 0,
+    @SerializedName("citiesTotal") val citiesTotal: Int = 18,
+    @SerializedName("reportedTotal") val total: Int = 0,
+    @SerializedName("fetched") val fetched: Int = 0,
+    @SerializedName("created") val created: Int = 0,
+    @SerializedName("skippedTask") val skippedTask: Int = 0,
+    @SerializedName("skippedResult") val skippedResult: Int = 0,
+    @SerializedName("skippedDuplicatePoi") val skippedDuplicatePoi: Int = 0,
+    @SerializedName("message") val message: String = "",
+    @SerializedName("failedCities") val failedCities: List<String> = emptyList(),
 )
 
 interface ServerApi {
@@ -99,6 +140,17 @@ interface ServerApi {
 
     @POST("api/v1/observations/batches")
     suspend fun uploadObservations(@Body body: ObservationUploadRequest): ObservationUploadResponse
+
+    @POST("api/v1/admin/henan-poi/import")
+    suspend fun importHenanPois(
+        @Header("x-admin-key") adminKey: String,
+        @Body body: HenanPoiImportRequest,
+    ): HenanPoiImportResponse
+
+    @GET("api/v1/admin/henan-poi/import-status")
+    suspend fun henanPoiImportStatus(
+        @Header("x-admin-key") adminKey: String,
+    ): HenanPoiImportResponse
 
     @GET("health")
     suspend fun health(): Map<String, String>

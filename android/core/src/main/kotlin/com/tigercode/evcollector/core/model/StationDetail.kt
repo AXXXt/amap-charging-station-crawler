@@ -27,6 +27,8 @@ data class StationDetail(
     val priceTrendTitle: String = "",
     val fastPrices: List<PricePeriod> = emptyList(),
     val slowPrices: List<PricePeriod> = emptyList(),
+    val chargingPileTotal: Int = 0,
+    val chargingPiles: List<ChargingPileDetail> = emptyList(),
 ) {
     val filledFieldCount: Int
         get() {
@@ -38,6 +40,7 @@ data class StationDetail(
                 priceTrendTitle,
             )
             return strings.count { it.isNotBlank() } +
-                tags.size + facilities.size + fastPrices.size + slowPrices.size
+                tags.size + facilities.size + fastPrices.size + slowPrices.size +
+                chargingPiles.size
         }
 }

@@ -154,6 +154,19 @@ def assess_page(xml_text: str, expected_station: Optional[str] = None) -> PageAs
         search_score += 1
         reasons.append(f"search_cards:{search_card_count}")
 
+    single_result_search = (
+        search_card_count == 1
+        and "展开列表" in combined_text
+        and "在此区域搜索" not in combined_text
+        and (
+            "暂无更多内容" in combined_text
+            or re.search(r"\d+(?:\.\d+)?公里", combined_text)
+        )
+    )
+    if single_result_search:
+        reasons.append("single_result_search_card")
+        return PageAssessment(PageKind.SEARCH_RESULTS, 0.9, tuple(reasons), expected_visible)
+
     poi_summary_card = (
         "展开列表" in combined_text
         and "暂无更多内容" in combined_text

@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -30,4 +30,4 @@ outputs/
 Thumbs.db
 
 # Runtime data
-data/
+/data/

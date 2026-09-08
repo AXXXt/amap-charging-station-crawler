@@ -30,6 +30,24 @@ class PageAssessorTest {
     }
 
     @Test
+    fun singleSearchCardWithoutEndMarkerIsSearchPage() {
+        val xml = """
+            <hierarchy>
+                <node content-desc="展开列表" />
+                <node content-desc="卓栾重卡充电站" clickable="true" />
+                <node text="河南省洛阳市新安县民心路13号" />
+                <node text="154.8公里" />
+                <node content-desc="搜索框，卓栾重卡充电站" />
+            </hierarchy>
+        """.trimIndent()
+
+        val assessment = PageAssessor.assess(root(xml), "卓栾重卡充电站")
+
+        assertEquals(PageKind.SEARCH_RESULTS, assessment.kind)
+        assertTrue(assessment.reasons.contains("single_result_search_card"))
+    }
+
+    @Test
     fun emptySearchResultsIsStillSearchPage() {
         val xml = """
             <hierarchy>
@@ -130,6 +148,46 @@ class PageAssessorTest {
         val assessment = PageAssessor.assess(root(xml), "云快充汽车充电站(畅行重卡2站)")
         assertEquals(PageKind.DETAIL, assessment.kind)
         assertTrue(assessment.reasons.contains("poi_summary_card"))
+        assertTrue(assessment.expectedStationVisible)
+    }
+
+    @Test
+    fun clickablePoiSummaryStationIsSearchResult() {
+        val stationName = "特来电汽车充电站(漯河市政集团新店镇金顺重卡公共充电站)"
+        val xml = """
+            <hierarchy>
+                <node content-desc="展开列表" />
+                <node content-desc="$stationName" clickable="true" />
+                <node text="30分钟内有人充电" />
+                <node text="停车费：免费停车" />
+                <node text="暂无更多内容" />
+            </hierarchy>
+        """.trimIndent()
+
+        val assessment = PageAssessor.assess(root(xml), stationName)
+
+        assertEquals(PageKind.SEARCH_RESULTS, assessment.kind)
+        assertTrue(assessment.reasons.contains("single_result_search_card"))
+        assertTrue(assessment.expectedStationVisible)
+    }
+
+    @Test
+    fun singleStationCardWithoutChargingWordIsSearchResult() {
+        val stationName = "铁门锦阳重卡超充站(星轲能源JM)"
+        val xml = """
+            <hierarchy>
+                <node content-desc="展开列表" />
+                <node content-desc="$stationName" clickable="true" />
+                <node text="159.7公里" />
+                <node text="暂无更多内容" />
+                <node content-desc="搜索框，$stationName" />
+            </hierarchy>
+        """.trimIndent()
+
+        val assessment = PageAssessor.assess(root(xml), stationName)
+
+        assertEquals(PageKind.SEARCH_RESULTS, assessment.kind)
+        assertTrue(assessment.reasons.contains("single_result_search_card"))
         assertTrue(assessment.expectedStationVisible)
     }
 

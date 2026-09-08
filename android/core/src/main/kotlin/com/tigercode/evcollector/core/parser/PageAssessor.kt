@@ -22,6 +22,8 @@ object PageAssessor {
     )
 
     private val timePeriodRegex = Regex("""\d{2}:\d{2}[-~]\d{2}:\d{2}""")
+    // AMap may omit "暂无更多内容" when a search returns exactly one card.
+    private val distanceSummaryRegex = Regex("""\d+(?:\.\d+)?公里""")
 
     fun assess(root: NodeSnapshot, expectedStation: String? = null): PageAssessment {
         val values = collectValues(root)
@@ -112,7 +114,9 @@ object PageAssessor {
         }
 
         val searchCardCount = values.clickableDescriptions.count { description ->
-            "充电" in description && !description.startsWith("搜索框")
+            val looksLikeStation = (description.contains("充") && description.contains("站")) ||
+                description.contains("电站")
+            looksLikeStation && !description.startsWith("搜索框")
         }
         var searchScore = 0
         if ("在此区域搜索" in combinedText) {
@@ -127,10 +131,19 @@ object PageAssessor {
             reasons.add("search_cards:$searchCardCount")
         }
 
+        val singleResultSearch = searchCardCount == 1 &&
+            "展开列表" in combinedText &&
+            "在此区域搜索" !in combinedText &&
+            ("暂无更多内容" in combinedText || distanceSummaryRegex.containsMatchIn(combinedText))
+        if (singleResultSearch) {
+            reasons.add("single_result_search_card")
+            return PageAssessment(PageKind.SEARCH_RESULTS, 0.9, reasons, expectedVisible)
+        }
+
         val poiSummaryCard = "展开列表" in combinedText &&
             "暂无更多内容" in combinedText &&
             "在此区域搜索" !in combinedText &&
-            searchCardCount <= 1 &&
+            searchCardCount == 0 &&
             (
                 "刚刚浏览" in combinedText ||
                     Regex("""\d+人浏览""").containsMatchIn(combinedText) ||

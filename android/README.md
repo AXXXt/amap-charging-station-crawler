@@ -37,6 +37,8 @@ APK 输出在 `android\app\build\outputs\apk\debug\app-debug.apk`。
 - `POST /api/v1/device-tasks/{taskId}/ack|progress|complete|fail`
 - `POST /api/v1/observations/batches`
 
+电脑重启会结束原来的 API 进程。建议在电脑端首次配置完成后执行项目根目录的 `install_backend_autostart.ps1`，让服务在 Windows 登录后自动恢复；服务端恢复前，手机端会保留待上传结果并继续重试。
+
 首次启动会在 `data/mobile_control.db` 中生成默认河南省区县扫描任务。默认激活码为 `dev-activate`，可通过环境变量 `MOBILE_ACTIVATION_CODE` 修改。
 
 ## 合规与生产要求
@@ -45,3 +47,9 @@ APK 输出在 `android\app\build\outputs\apk\debug\app-debug.apk`。
 - 无障碍服务必须由用户在系统设置中主动开启。
 - 开发调试可以使用 HTTP；生产部署必须改为 HTTPS，并更换默认激活码。
 - 正式运行不依赖 ADB 或 uiautomator2。
+
+## 实机监控注意事项
+
+- 采集运行期间不要执行 `uiautomator dump`，也不要连接 `uiautomator2`。Android 注册 `UiAutomationService` 时会临时解绑普通无障碍服务，表现为采集助手反复出现“已解绑/已销毁”。
+- 日志监控使用 `adb logcat -s EvCollector:V EvCollectorPage:V AndroidRuntime:E`。`EvCollectorPage` 是采集助手通过自身无障碍快照输出的高德页面摘要，不会占用额外的 `UiAutomation` 通道。
+- 查看前台窗口使用 `adb shell dumpsys window`，查看画面使用 `adb exec-out screencap -p`；这两种方式不会干扰采集助手的无障碍连接。

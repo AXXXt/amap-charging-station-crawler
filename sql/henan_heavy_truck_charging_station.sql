@@ -1,0 +1,3 @@
+-- 已停用：河南省重卡充电站采集结果已统一写入
+-- site_exploration_charging_station_result。
+-- 保留本文件仅用于说明，不再创建 henan_heavy_truck_charging_station 表。

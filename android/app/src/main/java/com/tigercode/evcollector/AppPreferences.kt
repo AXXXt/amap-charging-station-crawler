@@ -1,10 +1,13 @@
 package com.tigercode.evcollector
 
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 
 object AppPreferences {
+    // 手机通过 Wi-Fi 访问电脑上的服务端；127.0.0.1 在手机上只代表手机自己。
+    private const val DEFAULT_SERVER_URL = "http://192.168.3.65:8800/"
     private const val PREFS = "ev_collector_prefs"
     private const val KEY_SERVER_URL = "server_url"
     private const val KEY_DEVICE_CODE = "device_code"
@@ -15,16 +18,42 @@ object AppPreferences {
     private const val KEY_REMOTE_STATUS = "remote_status"
     private const val KEY_REMOTE_ERROR = "remote_error"
     private const val KEY_LOG = "log"
+    private const val KEY_HENAN_IMPORT_READY = "henan_import_ready"
 
-    fun serverUrl(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_SERVER_URL, "http://10.0.2.2:8800/")
-            .orEmpty()
+    fun serverUrl(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val stored = prefs.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL).orEmpty()
+        val normalized = normalizeServerUrl(stored)
+        if (normalized == null || isLoopbackServerUrl(normalized) || isPreviousLanServerUrl(normalized)) {
+            // 兼容旧版本保存的本机/旧电脑地址，自动切换到当前电脑局域网地址。
+            prefs.edit().putString(KEY_SERVER_URL, DEFAULT_SERVER_URL).apply()
+            return DEFAULT_SERVER_URL
+        }
+        return normalized
+    }
+
+    private fun isLoopbackServerUrl(value: String): Boolean {
+        val host = runCatching { Uri.parse(value).host }.getOrNull()?.lowercase()
+        return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0"
+    }
+
+    private fun isPreviousLanServerUrl(value: String): Boolean {
+        val uri = runCatching { Uri.parse(value) }.getOrNull()
+        return uri?.host == "192.168.3.27" && (uri.port == -1 || uri.port == 8800)
+    }
+
+    fun normalizeServerUrl(value: String): String? {
+        val trimmed = value.trim()
+        val uri = runCatching { Uri.parse(trimmed) }.getOrNull() ?: return null
+        if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank()) return null
+        return if (trimmed.endsWith('/')) trimmed else "$trimmed/"
+    }
 
     fun saveServerUrl(context: Context, url: String) {
+        val normalized = normalizeServerUrl(url) ?: return
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_SERVER_URL, url)
+            .putString(KEY_SERVER_URL, normalized)
             .apply()
     }
 
@@ -43,6 +72,17 @@ object AppPreferences {
     fun isScanning(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_SCANNING, false)
+
+    fun isHenanImportReady(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_HENAN_IMPORT_READY, false)
+
+    fun setHenanImportReady(context: Context, ready: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_HENAN_IMPORT_READY, ready)
+            .apply()
+    }
 
     fun setScanning(context: Context, scanning: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

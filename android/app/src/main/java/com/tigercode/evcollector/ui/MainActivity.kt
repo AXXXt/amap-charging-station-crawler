@@ -17,6 +17,8 @@ import com.tigercode.evcollector.CollectorKeepAliveService
 import com.tigercode.evcollector.accessibility.ChargingAccessibilityService
 import com.tigercode.evcollector.data.CollectorRepository
 import com.tigercode.evcollector.databinding.ActivityMainBinding
+import com.tigercode.evcollector.network.RetrofitClient
+import com.tigercode.evcollector.network.HenanPoiImportRequest
 import com.tigercode.evcollector.engine.CollectionEngine
 import com.tigercode.evcollector.engine.CollectionListener
 import com.tigercode.evcollector.engine.CollectionState
@@ -56,7 +58,9 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         repository = CollectorRepository(this)
-        engine = CollectionEngine(this, repository)
+        engine = CollectionEngine(this, repository) {
+            SyncManager(this, repository, engine).uploadLocalResultsOnly()
+        }
         engine.addListener(engineListener)
 
         binding.serverUrlInput.setText(AppPreferences.serverUrl(this))
@@ -72,6 +76,8 @@ class MainActivity : AppCompatActivity() {
         binding.startCollectButton.setOnClickListener { startCollector() }
         binding.stopCollectButton.setOnClickListener { stopCollector() }
         binding.syncNowButton.setOnClickListener { syncNow() }
+        binding.importHenanPoiButton.setOnClickListener { importHenanPois() }
+        binding.startHenanCollectButton.setOnClickListener { startHenanCollect() }
         binding.localScanButton.setOnClickListener { startLocalScan() }
         binding.stopRunButton.setOnClickListener { stopRunning() }
         binding.clearLogButton.setOnClickListener { clearLogs() }
@@ -86,10 +92,19 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    private fun saveConfig() {
+    private fun saveConfig(): Boolean {
+        val serverUrl = binding.serverUrlInput.text?.toString()?.trim().orEmpty()
+        val normalizedServerUrl = AppPreferences.normalizeServerUrl(serverUrl)
+        if (normalizedServerUrl == null) {
+            Toast.makeText(this, "服务端地址必须以 http:// 或 https:// 开头", Toast.LENGTH_LONG).show()
+            AppPreferences.appendLog(this, "配置保存失败：服务端地址格式错误")
+            binding.serverUrlInput.setText(AppPreferences.serverUrl(this))
+            refreshUi()
+            return false
+        }
         AppPreferences.saveServerUrl(
             this,
-            binding.serverUrlInput.text?.toString()?.trim().orEmpty(),
+            normalizedServerUrl,
         )
         AppPreferences.saveActivationCode(
             this,
@@ -101,10 +116,11 @@ class MainActivity : AppCompatActivity() {
         )
         AppPreferences.appendLog(this, "配置已保存")
         refreshUi()
+        return true
     }
 
     private fun startCollector() {
-        saveConfig()
+        if (!saveConfig()) return
         requestNotificationPermissionIfNeeded()
         AppPreferences.setScanning(this, true)
         CollectorKeepAliveService.start(this)
@@ -120,7 +136,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun syncNow() {
-        saveConfig()
+        if (!saveConfig()) return
         lifecycleScope.launch {
             AppPreferences.setRemoteStatus(this@MainActivity, "正在同步")
             refreshUi()
@@ -135,6 +151,17 @@ class MainActivity : AppCompatActivity() {
                     AppPreferences.appendLog(
                         this@MainActivity,
                         "同步完成，采集 ${outcome.stationCount} 个站点",
+                    )
+                }
+                is SyncOutcome.Skipped -> {
+                    AppPreferences.setRemoteStatus(
+                        this@MainActivity,
+                        "任务已跳过：${outcome.stationName}",
+                        outcome.reason,
+                    )
+                    AppPreferences.appendLog(
+                        this@MainActivity,
+                        "任务已跳过：${outcome.stationName}（${outcome.reason}）",
                     )
                 }
                 is SyncOutcome.Failed -> {
@@ -152,6 +179,79 @@ class MainActivity : AppCompatActivity() {
             }
             refreshUi()
         }
+    }
+
+    private fun importHenanPois() {
+        if (!saveConfig()) return
+        binding.importHenanPoiButton.isEnabled = false
+        AppPreferences.setRemoteStatus(this, "正在按地市导入河南候选站点")
+        AppPreferences.appendLog(this, "启动后台导入：郑州优先，随后按地市继续导入")
+        refreshUi()
+        lifecycleScope.launch {
+            try {
+                val api = RetrofitClient.serverApi(
+                    AppPreferences.serverUrl(this@MainActivity),
+                    this@MainActivity,
+                )
+                var status = api.importHenanPois(
+                    adminKey = "dev-admin-key",
+                    body = HenanPoiImportRequest(),
+                )
+                while (status.status == "RUNNING" && !status.ready) {
+                    val city = status.currentCity.ifBlank { "首个地市" }
+                    AppPreferences.setRemoteStatus(
+                        this@MainActivity,
+                        "正在导入${city}，完成后即可开始采集",
+                    )
+                    refreshUi()
+                    delay(2_000)
+                    status = api.henanPoiImportStatus("dev-admin-key")
+                }
+                if (status.ready) {
+                    val message = "${status.message}；已新增 ${status.created} 条任务"
+                    AppPreferences.setRemoteStatus(this@MainActivity, message)
+                    AppPreferences.appendLog(
+                        this@MainActivity,
+                        "$message（进度 ${status.citiesCompleted}/${status.citiesTotal}，后台持续导入）",
+                    )
+                    AppPreferences.setHenanImportReady(this@MainActivity, true)
+                    Toast.makeText(
+                        this@MainActivity,
+                        "首个地市已导入，可边采集边继续导入",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                } else {
+                    val message = status.message.ifBlank { "河南POI导入未生成可采集任务" }
+                    throw IllegalStateException(message)
+                }
+            } catch (error: Exception) {
+                val message = error.message ?: error.javaClass.simpleName
+                AppPreferences.setRemoteStatus(this@MainActivity, "导入失败", message)
+                AppPreferences.appendLog(this@MainActivity, "河南POI导入失败: $message")
+            } finally {
+                binding.importHenanPoiButton.isEnabled = true
+                refreshUi()
+            }
+        }
+    }
+
+    private fun startHenanCollect() {
+        if (!AppPreferences.isHenanImportReady(this)) {
+            Toast.makeText(this, "请先导入河南全省POI任务", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!ChargingAccessibilityService.isConnected()) {
+            Toast.makeText(this, "请先开启无障碍服务", Toast.LENGTH_SHORT).show()
+            openAccessibilitySettings()
+            return
+        }
+        requestNotificationPermissionIfNeeded()
+        AppPreferences.setScanning(this, true)
+        CollectorKeepAliveService.start(this)
+        AppPreferences.setRemoteStatus(this, "河南站点采集已启动")
+        AppPreferences.appendLog(this, "已启动河南省重卡站点采集调度")
+        ChargingAccessibilityService.current()?.launchAmap()
+        refreshUi()
     }
 
     private fun startLocalScan() {
@@ -225,11 +325,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshUi() {
         if (!::binding.isInitialized) return
-        val accessibility = ChargingAccessibilityService.isConnected()
+        val accessibilityConnected = ChargingAccessibilityService.isConnected()
+        val accessibilityEnabled = ChargingAccessibilityService.isEnabled(this)
         val scanning = AppPreferences.isScanning(this)
+        binding.startHenanCollectButton.isEnabled = AppPreferences.isHenanImportReady(this)
         binding.serviceStatusText.text = buildString {
             append("无障碍服务: ")
-            append(if (accessibility) "已连接" else "未开启")
+            append(
+                when {
+                    accessibilityConnected -> "已连接"
+                    accessibilityEnabled -> "已开启，等待系统连接"
+                    else -> "未开启"
+                }
+            )
             append("\n设备调度: ")
             append(if (scanning) "运行中" else "已停止")
             append("\n远程状态: ")

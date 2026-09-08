@@ -33,6 +33,11 @@ object ResultMerger {
             priceTrendTitle = first.priceTrendTitle.ifEmpty { second.priceTrendTitle },
             fastPrices = mergePrices(first.fastPrices, second.fastPrices),
             slowPrices = mergePrices(first.slowPrices, second.slowPrices),
+            chargingPileTotal = maxOf(first.chargingPileTotal, second.chargingPileTotal),
+            chargingPiles = ChargingPileDialogParser.merge(
+                first.chargingPiles,
+                second.chargingPiles,
+            ),
         )
     }
 

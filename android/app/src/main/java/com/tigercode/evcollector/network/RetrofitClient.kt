@@ -11,9 +11,9 @@ object RetrofitClient {
     fun serverApi(baseUrl: String, context: Context): ServerApi {
         val normalized = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
         val client = OkHttpClient.Builder()
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .writeTimeout(15, TimeUnit.SECONDS)
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor { chain ->
                 val token = AppPreferences.deviceToken(context)
                 val request = if (token.isNotEmpty()) {

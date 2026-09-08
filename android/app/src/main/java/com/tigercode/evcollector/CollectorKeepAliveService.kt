@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.tigercode.evcollector.accessibility.ChargingAccessibilityService
@@ -64,22 +65,41 @@ class CollectorKeepAliveService : Service() {
     private fun startSyncLoop() {
         if (loopJob?.isActive == true) return
         val repository = CollectorRepository(this)
-        val engine = CollectionEngine(this, repository)
+        var engineRef: CollectionEngine? = null
+        val engine = CollectionEngine(this, repository) {
+            engineRef?.let { ref ->
+                SyncManager(this@CollectorKeepAliveService, repository, ref).uploadLocalResultsOnly()
+            } ?: 0
+        }
+        engineRef = engine
         this.engine = engine
+        engine.addListener { _, message, _, _ ->
+            showStepToast(message)
+        }
         loopJob = scope.launch {
+            // 避免无任务时每 15 秒重复弹 Toast；重新发现并完成任务后会再次提示。
+            var waitingToastShown = false
             while (isActive && AppPreferences.isScanning(this@CollectorKeepAliveService)) {
                 if (!ChargingAccessibilityService.isConnected()) {
+                    val accessibilityEnabled = ChargingAccessibilityService.isEnabled(
+                        this@CollectorKeepAliveService,
+                    )
                     AppPreferences.setRemoteStatus(
                         this@CollectorKeepAliveService,
                         "等待无障碍服务",
-                        "请在系统设置中开启采集助手",
+                        if (accessibilityEnabled) {
+                            "采集助手已开启，正在等待系统重新连接；若长时间无响应请关闭后重新开启一次"
+                        } else {
+                            "请在系统设置中开启采集助手"
+                        },
                     )
                     updateNotification("等待无障碍服务")
                     delay(5000)
                     continue
                 }
                 updateNotification("正在同步服务端")
-                when (
+                // 有任务时快速进入下一轮；没有任务时保留较长轮询间隔，降低服务端请求频率。
+                val nextSyncDelayMs = when (
                     val outcome = SyncManager(
                         this@CollectorKeepAliveService,
                         repository,
@@ -87,11 +107,24 @@ class CollectorKeepAliveService : Service() {
                     ).runOnce()
                 ) {
                     is SyncOutcome.Completed -> {
+                        val message = "任务已完成，采集 ${outcome.stationCount} 个站点，等待下一条任务"
+                        AppPreferences.setRemoteStatus(this@CollectorKeepAliveService, message)
+                        updateNotification(message)
+                        showStepToast(message)
+                        waitingToastShown = false
+                        3_000L
+                    }
+                    is SyncOutcome.Skipped -> {
+                        val message = "任务已跳过：${outcome.stationName}"
                         AppPreferences.setRemoteStatus(
                             this@CollectorKeepAliveService,
-                            "任务完成，采集 ${outcome.stationCount} 个站点",
+                            message,
+                            outcome.reason,
                         )
-                        updateNotification("任务完成，采集 ${outcome.stationCount} 个站点")
+                        updateNotification("任务已跳过，等待下一条任务")
+                        showStepToast(message)
+                        waitingToastShown = false
+                        3_000L
                     }
                     is SyncOutcome.Failed -> {
                         AppPreferences.setRemoteStatus(
@@ -100,16 +133,26 @@ class CollectorKeepAliveService : Service() {
                             outcome.message,
                         )
                         updateNotification("同步失败，等待重试")
+                        showStepToast("同步失败：${outcome.message}")
+                        waitingToastShown = false
+                        8_000L
                     }
                     is SyncOutcome.NoTask -> {
+                        val message = "当前暂无待领取任务，正在等待新任务"
                         AppPreferences.setRemoteStatus(
                             this@CollectorKeepAliveService,
                             "等待任务",
+                            message,
                         )
                         updateNotification("等待任务")
+                        if (!waitingToastShown) {
+                            showStepToast(message)
+                            waitingToastShown = true
+                        }
+                        15_000L
                     }
                 }
-                delay(15_000)
+                delay(nextSyncDelayMs)
             }
             stopSelf()
         }
@@ -137,6 +180,12 @@ class CollectorKeepAliveService : Service() {
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+
+    // CollectionEngine 的每个状态事件都会在手机前台弹出短提示，同时仍保留日志和常驻通知。
+    private fun showStepToast(message: String) {
+        if (message.isBlank()) return
+        Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
+    }
 
     private fun updateNotification(text: String) {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

@@ -4,6 +4,7 @@ import android.content.Context
 import com.google.gson.Gson
 import com.tigercode.evcollector.AppPreferences
 import com.tigercode.evcollector.accessibility.ChargingAccessibilityService
+import com.tigercode.evcollector.core.engine.CollectionPacingPolicy
 import com.tigercode.evcollector.core.engine.StationMatcher
 import com.tigercode.evcollector.core.model.ChargingPileDetail
 import com.tigercode.evcollector.core.model.NodeSnapshot
@@ -21,6 +22,8 @@ import com.tigercode.evcollector.core.parser.ResultMerger
 import com.tigercode.evcollector.core.parser.StationNameNormalizer
 import com.tigercode.evcollector.data.CollectorRepository
 import com.tigercode.evcollector.data.ScanTaskEntity
+import java.util.ArrayDeque
+import java.util.Calendar
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.max
@@ -43,6 +46,7 @@ class StationNotFoundException(
 enum class CollectionState(val label: String) {
     IDLE("待机"),
     WAITING_SERVICE("等待无障碍服务"),
+    PAUSED("限速暂停"),
     OPENING_AMAP("打开高德地图"),
     SCANNING_RESULTS("扫描搜索结果"),
     OPENING_DETAIL("进入站点详情"),
@@ -105,6 +109,19 @@ class CollectionEngine(
     @Volatile
     private var riskCooldownMs = 10 * 60 * 1000L
 
+    private val batchTargetMin = 25
+    private val batchTargetMax = 30
+    private val batchCooldownMinMs = 12 * 60 * 1000L
+    private val batchCooldownMaxMs = 20 * 60 * 1000L
+    private val detailEntryTimes = ArrayDeque<Long>().apply {
+        addAll(AppPreferences.pacingDetailEntryTimes(context))
+    }
+    private var batchCompletedCount = AppPreferences.pacingBatchCompletedCount(context)
+    private var batchTarget = AppPreferences.pacingBatchTarget(context)
+        .takeIf { it in batchTargetMin..batchTargetMax }
+        ?: Random.nextInt(batchTargetMin, batchTargetMax + 1)
+    private var batchCooldownUntilMs = AppPreferences.pacingCooldownUntil(context)
+
     private val MAX_PRICE_CLICK_ATTEMPTS = 2
     private val MAX_CHARGING_PILE_SCROLLS = 30
 
@@ -118,6 +135,15 @@ class CollectionEngine(
 
     private val listLoadingKeywords = listOf("正在加载", "加载中", "加载更多")
     private val listEndKeywords = listOf("暂无更多内容", "没有更多了", "没有更多结果", "已经到底了")
+
+    init {
+        val nowMs = System.currentTimeMillis()
+        if (batchCooldownUntilMs in 1..nowMs) {
+            resetBatchCycle()
+        } else {
+            persistPacingState(nowMs)
+        }
+    }
 
     fun addListener(listener: CollectionListener) {
         listeners.addIfAbsent(listener)
@@ -222,6 +248,8 @@ class CollectionEngine(
                 var consecutiveRecoveryFails = 0
 
                 while (!stopRequested) {
+                    awaitReadyForNextTask()
+                    if (stopRequested) break
                     snapshot = waitForPage(6000, 550) { root ->
                         val kind = PageAssessor.assess(root).kind
                         kind == PageKind.SEARCH_RESULTS || kind == PageKind.POPUP
@@ -386,6 +414,12 @@ class CollectionEngine(
             collectedCount = 0
             val requestedName = stationName.trim()
             require(requestedName.isNotBlank()) { "站点名称不能为空" }
+            awaitReadyForNextTask()
+            if (stopRequested) {
+                emit(CollectionState.STOPPED, "限速等待期间收到停止请求", 0, requestedName)
+                stopRequested = false
+                return@withContext null
+            }
             val service = waitForService() ?: throw IllegalStateException(
                 "无障碍服务未连接，请先到系统设置开启采集助手"
             )
@@ -527,7 +561,7 @@ class CollectionEngine(
             collectedCount,
             card.name,
         )
-        humanDelay(2000L, 3500L)
+        if (!awaitDetailEntryPermit(card.name)) return null
         val clicked = service.clickAt(centerX, centerY) ||
             service.clickStationCard(card.name) ||
             service.clickNodeByText(card.name)
@@ -545,6 +579,7 @@ class CollectionEngine(
                 collectedCount,
                 card.name,
             )
+            if (!awaitDetailEntryPermit(card.name)) return null
             service.clickAt(centerX, centerY) || service.clickStationCard(card.name)
             detailSnapshot = waitForPage(14000, 700) { root ->
                 val assessment = PageAssessor.assess(root, card.name)
@@ -744,6 +779,7 @@ class CollectionEngine(
 
         emit(CollectionState.SAVING, "保存站点: ${merged.stationName}", collectedCount, merged.stationName)
         saveDetail(card, merged, city, district, query, remoteTaskId)
+        recordStationCompletedForPacing(merged.stationName)
         humanDelay(900L, 1700L)
         emit(CollectionState.RETURNING, "返回搜索结果", collectedCount, card.name)
         if (stopRequested) return merged
@@ -1643,6 +1679,159 @@ class CollectionEngine(
         period.time.ifBlank { period.tag.ifBlank { "${period.totalPrice}|${period.elecFee}|${period.serviceFee}" } }
 
 
+
+    /**
+     * Wait before claiming/touching the next station. The state is persisted so
+     * restarting the service does not accidentally erase an active cooldown.
+     */
+    suspend fun awaitReadyForNextTask() {
+        val nowMs = System.currentTimeMillis()
+        if (batchCooldownUntilMs <= 0L) return
+        if (batchCooldownUntilMs <= nowMs) {
+            resetBatchCycle()
+            return
+        }
+
+        val initialRemainingMs = batchCooldownUntilMs - nowMs
+        emit(
+            CollectionState.PAUSED,
+            "批次限速暂停中，剩余约 ${minutesRoundedUp(initialRemainingMs)} 分钟",
+            collectedCount,
+            "",
+        )
+        var lastProgressMinute = minutesRoundedUp(initialRemainingMs)
+        while (!stopRequested) {
+            val remainingMs = batchCooldownUntilMs - System.currentTimeMillis()
+            if (remainingMs <= 0L) break
+            delay(minOf(remainingMs, 30_000L))
+            val remainingMinute = minutesRoundedUp(
+                batchCooldownUntilMs - System.currentTimeMillis(),
+            )
+            if (remainingMinute <= 1 || lastProgressMinute - remainingMinute >= 5) {
+                lastProgressMinute = remainingMinute
+                emit(
+                    CollectionState.PAUSED,
+                    "批次限速暂停中，剩余约 $remainingMinute 分钟",
+                    collectedCount,
+                    "",
+                )
+            }
+        }
+        if (!stopRequested) {
+            resetBatchCycle()
+            emit(
+                CollectionState.SCANNING_RESULTS,
+                "批次限速暂停结束，继续领取和采集任务",
+                collectedCount,
+                "",
+            )
+        }
+    }
+
+    private suspend fun awaitDetailEntryPermit(stationName: String): Boolean {
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val delayRange = CollectionPacingPolicy.delayRangeForHour(hour)
+        val cadenceDelayMs = randomLongInclusive(delayRange.minMs, delayRange.maxMs)
+        emit(
+            CollectionState.PAUSED,
+            "${dayPeriodLabel(hour)}访问节奏：详情打开前停留 ${cadenceDelayMs / 1000} 秒",
+            collectedCount,
+            stationName,
+        )
+        if (!delayWhileRunning(cadenceDelayMs)) return false
+
+        while (!stopRequested) {
+            val nowMs = System.currentTimeMillis()
+            replaceDetailEntryHistory(
+                CollectionPacingPolicy.pruneDetailEntries(detailEntryTimes, nowMs),
+            )
+            val requiredDelayMs = CollectionPacingPolicy.requiredDetailDelayMs(
+                timestamps = detailEntryTimes,
+                nowMs = nowMs,
+            )
+            if (requiredDelayMs <= 0L) break
+            emit(
+                CollectionState.PAUSED,
+                "详情访问窗口已达安全上限，等待 ${secondsRoundedUp(requiredDelayMs)} 秒",
+                collectedCount,
+                stationName,
+            )
+            if (!delayWhileRunning(requiredDelayMs)) return false
+        }
+        if (stopRequested) return false
+
+        detailEntryTimes.addLast(System.currentTimeMillis())
+        persistPacingState()
+        return true
+    }
+
+    private fun recordStationCompletedForPacing(stationName: String) {
+        batchCompletedCount += 1
+        if (batchCooldownUntilMs <= 0L && batchCompletedCount >= batchTarget) {
+            val cooldownMs = randomLongInclusive(batchCooldownMinMs, batchCooldownMaxMs)
+            batchCooldownUntilMs = System.currentTimeMillis() + cooldownMs
+            emit(
+                CollectionState.PAUSED,
+                "本批次已采集 $batchCompletedCount 个站点，当前站点收尾后暂停 " +
+                    "${minutesRoundedUp(cooldownMs)} 分钟",
+                collectedCount,
+                stationName,
+            )
+        }
+        persistPacingState()
+    }
+
+    private suspend fun delayWhileRunning(durationMs: Long): Boolean {
+        var remainingMs = durationMs.coerceAtLeast(0L)
+        while (remainingMs > 0L) {
+            if (stopRequested) return false
+            val stepMs = minOf(remainingMs, 1_000L)
+            delay(stepMs)
+            remainingMs -= stepMs
+        }
+        return !stopRequested
+    }
+
+    private fun resetBatchCycle() {
+        batchCompletedCount = 0
+        batchTarget = Random.nextInt(batchTargetMin, batchTargetMax + 1)
+        batchCooldownUntilMs = 0L
+        persistPacingState()
+    }
+
+    private fun persistPacingState(nowMs: Long = System.currentTimeMillis()) {
+        replaceDetailEntryHistory(
+            CollectionPacingPolicy.pruneDetailEntries(detailEntryTimes, nowMs),
+        )
+        AppPreferences.savePacingState(
+            context = context,
+            detailEntryTimes = detailEntryTimes,
+            batchCompletedCount = batchCompletedCount,
+            batchTarget = batchTarget,
+            cooldownUntilMs = batchCooldownUntilMs,
+        )
+    }
+
+    private fun replaceDetailEntryHistory(entries: Collection<Long>) {
+        detailEntryTimes.clear()
+        detailEntryTimes.addAll(entries)
+    }
+
+    private fun randomLongInclusive(minMs: Long, maxMs: Long): Long =
+        if (maxMs <= minMs) minMs else Random.nextLong(minMs, maxMs + 1L)
+
+    private fun dayPeriodLabel(hour: Int): String = when (hour) {
+        in 6..11 -> "上午"
+        in 12..17 -> "下午"
+        in 18..22 -> "晚间"
+        else -> "夜间"
+    }
+
+    private fun minutesRoundedUp(durationMs: Long): Long =
+        (durationMs.coerceAtLeast(0L) + 59_999L) / 60_000L
+
+    private fun secondsRoundedUp(durationMs: Long): Long =
+        (durationMs.coerceAtLeast(0L) + 999L) / 1_000L
 
     private suspend fun humanDelay(baseMs: Long, maxMs: Long = (baseMs * 1.25).toLong()) {
         val span = (maxMs - baseMs).coerceAtLeast(50L)

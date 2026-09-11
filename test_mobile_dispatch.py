@@ -18,6 +18,7 @@ class MobileDispatchTests(unittest.TestCase):
             patch.object(api_server, "MOBILE_ADMIN_API_KEY", "admin"),
             patch.object(api_server.site_exploration_bridge, "enabled", False),
             patch.object(api_server, "LEGACY_MYSQL_SYNC_ENABLED", False),
+            patch.object(api_server, "_sync_henan_task", return_value=None),
         ]
         for item in self.patchers:
             item.start()
@@ -83,6 +84,52 @@ class MobileDispatchTests(unittest.TestCase):
         conn.commit()
         conn.close()
 
+    def add_henan_tasks(self, pending=0, failed=0):
+        conn = api_server.mobile_conn()
+        now = api_server._mobile_utc()
+        sequence = 0
+        for status, count in (("PENDING", pending), ("FAILED", failed)):
+            for _ in range(count):
+                sequence += 1
+                attempt = 0 if status == "PENDING" else 3
+                conn.execute(
+                    """INSERT INTO scan_task (
+                           id, type, priority, province, city, district, keyword,
+                           search_region, status, attempt, max_attempts,
+                           recovery_attempt, max_recovery_attempts,
+                           available_at, created_at, source_station_id,
+                           source_sequence, source_payload
+                       ) VALUES (?, ?, 80, '河南省', '测试市', '', ?, '', ?, ?, 3,
+                                 0, 3, ?, ?, ?, ?, '{}')""",
+                    (
+                        f"henan-{status.lower()}-{sequence}",
+                        api_server.HENAN_POI_DETAIL_TASK,
+                        f"河南站点-{sequence}",
+                        status,
+                        attempt,
+                        now,
+                        now,
+                        f"poi-{sequence}",
+                        sequence,
+                    ),
+                )
+        conn.commit()
+        conn.close()
+
+    def fail(self, code, task, retryable=True):
+        token = self.devices[code]
+        return api_server.mobile_fail_task(
+            task["id"],
+            api_server.MobileTaskActionRequest(
+                deviceCode=code,
+                leaseToken=task["leaseToken"],
+                errorCode="COLLECTION_FAILED",
+                errorMessage=f"测试失败: {task['keyword']}",
+                retryable=retryable,
+            ),
+            authorization=f"Bearer {token}",
+        )
+
     def claim(self, code):
         token = self.devices[code]
         return api_server.mobile_claim_task(
@@ -101,6 +148,48 @@ class MobileDispatchTests(unittest.TestCase):
             ),
             authorization=f"Bearer {token}",
         )
+
+    def test_henan_failed_recovery_waits_until_normal_work_finishes(self):
+        self.add_henan_tasks(pending=1, failed=1)
+        self.register("device-a")
+        self.register("device-b")
+
+        normal = self.claim("device-a")
+        self.assertTrue(normal["id"].startswith("henan-pending-"))
+        self.assertEqual(0, normal["recoveryAttempt"])
+        self.assertIsNone(self.claim("device-b"))
+
+        self.complete("device-a", normal)
+        response = api_server.mobile_claim_task(
+            api_server.MobileClaimRequest(deviceCode="device-b"),
+            authorization=f"Bearer {self.devices['device-b']}",
+        )
+        self.assertEqual("CLAIMED_FAILED_RETRY", response["reason"])
+        self.assertEqual(1, response["task"]["recoveryAttempt"])
+
+    def test_henan_failed_recovery_is_round_robin_and_stops_after_three(self):
+        self.add_henan_tasks(failed=2)
+        self.register("device-a")
+
+        seen = []
+        for expected_round in (1, 1, 2, 2, 3, 3):
+            task = self.claim("device-a")
+            self.assertIsNotNone(task)
+            self.assertEqual(expected_round, task["recoveryAttempt"])
+            seen.append(task["id"])
+            outcome = self.fail("device-a", task)
+            self.assertFalse(outcome["requeued"])
+            conn = api_server.mobile_conn()
+            conn.execute(
+                "UPDATE scan_task SET available_at = ? WHERE id = ?",
+                (api_server._mobile_utc(), task["id"]),
+            )
+            conn.commit()
+            conn.close()
+
+        self.assertEqual(seen[0:2], seen[2:4])
+        self.assertEqual(seen[0:2], seen[4:6])
+        self.assertIsNone(self.claim("device-a"))
 
     def test_duplicate_source_station_is_claimed_only_once(self):
         self.add_duplicate_station_tasks()

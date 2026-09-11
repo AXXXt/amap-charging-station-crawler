@@ -50,6 +50,8 @@ data class RemoteTaskDto(
     @SerializedName("leaseToken") val leaseToken: String,
     @SerializedName("attempt") val attempt: Int,
     @SerializedName("maxAttempts") val maxAttempts: Int,
+    @SerializedName("recoveryAttempt") val recoveryAttempt: Int = 0,
+    @SerializedName("maxRecoveryAttempts") val maxRecoveryAttempts: Int = 2,
     @SerializedName("sourceSiteId") val sourceSiteId: String = "",
     @SerializedName("sourceSiteOrder") val sourceSiteOrder: Long = 0,
     @SerializedName("stationId") val stationId: String = "",
@@ -63,6 +65,7 @@ data class RemoteTaskDto(
 
 data class ClaimTaskResponse(
     @SerializedName("task") val task: RemoteTaskDto?,
+    @SerializedName("reason") val reason: String = "",
 )
 
 data class TaskActionRequest(

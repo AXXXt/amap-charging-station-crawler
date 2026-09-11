@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import com.tigercode.evcollector.core.engine.CollectionPacingPolicy
 
 object AppPreferences {
     // 手机通过 Wi-Fi 访问电脑上的服务端；127.0.0.1 在手机上只代表手机自己。
@@ -19,6 +20,10 @@ object AppPreferences {
     private const val KEY_REMOTE_ERROR = "remote_error"
     private const val KEY_LOG = "log"
     private const val KEY_HENAN_IMPORT_READY = "henan_import_ready"
+    private const val KEY_PACING_DETAIL_ENTRIES = "pacing_detail_entries"
+    private const val KEY_PACING_BATCH_COMPLETED = "pacing_batch_completed"
+    private const val KEY_PACING_BATCH_TARGET = "pacing_batch_target"
+    private const val KEY_PACING_COOLDOWN_UNTIL = "pacing_cooldown_until"
 
     fun serverUrl(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -124,6 +129,51 @@ object AppPreferences {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_DEVICE_TOKEN, token.trim())
+            .apply()
+    }
+
+    fun pacingDetailEntryTimes(
+        context: Context,
+        nowMs: Long = System.currentTimeMillis(),
+    ): List<Long> {
+        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_PACING_DETAIL_ENTRIES, "")
+            .orEmpty()
+        return CollectionPacingPolicy.pruneDetailEntries(
+            timestamps = raw.split(',').mapNotNull { it.toLongOrNull() },
+            nowMs = nowMs,
+        )
+    }
+
+    fun pacingBatchCompletedCount(context: Context): Int =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt(KEY_PACING_BATCH_COMPLETED, 0)
+            .coerceAtLeast(0)
+
+    fun pacingBatchTarget(context: Context): Int =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getInt(KEY_PACING_BATCH_TARGET, 0)
+
+    fun pacingCooldownUntil(context: Context): Long =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getLong(KEY_PACING_COOLDOWN_UNTIL, 0L)
+
+    fun savePacingState(
+        context: Context,
+        detailEntryTimes: Collection<Long>,
+        batchCompletedCount: Int,
+        batchTarget: Int,
+        cooldownUntilMs: Long,
+    ) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(
+                KEY_PACING_DETAIL_ENTRIES,
+                detailEntryTimes.sorted().takeLast(64).joinToString(","),
+            )
+            .putInt(KEY_PACING_BATCH_COMPLETED, batchCompletedCount.coerceAtLeast(0))
+            .putInt(KEY_PACING_BATCH_TARGET, batchTarget)
+            .putLong(KEY_PACING_COOLDOWN_UNTIL, cooldownUntilMs.coerceAtLeast(0L))
             .apply()
     }
 

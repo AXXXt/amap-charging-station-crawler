@@ -859,6 +859,10 @@ MOBILE_ADMIN_API_KEY = os.getenv("MOBILE_ADMIN_API_KEY", "dev-admin-key")
 MOBILE_LEASE_RECLAIM_SECONDS = int(os.getenv("MOBILE_LEASE_RECLAIM_SECONDS", "30"))
 MOBILE_CLAIM_MAX_RETRIES = int(os.getenv("MOBILE_CLAIM_MAX_RETRIES", "3"))
 HENAN_POI_DETAIL_TASK = "HENAN_POI_DETAIL"
+HENAN_FAILED_RETRY_LIMIT = max(
+    0,
+    int(os.getenv("HENAN_FAILED_RETRY_LIMIT", "2")),
+)
 AMAP_API_KEY = os.getenv("AMAP_API_KEY", "")
 AMAP_POI_PAGE_SIZE = int(os.getenv("AMAP_POI_PAGE_SIZE", "25"))
 AMAP_POI_IMPORT_QPS_DELAY_SECONDS = float(os.getenv("AMAP_POI_IMPORT_QPS_DELAY_SECONDS", "0.35"))
@@ -1067,6 +1071,8 @@ def init_mobile_db():
             lease_expires_at TEXT,
             attempt INTEGER NOT NULL DEFAULT 0,
             max_attempts INTEGER NOT NULL DEFAULT 3,
+            recovery_attempt INTEGER NOT NULL DEFAULT 0,
+            max_recovery_attempts INTEGER NOT NULL DEFAULT 2,
             progress TEXT NOT NULL DEFAULT '{}',
             result_summary TEXT NOT NULL DEFAULT '{}',
             available_at TEXT NOT NULL,
@@ -1107,6 +1113,24 @@ def init_mobile_db():
         cur.execute("ALTER TABLE scan_task ADD COLUMN source_payload TEXT NOT NULL DEFAULT '{}'")
     if "source_sequence" not in task_columns:
         cur.execute("ALTER TABLE scan_task ADD COLUMN source_sequence INTEGER NOT NULL DEFAULT 0")
+    if "recovery_attempt" not in task_columns:
+        cur.execute(
+            "ALTER TABLE scan_task "
+            "ADD COLUMN recovery_attempt INTEGER NOT NULL DEFAULT 0"
+        )
+    if "max_recovery_attempts" not in task_columns:
+        cur.execute(
+            "ALTER TABLE scan_task "
+            f"ADD COLUMN max_recovery_attempts INTEGER NOT NULL DEFAULT {HENAN_FAILED_RETRY_LIMIT}"
+        )
+    # Tighten legacy queues without changing task state. Existing Henan rows
+    # were created with three normal attempts / three recovery attempts.
+    cur.execute(
+        """UPDATE scan_task
+           SET max_recovery_attempts = ?
+           WHERE type = ? AND max_recovery_attempts > ?""",
+        (HENAN_FAILED_RETRY_LIMIT, HENAN_POI_DETAIL_TASK, HENAN_FAILED_RETRY_LIMIT),
+    )
     site_exploration_bridge.ensure_local_schema(conn)
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_scan_task_claim "
@@ -1115,6 +1139,10 @@ def init_mobile_db():
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_scan_task_station_claim "
         "ON scan_task(type, source_station_id, source_site_order, source_sequence, created_at)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scan_task_failed_recovery "
+        "ON scan_task(type, status, recovery_attempt, available_at, source_sequence)"
     )
     cur.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_task_device_active "
@@ -1163,7 +1191,7 @@ def seed_default_mobile_tasks():
             """INSERT INTO scan_task (
                    id, type, priority, province, city, district, keyword,
                    search_region, status, attempt, max_attempts, available_at, created_at, updated_at
-               ) VALUES (?, 'REGION_SCAN', 30, '河南省', ?, ?, ?, '', 'PENDING', 0, 3, ?, ?, ?)""",
+               ) VALUES (?, 'REGION_SCAN', 30, '河南省', ?, ?, ?, '', 'PENDING', 0, 2, ?, ?, ?)""",
             (
                 str(uuid.uuid4()),
                 city,
@@ -1222,6 +1250,14 @@ def _mobile_task_payload(row):
         "leaseExpiresAt": row["lease_expires_at"],
         "attempt": row["attempt"],
         "maxAttempts": row["max_attempts"],
+        "recoveryAttempt": int(
+            row["recovery_attempt"] if "recovery_attempt" in row.keys() else 0
+        ),
+        "maxRecoveryAttempts": int(
+            row["max_recovery_attempts"]
+            if "max_recovery_attempts" in row.keys()
+            else HENAN_FAILED_RETRY_LIMIT
+        ),
         "progress": json.loads(row["progress"] or "{}"),
         "resultSummary": json.loads(row["result_summary"] or "{}"),
         "availableAt": row["available_at"],
@@ -1603,10 +1639,11 @@ def _sync_scan_task_by_id(task_id):
 def _reap_expired_leases_once():
     now = _mobile_utc()
     conn = mobile_conn()
+    reaped_ids = []
     try:
         conn.execute("BEGIN IMMEDIATE")
         stale = conn.execute(
-            """SELECT id, assigned_device_id FROM scan_task
+            """SELECT id FROM scan_task
                WHERE status IN ('LEASED', 'RUNNING')
                  AND lease_expires_at IS NOT NULL
                  AND lease_expires_at < ?""",
@@ -1614,7 +1651,8 @@ def _reap_expired_leases_once():
         ).fetchall()
         for task in stale:
             row = conn.execute(
-                """SELECT id, assigned_device_id, attempt, max_attempts
+                """SELECT id, type, assigned_device_id, attempt, max_attempts,
+                          recovery_attempt, max_recovery_attempts
                    FROM scan_task
                    WHERE id = ? AND status IN ('LEASED', 'RUNNING')
                      AND lease_expires_at IS NOT NULL
@@ -1623,12 +1661,15 @@ def _reap_expired_leases_once():
             ).fetchone()
             if row is None:
                 continue
-            will_retry = row["attempt"] < row["max_attempts"]
-            next_status = "PENDING" if will_retry else "FAILED"
-            # A lease expiry means the worker is presumed dead/offline. Make
-            # the task immediately available so another device can take over;
-            # explicit fail/retry still keeps its short backoff.
-            available_at = now
+            is_henan_recovery = (
+                row["type"] == HENAN_POI_DETAIL_TASK
+                and row["recovery_attempt"] > 0
+            )
+            will_retry_now = (
+                not is_henan_recovery
+                and row["attempt"] < row["max_attempts"]
+            )
+            next_status = "PENDING" if will_retry_now else "FAILED"
             conn.execute(
                 """UPDATE scan_task
                    SET status = ?, assigned_device_id = NULL,
@@ -1637,8 +1678,9 @@ def _reap_expired_leases_once():
                        finished_at = CASE WHEN ? = 'FAILED' THEN ? ELSE NULL END,
                        last_error = CASE WHEN ? = 'FAILED' THEN 'LEASE_EXPIRED' ELSE '' END
                    WHERE id = ? AND status IN ('LEASED', 'RUNNING')""",
-                (next_status, available_at, now, next_status, now, next_status, row["id"]),
+                (next_status, now, now, next_status, now, next_status, row["id"]),
             )
+            reaped_ids.append(row["id"])
             if row["assigned_device_id"]:
                 conn.execute(
                     """UPDATE collector_device
@@ -1653,7 +1695,14 @@ def _reap_expired_leases_once():
         raise
     finally:
         conn.close()
-
+    for task_id in reaped_ids:
+        _sync_scan_task_by_id(task_id)
+        conn = mobile_conn()
+        try:
+            row = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
+        finally:
+            conn.close()
+        _sync_henan_task(row)
 
 def _lease_reaper_loop():
     while True:
@@ -1820,31 +1869,57 @@ def mobile_claim_task(
                 )
 
         claimed = None
+        claim_reason = "CLAIMED"
         for _ in range(MOBILE_CLAIM_MAX_RETRIES):
             canonical = site_exploration_bridge.enabled
-            henan_pending = any(
-                row["type"] == HENAN_POI_DETAIL_TASK
-                for row in conn.execute(
-                    "SELECT type FROM scan_task "
-                    "WHERE type = ? AND status = 'PENDING' LIMIT 1",
-                    (HENAN_POI_DETAIL_TASK,),
-                ).fetchall()
-            )
+            recovery_claim = False
+            henan_pending = conn.execute(
+                """SELECT 1 FROM scan_task
+                   WHERE type = ? AND status = 'PENDING'
+                     AND attempt < max_attempts LIMIT 1""",
+                (HENAN_POI_DETAIL_TASK,),
+            ).fetchone() is not None
+            # Failed-task recovery starts only after all normal Henan work is done.
+            # Active recovery leases do not block other phones from joining the wave.
+            henan_primary_active = conn.execute(
+                """SELECT 1 FROM scan_task
+                   WHERE type = ? AND status IN ('LEASED', 'RUNNING')
+                     AND recovery_attempt = 0 LIMIT 1""",
+                (HENAN_POI_DETAIL_TASK,),
+            ).fetchone() is not None
+            henan_recovery_remaining = conn.execute(
+                """SELECT 1 FROM scan_task
+                   WHERE type = ? AND status = 'FAILED'
+                     AND recovery_attempt < max_recovery_attempts LIMIT 1""",
+                (HENAN_POI_DETAIL_TASK,),
+            ).fetchone() is not None
+
             if henan_pending:
                 task = conn.execute(
                     """SELECT * FROM scan_task
-                       WHERE status = 'PENDING' AND attempt < max_attempts
-                         AND available_at <= ? AND type = ?
-                       ORDER BY source_sequence, created_at, id
+                       WHERE type = ? AND status = 'PENDING'
+                         AND attempt < max_attempts AND available_at <= ?
+                       ORDER BY source_sequence, created_at, id LIMIT 1""",
+                    (HENAN_POI_DETAIL_TASK, now),
+                ).fetchone()
+            elif henan_primary_active:
+                task = None
+            elif henan_recovery_remaining:
+                recovery_claim = True
+                task = conn.execute(
+                    """SELECT * FROM scan_task
+                       WHERE type = ? AND status = 'FAILED'
+                         AND recovery_attempt < max_recovery_attempts
+                         AND available_at <= ?
+                       ORDER BY recovery_attempt, source_sequence, created_at, id
                        LIMIT 1""",
-                    (now, HENAN_POI_DETAIL_TASK),
+                    (HENAN_POI_DETAIL_TASK, now),
                 ).fetchone()
             elif canonical:
                 task = conn.execute(
                     f"""SELECT * FROM scan_task
                        WHERE status = 'PENDING' AND attempt < max_attempts
-                         AND available_at <= ?
-                          AND type = 'SITE_STATION_DETAIL'
+                         AND available_at <= ? AND type = 'SITE_STATION_DETAIL'
                        {SITE_TASK_CANONICAL_CLAUSE}
                        ORDER BY source_site_order, source_sequence, created_at, id
                        LIMIT 1""",
@@ -1866,14 +1941,27 @@ def mobile_claim_task(
             lease_expires_at = (
                 datetime.now(timezone.utc) + timedelta(seconds=MOBILE_LEASE_SECONDS)
             ).isoformat()
-            cur = conn.execute(
-                """UPDATE scan_task
-                   SET status = 'LEASED', assigned_device_id = ?, lease_token = ?,
-                       lease_expires_at = ?, attempt = attempt + 1,
-                       started_at = COALESCE(started_at, ?), last_error = '', updated_at = ?
-                   WHERE id = ? AND status = 'PENDING' AND attempt < max_attempts""",
-                (device["id"], lease_token, lease_expires_at, now, now, task["id"]),
-            )
+            if recovery_claim:
+                cur = conn.execute(
+                    """UPDATE scan_task
+                       SET status = 'LEASED', assigned_device_id = ?, lease_token = ?,
+                           lease_expires_at = ?, recovery_attempt = recovery_attempt + 1,
+                           finished_at = NULL, last_error = '', updated_at = ?
+                       WHERE id = ? AND status = 'FAILED'
+                         AND recovery_attempt < max_recovery_attempts""",
+                    (device["id"], lease_token, lease_expires_at, now, task["id"]),
+                )
+            else:
+                cur = conn.execute(
+                    """UPDATE scan_task
+                       SET status = 'LEASED', assigned_device_id = ?, lease_token = ?,
+                           lease_expires_at = ?, attempt = attempt + 1,
+                           started_at = COALESCE(started_at, ?),
+                           last_error = '', updated_at = ?
+                       WHERE id = ? AND status = 'PENDING'
+                         AND attempt < max_attempts""",
+                    (device["id"], lease_token, lease_expires_at, now, now, task["id"]),
+                )
             if cur.rowcount != 1:
                 continue
             conn.execute(
@@ -1892,6 +1980,8 @@ def mobile_claim_task(
                 "SELECT * FROM scan_task WHERE id = ?",
                 (task["id"],),
             ).fetchone()
+            if recovery_claim:
+                claim_reason = "CLAIMED_FAILED_RETRY"
             break
         conn.commit()
     except Exception:
@@ -1904,7 +1994,7 @@ def mobile_claim_task(
         _sync_henan_task(claimed)
     if claimed is None:
         return {"task": None, "reason": "QUEUE_EMPTY"}
-    return {"task": _mobile_task_payload(claimed), "reason": "CLAIMED"}
+    return {"task": _mobile_task_payload(claimed), "reason": claim_reason}
 
 
 @app.post("/api/v1/device-tasks/{task_id}/ack")
@@ -2035,15 +2125,35 @@ def mobile_fail_task(
     now = now_value.isoformat()
     conn = mobile_conn()
     task = _require_mobile_task(conn, device["id"], task_id, request.leaseToken)
-    should_retry = bool(request.retryable) and task["attempt"] < task["max_attempts"]
-    next_status = "PENDING" if should_retry else "FAILED"
+    is_henan_recovery = (
+        task["type"] == HENAN_POI_DETAIL_TASK
+        and task["recovery_attempt"] > 0
+    )
+    # Normal attempts keep their existing immediate retry behavior. Once a
+    # Henan task enters the recovery wave it returns to FAILED after each try,
+    # so the dispatcher can finish the rest of that retry round first.
+    should_retry_now = (
+        not is_henan_recovery
+        and bool(request.retryable)
+        and task["attempt"] < task["max_attempts"]
+    )
+    has_deferred_retry = (
+        task["type"] == HENAN_POI_DETAIL_TASK
+        and task["recovery_attempt"] < task["max_recovery_attempts"]
+    )
+    next_status = "PENDING" if should_retry_now else "FAILED"
+    needs_backoff = should_retry_now or has_deferred_retry
+    retry_number = (
+        task["recovery_attempt"] if is_henan_recovery else task["attempt"]
+    )
     available_at = (
-        now_value + timedelta(seconds=max(15, task["attempt"] * 30))
-    ).isoformat() if should_retry else now
+        now_value + timedelta(seconds=max(15, retry_number * 30))
+    ).isoformat() if needs_backoff else now
     cur = conn.execute(
         """UPDATE scan_task SET status = ?, assigned_device_id = NULL,
                lease_token = NULL, lease_expires_at = NULL, last_error = ?,
-               available_at = ?, updated_at = ?, finished_at = CASE WHEN ? = 'FAILED' THEN ? ELSE NULL END
+               available_at = ?, updated_at = ?,
+               finished_at = CASE WHEN ? = 'FAILED' THEN ? ELSE NULL END
            WHERE id = ? AND assigned_device_id = ? AND lease_token = ?
              AND status IN ('LEASED', 'RUNNING')
              AND lease_expires_at >= ?""",
@@ -2064,19 +2174,25 @@ def mobile_fail_task(
         conn.rollback()
         conn.close()
         raise HTTPException(409, detail="TASK_LEASE_STALE")
+    device_status = "IDLE" if should_retry_now or has_deferred_retry else "FAULT"
     conn.execute(
         """UPDATE collector_device SET current_task_id = NULL,
-               status = CASE WHEN ? = 'FAILED' THEN 'FAULT' ELSE 'IDLE' END,
-               last_error = ?, updated_at = ?
+               status = ?, last_error = ?, updated_at = ?
            WHERE id = ?""",
-        (next_status, request.errorMessage[:500], now, device["id"]),
+        (device_status, request.errorMessage[:500], now, device["id"]),
     )
     conn.commit()
     task = conn.execute("SELECT * FROM scan_task WHERE id = ?", (task_id,)).fetchone()
     conn.close()
     _sync_mysql_task(task)
     _sync_henan_task(task)
-    return {"task": _mobile_task_payload(task), "requeued": should_retry}
+    return {
+        "task": _mobile_task_payload(task),
+        "requeued": should_retry_now,
+        "deferredRetry": has_deferred_retry and not should_retry_now,
+    }
+
+
 # ============================================================
 # ADB coordinate tap fallback for AMap overlay close buttons
 # ============================================================
@@ -2496,8 +2612,10 @@ def _ensure_henan_task_table():
                     station_sequence INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '导入时的任务顺序',
                     priority INT UNSIGNED NOT NULL DEFAULT 80 COMMENT '任务优先级，数值越大越优先',
                     status VARCHAR(32) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'PENDING' COMMENT '任务状态：PENDING/LEASED/RUNNING/COMPLETED/FAILED/CANCELLED',
-                    attempt SMALLINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '已执行次数',
-                    max_attempts SMALLINT UNSIGNED NOT NULL DEFAULT 3 COMMENT '最大执行次数',
+                    attempt SMALLINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '常规阶段已执行次数',
+                    max_attempts SMALLINT UNSIGNED NOT NULL DEFAULT 3 COMMENT '常规阶段最大执行次数',
+                    recovery_attempt SMALLINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '常规任务结束后的失败任务补采次数',
+                    max_recovery_attempts SMALLINT UNSIGNED NOT NULL DEFAULT 2 COMMENT '失败任务最大补采次数',
                     lease_device_id VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '当前租约设备编号',
                     lease_token VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '当前租约令牌',
                     lease_expires_at DATETIME NULL DEFAULT NULL COMMENT '租约到期时间',
@@ -2512,6 +2630,7 @@ def _ensure_henan_task_table():
                     UNIQUE KEY uk_henan_station_task_key (task_key),
                     KEY idx_henan_station_task_amap_poi (amap_poi_id),
                     KEY idx_henan_station_task_claim (status, available_at, station_sequence),
+                    KEY idx_henan_station_task_recovery (status, recovery_attempt, available_at, station_sequence),
                     KEY idx_henan_station_task_lease (lease_expires_at),
                     KEY idx_henan_station_task_created (created_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -2519,6 +2638,35 @@ def _ensure_henan_task_table():
                   COMMENT='河南省重卡充电站采集任务表'
                 """
             )
+            cursor.execute("SHOW COLUMNS FROM henan_heavy_truck_charging_station_task")
+            task_columns = {str(item[0]) for item in cursor.fetchall()}
+            if "recovery_attempt" not in task_columns:
+                cursor.execute(
+                    "ALTER TABLE henan_heavy_truck_charging_station_task "
+                    "ADD COLUMN recovery_attempt SMALLINT UNSIGNED NOT NULL DEFAULT 0 "
+                    "COMMENT '常规任务结束后的失败任务补采次数' AFTER max_attempts"
+                )
+            if "max_recovery_attempts" not in task_columns:
+                cursor.execute(
+                    "ALTER TABLE henan_heavy_truck_charging_station_task "
+                    f"ADD COLUMN max_recovery_attempts SMALLINT UNSIGNED NOT NULL "
+                    f"DEFAULT {HENAN_FAILED_RETRY_LIMIT} COMMENT '失败任务最大补采次数' "
+                    "AFTER recovery_attempt"
+                )
+            # Keep the remote mirror aligned with the local retry policy.
+            cursor.execute(
+                "UPDATE henan_heavy_truck_charging_station_task "
+                "SET max_recovery_attempts = %s WHERE max_recovery_attempts > %s",
+                (HENAN_FAILED_RETRY_LIMIT, HENAN_FAILED_RETRY_LIMIT),
+            )
+            cursor.execute("SHOW INDEX FROM henan_heavy_truck_charging_station_task")
+            task_indexes = {str(item[2]) for item in cursor.fetchall()}
+            if "idx_henan_station_task_recovery" not in task_indexes:
+                cursor.execute(
+                    "ALTER TABLE henan_heavy_truck_charging_station_task "
+                    "ADD KEY idx_henan_station_task_recovery "
+                    "(status, recovery_attempt, available_at, station_sequence)"
+                )
         conn.commit()
     finally:
         conn.close()
@@ -2554,6 +2702,14 @@ def _henan_task_values(row):
         "status": str(row["status"] or "PENDING"),
         "attempt": int(row["attempt"] or 0),
         "max_attempts": int(row["max_attempts"] or 3),
+        "recovery_attempt": int(
+            row["recovery_attempt"] if "recovery_attempt" in row.keys() else 0
+        ),
+        "max_recovery_attempts": int(
+            row["max_recovery_attempts"]
+            if "max_recovery_attempts" in row.keys()
+            else HENAN_FAILED_RETRY_LIMIT
+        ),
         "lease_device_id": str(row["assigned_device_id"] or ""),
         "lease_token": str(row["lease_token"] or ""),
         "lease_expires_at": _mysql_datetime(row["lease_expires_at"]),

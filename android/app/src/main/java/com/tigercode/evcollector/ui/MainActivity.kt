@@ -140,6 +140,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             AppPreferences.setRemoteStatus(this@MainActivity, "正在同步")
             refreshUi()
+            engine.awaitReadyForNextTask()
             when (
                 val outcome = SyncManager(this@MainActivity, repository, engine).runOnce()
             ) {

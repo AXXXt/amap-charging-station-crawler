@@ -97,6 +97,9 @@ class CollectorKeepAliveService : Service() {
                     delay(5000)
                     continue
                 }
+                // 在领取下一条远程任务前完成批次冷却，避免占着租约等待。
+                engine.awaitReadyForNextTask()
+                if (!isActive || !AppPreferences.isScanning(this@CollectorKeepAliveService)) break
                 updateNotification("正在同步服务端")
                 // 有任务时快速进入下一轮；没有任务时保留较长轮询间隔，降低服务端请求频率。
                 val nextSyncDelayMs = when (

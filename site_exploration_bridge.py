@@ -67,6 +67,20 @@ def station_source_key(station_id: Any, station_name: Any = "") -> str:
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
+def _fit_text(value: Any, limit: Optional[int]) -> Any:
+    """按结果表字段长度截断文本，避免单条异常内容阻塞整批同步。"""
+    if value is None or not limit or limit <= 0:
+        return value
+    text = str(value)
+    return text if len(text) <= limit else text[:limit]
+
+
+def _text_limit(column_type: Any) -> Optional[int]:
+    """从 varchar(N) 类型声明中解析可写入的最大字符数。"""
+    match = re.search(r"(?:var)?char\((\d+)\)", str(column_type or ""), re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
 def _json_value(value: Any) -> Any:
     if value is None:
         return None
@@ -529,6 +543,11 @@ class SiteExplorationBridge:
                 "created_at": created_value,
                 "updated_at": created_value,
             }
+            for column, value in list(values.items()):
+                values[column] = _fit_text(
+                    value,
+                    _text_limit(column_meta.get(column, {}).get("type")),
+                )
             columns = list(values)
             incoming_is_newer = "VALUES(captured_at) >= captured_at OR captured_at = 0"
             preserve_if_blank = {

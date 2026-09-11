@@ -94,6 +94,14 @@ class SyncManager(
                     return@withContext SyncOutcome.NoTask
                 }
 
+                if (claim.reason == "CLAIMED_FAILED_RETRY") {
+                    val retryNumber = task.recoveryAttempt.coerceAtLeast(1)
+                    val retryLimit = task.maxRecoveryAttempts.coerceAtLeast(retryNumber)
+                    val message = "常规任务已完成，正在补采失败站点（第${retryNumber}/${retryLimit}次）"
+                    AppPreferences.setRemoteStatus(context, message)
+                    AppPreferences.appendLog(context, "$message: ${task.stationName.ifBlank { task.keyword }}")
+                }
+
                 activeApi.acknowledgeTask(
                     task.id,
                     TaskActionRequest(deviceCode = deviceCode, leaseToken = task.leaseToken),

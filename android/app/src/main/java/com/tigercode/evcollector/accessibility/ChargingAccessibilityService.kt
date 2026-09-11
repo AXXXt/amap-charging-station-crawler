@@ -16,6 +16,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import java.util.regex.Pattern
 import kotlin.random.Random
 import com.tigercode.evcollector.core.model.NodeSnapshot
@@ -34,6 +35,11 @@ class ChargingAccessibilityService : AccessibilityService() {
     private var snapshotRefreshPending = false
     private var lastPageSummary = ""
     private var lastPageSummaryAt = 0L
+
+    @Volatile
+    private var windowFallbackActive = false
+
+    private var lastNonAmapWarnAt = 0L
     private val snapshotRefreshRunnable = Runnable {
         snapshotRefreshPending = false
         refreshSnapshot()
@@ -50,6 +56,7 @@ class ChargingAccessibilityService : AccessibilityService() {
         private const val PAGE_LOG_REPEAT_INTERVAL_MS = 10_000L
         private const val PAGE_LOG_ITEM_LIMIT = 18
         private const val PAGE_LOG_ITEM_MAX_LENGTH = 80
+        private const val NON_AMAP_WARN_INTERVAL_MS = 5_000L
 
         @Volatile
         private var instance: ChargingAccessibilityService? = null
@@ -1003,20 +1010,93 @@ class ChargingAccessibilityService : AccessibilityService() {
     }
 
     private fun isAmapWindowActive(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        return try {
+        val root = rootInActiveWindow ?: return findTopmostAmapWindowRoot() != null
+        val isAmap = try {
             root.packageName?.toString() == AMAP_PACKAGE
         } finally {
             root.recycle()
         }
+        return isAmap || findTopmostAmapWindowRoot() != null
     }
 
     private fun amapRoot(): AccessibilityNodeInfo? {
-        val root = rootInActiveWindow ?: return null
-        if (root.packageName?.toString() == AMAP_PACKAGE) return root
-        Log.w("EvCollector", "忽略非高德页面无障碍操作: ${root.packageName}")
-        root.recycle()
+        val root = rootInActiveWindow
+        if (root != null) {
+            if (root.packageName?.toString() == AMAP_PACKAGE) return root
+            root.recycle()
+        }
+        // MIUI can report a stale focus window (e.g. the launcher) while AMap
+        // is visibly on top, which blinds every snapshot/gesture call. Fall
+        // back to scanning the window list; the fallback only succeeds when
+        // AMap owns the top-most application window, so gestures stay blocked
+        // while another app is genuinely in front.
+        val fallback = findTopmostAmapWindowRoot()
+        if (fallback != null) {
+            if (!windowFallbackActive) {
+                windowFallbackActive = true
+                Log.w(
+                    "EvCollector",
+                    "焦点窗口漂移(${root?.packageName ?: "null"})，已切换为窗口列表兜底读取高德页面",
+                )
+            }
+            return fallback
+        }
+        if (windowFallbackActive) {
+            windowFallbackActive = false
+            Log.i("EvCollector", "高德焦点窗口已恢复，退出窗口列表兜底读取")
+        }
+        val now = SystemClock.uptimeMillis()
+        if (now - lastNonAmapWarnAt >= NON_AMAP_WARN_INTERVAL_MS) {
+            lastNonAmapWarnAt = now
+            Log.w(
+                "EvCollector",
+                "忽略非高德页面无障碍操作: ${root?.packageName ?: "null"}",
+            )
+        }
         return null
+    }
+
+    /**
+     * Root of the top-most AMap application window, or null when another
+     * application window is stacked above AMap (another app is genuinely in
+     * the foreground). Only application windows participate, so IME overlays
+     * and system windows cannot fake "on top".
+     */
+    private fun findTopmostAmapWindowRoot(): AccessibilityNodeInfo? {
+        val windows = try {
+            windows
+        } catch (t: Throwable) {
+            null
+        }
+        if (windows.isNullOrEmpty()) return null
+        try {
+            var topAppLayer = Int.MIN_VALUE
+            var topAppIsAmap = false
+            var bestAmapLayer = Int.MIN_VALUE
+            var bestAmapWindow: AccessibilityWindowInfo? = null
+            for (window in windows) {
+                if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+                val root = window.root ?: continue
+                val pkg = try {
+                    root.packageName?.toString()
+                } finally {
+                    root.recycle()
+                }
+                val layer = window.layer
+                if (layer > topAppLayer) {
+                    topAppLayer = layer
+                    topAppIsAmap = pkg == AMAP_PACKAGE
+                }
+                if (pkg == AMAP_PACKAGE && layer > bestAmapLayer) {
+                    bestAmapLayer = layer
+                    bestAmapWindow = window
+                }
+            }
+            if (bestAmapWindow == null || !topAppIsAmap) return null
+            return bestAmapWindow.root
+        } finally {
+            windows.forEach { it.recycle() }
+        }
     }
 
     private fun scheduleSnapshotRefresh() {

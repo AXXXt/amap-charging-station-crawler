@@ -931,6 +931,11 @@ MOBILE_LEASE_SECONDS = int(os.getenv("MOBILE_LEASE_SECONDS", "600"))
 MOBILE_ADMIN_API_KEY = os.getenv("MOBILE_ADMIN_API_KEY", "dev-admin-key")
 MOBILE_LEASE_RECLAIM_SECONDS = int(os.getenv("MOBILE_LEASE_RECLAIM_SECONDS", "30"))
 MOBILE_CLAIM_MAX_RETRIES = int(os.getenv("MOBILE_CLAIM_MAX_RETRIES", "3"))
+# 任务领取模式（云端可通过环境变量切换，无需改代码）：
+#   LEGACY（默认）= 保留历史行为：HENAN_POI_DETAIL 无任务时回退领取 SITE_STATION_DETAIL / REGION_SCAN
+#   HENAN_ONLY   = 只领 HENAN_POI_DETAIL（PENDING 优先，其次未达补采上限的失败任务）；
+#                  两类都没有时直接返回无任务（QUEUE_EMPTY），不再回退领取其他任务类型
+MOBILE_CLAIM_MODE = (os.getenv("MOBILE_CLAIM_MODE") or "LEGACY").strip().upper()
 HENAN_POI_DETAIL_TASK = "HENAN_POI_DETAIL"
 HENAN_FAILED_RETRY_LIMIT = max(
     0,
@@ -1988,6 +1993,10 @@ def mobile_claim_task(
                        LIMIT 1""",
                     (HENAN_POI_DETAIL_TASK, now),
                 ).fetchone()
+            elif MOBILE_CLAIM_MODE == "HENAN_ONLY":
+                # 只领高德 POI 模式：两类 HENAN 任务都没有时直接返回无任务，
+                # 不再回退领取 SITE_STATION_DETAIL / REGION_SCAN。
+                task = None
             elif canonical:
                 task = conn.execute(
                     f"""SELECT * FROM scan_task

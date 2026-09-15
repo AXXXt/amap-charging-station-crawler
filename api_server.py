@@ -292,25 +292,54 @@ async def list_stations(
         where.append("city = %s"); params.append(city)
     if operator:
         where.append("operator = %s"); params.append(operator)
-    
+
     where_clause = " WHERE " + " AND ".join(where) if where else ""
-    
+
+    # 数据源：采集结果统一表 site_exploration_charging_station_result（只读）
+    # 字段经别名映射对齐历史响应契约；JSON 字段从 result_payload 提取
+    from_sql = "FROM site_exploration_charging_station_result r"
+    station_select = """SELECT r.id,
+       COALESCE(NULLIF(r.matched_station_name,''), r.requested_name) AS station_name,
+       r.operator,
+       COALESCE(NULLIF(r.collected_address,''), r.source_address) AS address,
+       r.city,
+       JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.currentPrice')) AS current_price,
+       r.source_longitude AS longitude,
+       r.source_latitude AS latitude,
+       CAST(NULLIF(r.fast_available,'') AS UNSIGNED) AS fast_available,
+       CAST(NULLIF(r.fast_total,'') AS UNSIGNED) AS fast_total,
+       r.fast_power AS fast_power,
+       CAST(NULLIF(r.super_available,'') AS UNSIGNED) AS super_available,
+       CAST(NULLIF(r.super_total,'') AS UNSIGNED) AS super_total,
+       r.super_power AS super_power,
+       CAST(NULLIF(r.slow_available,'') AS UNSIGNED) AS slow_available,
+       CAST(NULLIF(r.slow_total,'') AS UNSIGNED) AS slow_total,
+       r.slow_power AS slow_power,
+       CASE WHEN r.result_payload IS NULL OR NOT JSON_VALID(r.result_payload) THEN NULL
+            ELSE JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.fastPrices')) END AS fast_prices,
+       CASE WHEN r.result_payload IS NULL OR NOT JSON_VALID(r.result_payload) THEN NULL
+            ELSE JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.slowPrices')) END AS slow_prices,
+       JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.businessHours')) AS business_hours,
+       JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.parkingFee')) AS parking_fee,
+       JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.occupancyFee')) AS occupancy_fee,
+       CASE WHEN r.result_payload IS NULL OR NOT JSON_VALID(r.result_payload) THEN NULL
+            ELSE JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.favoriteCount')) END AS favorite_count,
+       CASE WHEN r.result_payload IS NULL OR NOT JSON_VALID(r.result_payload) THEN NULL
+            ELSE JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.facilities')) END AS facilities,
+       CASE WHEN r.result_payload IS NULL OR NOT JSON_VALID(r.result_payload) THEN NULL
+            ELSE JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.tags')) END AS tags,
+       UNIX_TIMESTAMP(r.created_at) AS collected_at"""
+
     # Count
-    cur.execute(f"SELECT COUNT(*) as total FROM heavy_truck_stations{where_clause}", params)
+    cur.execute(f"SELECT COUNT(*) as total {from_sql}{where_clause}", params)
     total = cur.fetchone()["total"]
-    
+
     # Query
     offset = (page - 1) * page_size
     cur.execute(
-        f"""SELECT id, station_name, operator, address, city, current_price,
-                   longitude, latitude, fast_available, fast_total, fast_power,
-                   super_available, super_total, super_power,
-                   slow_available, slow_total, slow_power,
-                   fast_prices, slow_prices, business_hours,
-                   parking_fee, occupancy_fee, favorite_count,
-                   facilities, tags, collected_at
-            FROM heavy_truck_stations{where_clause}
-            ORDER BY id DESC LIMIT %s OFFSET %s""",
+        f"""{station_select}
+            {from_sql}{where_clause}
+            ORDER BY r.id DESC LIMIT %s OFFSET %s""",
         params + [page_size, offset]
     )
     rows = cur.fetchall()
@@ -342,7 +371,38 @@ async def get_station(station_id: int):
         return {"data": None, "offline": True}
     cur = conn.cursor(pymysql.cursors.DictCursor)
     cur.execute(
-        """SELECT * FROM heavy_truck_stations WHERE id = %s""",
+        """SELECT r.id,
+       COALESCE(NULLIF(r.matched_station_name,''), r.requested_name) AS station_name,
+       r.operator,
+       COALESCE(NULLIF(r.collected_address,''), r.source_address) AS address,
+       r.city,
+       JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.currentPrice')) AS current_price,
+       r.source_longitude AS longitude,
+       r.source_latitude AS latitude,
+       CAST(NULLIF(r.fast_available,'') AS UNSIGNED) AS fast_available,
+       CAST(NULLIF(r.fast_total,'') AS UNSIGNED) AS fast_total,
+       r.fast_power AS fast_power,
+       CAST(NULLIF(r.super_available,'') AS UNSIGNED) AS super_available,
+       CAST(NULLIF(r.super_total,'') AS UNSIGNED) AS super_total,
+       r.super_power AS super_power,
+       CAST(NULLIF(r.slow_available,'') AS UNSIGNED) AS slow_available,
+       CAST(NULLIF(r.slow_total,'') AS UNSIGNED) AS slow_total,
+       r.slow_power AS slow_power,
+       CASE WHEN r.result_payload IS NULL OR NOT JSON_VALID(r.result_payload) THEN NULL
+            ELSE JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.fastPrices')) END AS fast_prices,
+       CASE WHEN r.result_payload IS NULL OR NOT JSON_VALID(r.result_payload) THEN NULL
+            ELSE JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.slowPrices')) END AS slow_prices,
+       JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.businessHours')) AS business_hours,
+       JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.parkingFee')) AS parking_fee,
+       JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.occupancyFee')) AS occupancy_fee,
+       CASE WHEN r.result_payload IS NULL OR NOT JSON_VALID(r.result_payload) THEN NULL
+            ELSE JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.favoriteCount')) END AS favorite_count,
+       CASE WHEN r.result_payload IS NULL OR NOT JSON_VALID(r.result_payload) THEN NULL
+            ELSE JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.facilities')) END AS facilities,
+       CASE WHEN r.result_payload IS NULL OR NOT JSON_VALID(r.result_payload) THEN NULL
+            ELSE JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.tags')) END AS tags,
+       UNIX_TIMESTAMP(r.created_at) AS collected_at
+       FROM site_exploration_charging_station_result r WHERE r.id = %s""",
         [station_id]
     )
     row = cur.fetchone()
@@ -372,13 +432,26 @@ async def nearby_stations(
         return {"data": [], "offline": True}
     cur = conn.cursor(pymysql.cursors.DictCursor)
     cur.execute(
-        """SELECT id, station_name, operator, address, city, current_price,
-                  longitude, latitude,
-                  fast_available, fast_total, fast_power,
-                  super_available, super_total, super_power,
-                  slow_available, slow_total, slow_power
-           FROM heavy_truck_stations
-           WHERE longitude IS NOT NULL AND latitude IS NOT NULL"""
+        """SELECT r.id,
+                  COALESCE(NULLIF(r.matched_station_name,''), r.requested_name) AS station_name,
+                  r.operator,
+                  COALESCE(NULLIF(r.collected_address,''), r.source_address) AS address,
+                  r.city,
+                  JSON_UNQUOTE(JSON_EXTRACT(r.result_payload,'$.currentPrice')) AS current_price,
+                  r.source_longitude AS longitude,
+                  r.source_latitude AS latitude,
+                  CAST(NULLIF(r.fast_available,'') AS UNSIGNED) AS fast_available,
+                  CAST(NULLIF(r.fast_total,'') AS UNSIGNED) AS fast_total,
+                  r.fast_power AS fast_power,
+                  CAST(NULLIF(r.super_available,'') AS UNSIGNED) AS super_available,
+                  CAST(NULLIF(r.super_total,'') AS UNSIGNED) AS super_total,
+                  r.super_power AS super_power,
+                  CAST(NULLIF(r.slow_available,'') AS UNSIGNED) AS slow_available,
+                  CAST(NULLIF(r.slow_total,'') AS UNSIGNED) AS slow_total,
+                  r.slow_power AS slow_power
+           FROM site_exploration_charging_station_result r
+           WHERE r.source_longitude IS NOT NULL AND r.source_latitude IS NOT NULL
+             AND r.source_longitude != 0 AND r.source_latitude != 0"""
     )
     rows = cur.fetchall()
     cur.close(); conn.close()
@@ -416,19 +489,19 @@ async def get_stats():
     cur = conn.cursor(pymysql.cursors.DictCursor)
     
     # Total
-    cur.execute("SELECT COUNT(*) as total FROM heavy_truck_stations")
+    cur.execute("SELECT COUNT(*) as total FROM site_exploration_charging_station_result")
     total = cur.fetchone()["total"]
-    
+
     # By city
-    cur.execute("SELECT city, COUNT(*) as count FROM heavy_truck_stations GROUP BY city ORDER BY count DESC")
+    cur.execute("SELECT city, COUNT(*) as count FROM site_exploration_charging_station_result GROUP BY city ORDER BY count DESC")
     by_city = cur.fetchall()
-    
+
     # By operator
-    cur.execute("SELECT operator, COUNT(*) as count FROM heavy_truck_stations WHERE operator != '' GROUP BY operator ORDER BY count DESC")
+    cur.execute("SELECT operator, COUNT(*) as count FROM site_exploration_charging_station_result WHERE operator IS NOT NULL AND operator != '' GROUP BY operator ORDER BY count DESC")
     by_operator = cur.fetchall()
-    
+
     # Latest collection time
-    cur.execute("SELECT MAX(collected_at) as latest FROM heavy_truck_stations")
+    cur.execute("SELECT UNIX_TIMESTAMP(MAX(created_at)) as latest FROM site_exploration_charging_station_result")
     latest = cur.fetchone()["latest"]
     
     cur.close(); conn.close()

@@ -14,6 +14,7 @@ object RetrofitClient {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(120, TimeUnit.SECONDS)
             .addInterceptor { chain ->
                 val token = AppPreferences.deviceToken(context)
                 val request = if (token.isNotEmpty()) {

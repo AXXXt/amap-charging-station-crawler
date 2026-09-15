@@ -9,6 +9,9 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -26,13 +29,18 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class CollectorKeepAliveService : Service() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // MIUI/HyperOS 可能在息屏/切后台时压制主线程调度。调度循环使用工作线程，
+    // 并由 PARTIAL_WAKE_LOCK 保证设备在长期插电采集时不会进入 CPU 深度休眠。
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var loopJob: Job? = null
     private var engine: CollectionEngine? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        acquireKeepAliveLock()
         startAsForeground("采集服务正在启动")
     }
 
@@ -42,6 +50,15 @@ class CollectorKeepAliveService : Service() {
             engine?.stop()
             stopSelf()
             return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_RESUME_AFTER_COOLDOWN) {
+            if (!AppPreferences.isScanning(this)) {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            startAsForeground("采集服务继续运行")
+            startSyncLoop()
+            return START_STICKY
         }
         if (!AppPreferences.isScanning(this)) {
             stopSelf()
@@ -56,7 +73,7 @@ class CollectorKeepAliveService : Service() {
         engine?.stop()
         loopJob?.cancel()
         engine = null
-        AppPreferences.setScanning(this, false)
+        releaseKeepAliveLock()
         super.onDestroy()
     }
 
@@ -98,7 +115,14 @@ class CollectorKeepAliveService : Service() {
                     continue
                 }
                 // 在领取下一条远程任务前完成批次冷却，避免占着租约等待。
+                val cooldownEndAt = engine.batchCooldownEndAt()
+                if (cooldownEndAt > System.currentTimeMillis()) {
+                    CooldownAlarmScheduler.schedule(this@CollectorKeepAliveService, cooldownEndAt)
+                } else {
+                    CooldownAlarmScheduler.cancel(this@CollectorKeepAliveService)
+                }
                 engine.awaitReadyForNextTask()
+                CooldownAlarmScheduler.cancel(this@CollectorKeepAliveService)
                 if (!isActive || !AppPreferences.isScanning(this@CollectorKeepAliveService)) break
                 updateNotification("正在同步服务端")
                 // 有任务时快速进入下一轮；没有任务时保留较长轮询间隔，降低服务端请求频率。
@@ -161,6 +185,20 @@ class CollectorKeepAliveService : Service() {
         }
     }
 
+    private fun acquireKeepAliveLock() {
+        if (wakeLock?.isHeld == true) return
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG).apply {
+            setReferenceCounted(false)
+            acquire(WAKE_LOCK_TIMEOUT_MS)
+        }
+    }
+
+    private fun releaseKeepAliveLock() {
+        wakeLock?.takeIf { it.isHeld }?.release()
+        wakeLock = null
+    }
+
     private fun startAsForeground(text: String) {
         val notification = buildNotification(text)
         if (Build.VERSION.SDK_INT >= 34) {
@@ -187,7 +225,10 @@ class CollectorKeepAliveService : Service() {
     // CollectionEngine 的每个状态事件都会在手机前台弹出短提示，同时仍保留日志和常驻通知。
     private fun showStepToast(message: String) {
         if (message.isBlank()) return
-        Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
+        // 服务调度已移到工作线程；Toast 统一回主线程，避免后台/前台线程差异导致崩溃。
+        mainHandler.post {
+            Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun updateNotification(text: String) {
@@ -210,6 +251,12 @@ class CollectorKeepAliveService : Service() {
         private const val CHANNEL_ID = "collector_foreground"
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP = "com.tigercode.evcollector.STOP_COLLECTOR"
+        private const val ACTION_RESUME_AFTER_COOLDOWN =
+            "com.tigercode.evcollector.RESUME_AFTER_COOLDOWN"
+        private const val WAKE_LOCK_TAG = "evcollector:keep_alive"
+
+        // 长期采集设备保持插电；这里给一个足够长的上限，服务重启时会重新获取。
+        private const val WAKE_LOCK_TIMEOUT_MS = 24L * 60 * 60 * 1000
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(
@@ -222,6 +269,14 @@ class CollectorKeepAliveService : Service() {
             context.startService(
                 Intent(context, CollectorKeepAliveService::class.java)
                     .setAction(ACTION_STOP)
+            )
+        }
+
+        fun resumeAfterCooldown(context: Context) {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, CollectorKeepAliveService::class.java)
+                    .setAction(ACTION_RESUME_AFTER_COOLDOWN),
             )
         }
     }

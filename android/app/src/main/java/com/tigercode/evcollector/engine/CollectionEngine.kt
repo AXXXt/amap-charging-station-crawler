@@ -111,8 +111,8 @@ class CollectionEngine(
 
     private val batchTargetMin = 25
     private val batchTargetMax = 30
-    private val batchCooldownMinMs = 12 * 60 * 1000L
-    private val batchCooldownMaxMs = 20 * 60 * 1000L
+    private val batchCooldownMinMs = 8 * 60 * 1000L
+    private val batchCooldownMaxMs = 12 * 60 * 1000L
     private val detailEntryTimes = ArrayDeque<Long>().apply {
         addAll(AppPreferences.pacingDetailEntryTimes(context))
     }
@@ -124,6 +124,7 @@ class CollectionEngine(
 
     private val MAX_PRICE_CLICK_ATTEMPTS = 2
     private val MAX_CHARGING_PILE_SCROLLS = 30
+    private val MAX_TARGET_RESULT_SCROLLS = 1
 
     private val riskPhrases = listOf(
         "操作过于频繁",
@@ -447,7 +448,7 @@ class CollectionEngine(
             var scrollAttempts = 0
             var unchangedScrolls = 0
             var lastSignature = ""
-            while (!stopRequested && scrollAttempts <= 6) {
+            while (!stopRequested && scrollAttempts <= MAX_TARGET_RESULT_SCROLLS) {
                 if (PageAssessor.assess(snapshot).kind == PageKind.POPUP) {
                     dismissPopup(service)
                     snapshot = waitForPage(8000, 650) { root ->
@@ -485,7 +486,7 @@ class CollectionEngine(
                     break
                 }
 
-                if (isListEnd(snapshot) || scrollAttempts >= 6) break
+                if (isListEnd(snapshot) || scrollAttempts >= MAX_TARGET_RESULT_SCROLLS) break
                 val signature = StationMatcher.visibleStationCards(snapshot)
                     .joinToString("|") { cardFingerprint(it) }
                 unchangedScrolls = if (signature.isNotBlank() && signature == lastSignature) {
@@ -498,7 +499,7 @@ class CollectionEngine(
 
                 emit(
                     CollectionState.SCANNING_RESULTS,
-                    "未匹配到目标站点，向下滚动查找 (${scrollAttempts + 1}/6)",
+                    "未匹配到目标站点，向下滚动查找 (${scrollAttempts + 1}/$MAX_TARGET_RESULT_SCROLLS)",
                     0,
                     requestedName,
                 )
@@ -611,7 +612,7 @@ class CollectionEngine(
             merged = merged.copy(stationName = card.name)
         }
         var chargingPileDialogHandled = false
-        collectChargingPileDetailsIfVisible(service, card.name)?.let { result ->
+        collectChargingPileDetailsIfVisible(service, card.name, waitForEntryLoad = true)?.let { result ->
             merged = ResultMerger.merge(merged, result.detail)
             chargingPileDialogHandled = result.completed && result.dialogClosed
             if (!result.completed) {
@@ -987,13 +988,36 @@ class CollectionEngine(
     private suspend fun collectChargingPileDetailsIfVisible(
         service: ChargingAccessibilityService,
         stationName: String,
+        waitForEntryLoad: Boolean = false,
     ): ChargingPileCollectionResult? {
         if (stopRequested) return null
+        // AMap may render the detail shell first and add "查看历史空闲" after a
+        // short network delay. Give the first attempt one bounded warm-up; the
+        // retry remains fast so a truly absent entry does not wait twice.
+        if (waitForEntryLoad && !stopRequested) {
+            emit(
+                CollectionState.READING_DETAIL,
+                "等待查看历史空闲入口渲染",
+                collectedCount,
+                stationName,
+            )
+            humanDelay(1500L, 2500L)
+        }
         val current = service.freshSnapshot() ?: return null
         var dialogSnapshot = current.takeIf(ChargingPileDialogParser::isDialog)
 
         if (dialogSnapshot == null) {
-            val entryBounds = service.findChargingPileHistoryEntryBounds() ?: return null
+            var entryBounds = service.findChargingPileHistoryEntryBounds()
+            if (entryBounds == null && waitForEntryLoad && !stopRequested) {
+                val waitDeadline = System.currentTimeMillis() + 3_500L
+                while (entryBounds == null && !stopRequested &&
+                    System.currentTimeMillis() < waitDeadline
+                ) {
+                    delay(350L)
+                    entryBounds = service.findChargingPileHistoryEntryBounds()
+                }
+            }
+            if (entryBounds == null) return null
             emit(
                 CollectionState.READING_DETAIL,
                 "打开查看历史空闲，采集电桩详情",
@@ -1727,6 +1751,11 @@ class CollectionEngine(
             )
         }
     }
+
+    /**
+     * 冷却截止时间交给前台服务注册系统 Alarm，避免 MIUI 在息屏后冻结协程定时器。
+     */
+    fun batchCooldownEndAt(): Long = batchCooldownUntilMs
 
     private suspend fun awaitDetailEntryPermit(stationName: String): Boolean {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)

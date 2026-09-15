@@ -82,6 +82,12 @@ class MainActivity : AppCompatActivity() {
         binding.stopRunButton.setOnClickListener { stopRunning() }
         binding.clearLogButton.setOnClickListener { clearLogs() }
 
+        // 升级安装/系统回收后，只要用户仍处于“设备调度”状态，打开 App 就自动恢复服务。
+        if (AppPreferences.isScanning(this)) {
+            requestNotificationPermissionIfNeeded()
+            CollectorKeepAliveService.start(this)
+        }
+
         refreshHandler.post(refreshRunnable)
         refreshUi()
     }

@@ -204,18 +204,21 @@ def init_db():
 async def startup():
     init_mobile_db()
     try:
-        task_conn = mobile_conn()
+        # HENAN 任务的权威源是 MySQL（见 dev-docs/cloud_service_ops.md §10.3）。
+        # 这里**不再**把 SQLite 的 scan_task 回灌 MySQL：SQLite 只剩历史导入快照，
+        # 回灌会用旧状态覆盖运行期进度，并清空在途租约（表现为"重启回滚进度"、
+        # 手机端 complete/fail 拿到 409）。启动只确认表可用并报告任务数。
+        _ensure_henan_task_table()
+        task_conn = _henan_mysql_conn()
         try:
-            henan_rows = task_conn.execute(
-                "SELECT * FROM scan_task WHERE type = ? ORDER BY source_sequence, created_at, id",
-                (HENAN_POI_DETAIL_TASK,),
-            ).fetchall()
+            with task_conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) AS total FROM henan_heavy_truck_charging_station_task"
+                )
+                henan_total = int((cursor.fetchone() or {}).get("total") or 0)
         finally:
             task_conn.close()
-        # Use one remote transaction instead of opening one MySQL connection per
-        # task.  This keeps startup bounded even when hundreds of POIs exist.
-        _sync_henan_task_rows(henan_rows)
-        print(f"  Henan POI task table ready ({len(henan_rows)} tasks)")
+        print(f"  Henan POI task table ready ({henan_total} tasks, authoritative=MySQL)")
     except Exception as e:
         print(f"  Henan POI task table unavailable: {e}")
     if site_exploration_bridge.enabled:
@@ -3111,14 +3114,29 @@ def _henan_task_values(row):
     }
 
 
-def _sync_henan_task_rows(rows):
-    """Mirror Henan POI task lifecycle rows using one remote transaction."""
-    rows = [row for row in rows if row is not None and row["type"] == HENAN_POI_DETAIL_TASK]
-    if not rows:
-        return
+# 权威表列顺序：与 `_henan_task_values()` 输出保持一致，供各写入方独立构造行。
+_HENAN_TASK_COLUMNS = (
+    "task_key", "local_task_id", "amap_poi_id", "station_name", "province",
+    "city", "district", "address", "longitude", "latitude", "station_sequence",
+    "priority", "status", "attempt", "max_attempts", "recovery_attempt",
+    "max_recovery_attempts", "lease_device_id", "lease_token", "lease_expires_at",
+    "available_at", "started_at", "finished_at", "last_error", "source_payload",
+    "progress", "result_summary",
+)
+
+
+def _upsert_henan_task_values(normalized):
+    """写入 MySQL 权威任务表（幂等 UPSERT）。
+
+    `normalized` 是形如 `_henan_task_values()` 输出的 dict 列表；列顺序由
+    `_HENAN_TASK_COLUMNS` 固定，因此调用方可以直接从 POI 数据构造行，
+    不必先落一次 SQLite 再读回来。
+    """
+    normalized = [values for values in normalized if values]
+    if not normalized:
+        return 0
     _ensure_henan_task_table()
-    normalized = [_henan_task_values(row) for row in rows]
-    columns = list(normalized[0])
+    columns = list(_HENAN_TASK_COLUMNS)
     sql = """INSERT INTO henan_heavy_truck_charging_station_task
                  ({columns})
              VALUES ({placeholders})
@@ -3136,11 +3154,64 @@ def _sync_henan_task_rows(rows):
         with conn.cursor() as cursor:
             cursor.executemany(
                 sql,
-                [tuple(values[column] for column in columns) for values in normalized],
+                [tuple(values.get(column) for column in columns) for values in normalized],
             )
         conn.commit()
     finally:
         conn.close()
+    return len(normalized)
+
+
+def _henan_task_values_from_poi(
+    task_id, poi_id, poi_name, poi_payload, request_data, sequence, now
+):
+    """直接从导入的高德 POI 数据构造权威表一行（不经过 SQLite）。"""
+    import json as _json
+
+    station_name = str(poi_name or "")
+    task_key = hashlib.sha256(str(poi_id or station_name).encode("utf-8")).hexdigest()
+    longitude = _optional_float(poi_payload.get("longitude"))
+    latitude = _optional_float(poi_payload.get("latitude"))
+    return {
+        "task_key": task_key,
+        "local_task_id": str(task_id or ""),
+        "amap_poi_id": str(poi_id or ""),
+        "station_name": station_name,
+        "province": str(poi_payload.get("province") or ""),
+        "city": str(poi_payload.get("city") or ""),
+        "district": str(poi_payload.get("district") or ""),
+        "address": str(poi_payload.get("address") or ""),
+        "longitude": 0 if longitude is None else longitude,
+        "latitude": 0 if latitude is None else latitude,
+        "station_sequence": int(sequence or 0),
+        "priority": int(request_data.get("priority") or 80),
+        "status": "PENDING",
+        "attempt": 0,
+        "max_attempts": int(request_data.get("maxAttempts") or 3),
+        "recovery_attempt": 0,
+        "max_recovery_attempts": HENAN_FAILED_RETRY_LIMIT,
+        "lease_device_id": "",
+        "lease_token": "",
+        "lease_expires_at": None,
+        "available_at": _mysql_datetime(now),
+        "started_at": None,
+        "finished_at": None,
+        "last_error": "",
+        "source_payload": _json_column(poi_payload) or "{}",
+        "progress": None,
+        "result_summary": None,
+    }
+
+
+def _sync_henan_task_rows(rows):
+    """把 SQLite scan_task 行推到权威表（保留给 `HENAN_MYSQL_AUTHORITATIVE=0` 回退路径）。
+
+    注意：startup() 已不再调用本函数 —— HENAN 任务不再靠 SQLite 回灌 MySQL。
+    """
+    rows = [row for row in rows if row is not None and row["type"] == HENAN_POI_DETAIL_TASK]
+    if not rows:
+        return
+    _upsert_henan_task_values([_henan_task_values(row) for row in rows])
 
 
 def _sync_henan_task(row):
@@ -3405,89 +3476,60 @@ def _insert_henan_poi_tasks(
     }
     now = _mobile_utc()
     created_ids = []
-    conn = mobile_conn()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        for poi in pois:
-            poi_id = str(poi.get("id") or "").strip()
-            poi_name = str(poi.get("name") or "").strip()
-            if not poi_id or not poi_name:
-                counters["skippedDuplicatePoi"] += 1
-                continue
-            if poi_id in seen_job_ids:
-                counters["skippedDuplicatePoi"] += 1
-                continue
-            seen_job_ids.add(poi_id)
-            if poi_id in existing_task_ids:
-                counters["skippedTask"] += 1
-                continue
-            result_key = station_source_key(poi_id, poi_name)
-            if request_data.get("skipExistingResults", True) and (
-                poi_id in existing_result_ids or result_key in existing_result_keys
-            ):
-                counters["skippedResult"] += 1
-                continue
-            location = str(poi.get("location") or "")
-            location_parts = location.split(",", 1)
-            longitude = _optional_float(location_parts[0] if location_parts else None)
-            latitude = _optional_float(location_parts[1] if len(location_parts) > 1 else None)
-            poi_payload = {
-                "id": poi_id,
-                "name": poi_name,
-                "address": str(poi.get("address") or ""),
-                "latitude": latitude,
-                "longitude": longitude,
-                "province": poi.get("pname") or request_data.get("province") or "河南省",
-                "city": poi.get("cityname") or scope_name,
-                "district": poi.get("adname") or "",
-                "type": poi.get("type") or "",
-                "importScope": scope_name,
-                "importAdcode": scope_adcode,
-            }
-            sequence_holder[0] += 1
-            task_id = str(uuid.uuid4())
-            conn.execute(
-                """INSERT INTO scan_task (
-                       id, type, priority, province, city, district, keyword,
-                       search_region, status, attempt, max_attempts,
-                       available_at, created_at, updated_at,
-                       source_station_id, source_sequence, source_payload
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    task_id,
-                    HENAN_POI_DETAIL_TASK,
-                    int(request_data.get("priority") or 80),
-                    str(poi_payload.get("province") or "河南省"),
-                    str(poi_payload.get("city") or scope_name),
-                    str(poi_payload.get("district") or ""),
-                    poi_name,
-                    str(poi_payload.get("address") or ""),
-                    int(request_data.get("maxAttempts") or 3),
-                    now,
-                    now,
-                    now,
-                    poi_id,
-                    sequence_holder[0],
-                    json.dumps(poi_payload, ensure_ascii=False),
-                ),
+    values_batch = []
+    for poi in pois:
+        poi_id = str(poi.get("id") or "").strip()
+        poi_name = str(poi.get("name") or "").strip()
+        if not poi_id or not poi_name:
+            counters["skippedDuplicatePoi"] += 1
+            continue
+        if poi_id in seen_job_ids:
+            counters["skippedDuplicatePoi"] += 1
+            continue
+        seen_job_ids.add(poi_id)
+        if poi_id in existing_task_ids:
+            counters["skippedTask"] += 1
+            continue
+        result_key = station_source_key(poi_id, poi_name)
+        if request_data.get("skipExistingResults", True) and (
+            poi_id in existing_result_ids or result_key in existing_result_keys
+        ):
+            counters["skippedResult"] += 1
+            continue
+        location = str(poi.get("location") or "")
+        location_parts = location.split(",", 1)
+        longitude = _optional_float(location_parts[0] if location_parts else None)
+        latitude = _optional_float(location_parts[1] if len(location_parts) > 1 else None)
+        poi_payload = {
+            "id": poi_id,
+            "name": poi_name,
+            "address": str(poi.get("address") or ""),
+            "latitude": latitude,
+            "longitude": longitude,
+            "province": poi.get("pname") or request_data.get("province") or "河南省",
+            "city": poi.get("cityname") or scope_name,
+            "district": poi.get("adname") or "",
+            "type": poi.get("type") or "",
+            "importScope": scope_name,
+            "importAdcode": scope_adcode,
+        }
+        sequence_holder[0] += 1
+        task_id = str(uuid.uuid4())
+        values_batch.append(
+            _henan_task_values_from_poi(
+                task_id,
+                poi_id,
+                poi_name,
+                poi_payload,
+                request_data,
+                sequence_holder[0],
+                now,
             )
-            created_ids.append(task_id)
-            existing_task_ids.add(poi_id)
-        conn.commit()
-        if created_ids:
-            placeholders = ",".join("?" for _ in created_ids)
-            rows = conn.execute(
-                f"SELECT * FROM scan_task WHERE id IN ({placeholders})",
-                created_ids,
-            ).fetchall()
-        else:
-            rows = []
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-    _sync_henan_task_rows(rows)
+        )
+        created_ids.append(task_id)
+        existing_task_ids.add(poi_id)
+    # 直写 MySQL 权威源：不再 INSERT SQLite，也不再依赖 startup 回灌
+    _upsert_henan_task_values(values_batch)
     counters["created"] = len(created_ids)
     return counters
 
@@ -3507,18 +3549,22 @@ def _run_henan_import_job(request_data, city_scopes):
     try:
         site_exploration_bridge.ensure_result_table()
         _ensure_henan_task_table()
-        conn = mobile_conn()
+        # 去重集合与序号都改从 MySQL 权威源读取，不再依赖 SQLite 缓存
+        conn = _henan_mysql_conn()
         try:
-            rows = conn.execute(
-                "SELECT source_station_id FROM scan_task "
-                "WHERE type = ? AND source_station_id <> ''",
-                (HENAN_POI_DETAIL_TASK,),
-            ).fetchall()
-            existing_task_ids = {str(row[0]) for row in rows}
-            max_sequence = conn.execute(
-                "SELECT COALESCE(MAX(source_sequence), 0) FROM scan_task WHERE type = ?",
-                (HENAN_POI_DETAIL_TASK,),
-            ).fetchone()[0]
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT amap_poi_id FROM henan_heavy_truck_charging_station_task "
+                    "WHERE amap_poi_id <> ''"
+                )
+                existing_task_ids = {
+                    str(row["amap_poi_id"]) for row in cursor.fetchall()
+                }
+                cursor.execute(
+                    "SELECT COALESCE(MAX(station_sequence), 0) AS max_seq "
+                    "FROM henan_heavy_truck_charging_station_task"
+                )
+                max_sequence = int((cursor.fetchone() or {}).get("max_seq") or 0)
         finally:
             conn.close()
         existing_result_ids, existing_result_keys = _result_identity_sets()

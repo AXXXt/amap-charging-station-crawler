@@ -19,6 +19,7 @@ class MobileDispatchTests(unittest.TestCase):
             patch.object(api_server.site_exploration_bridge, "enabled", False),
             patch.object(api_server, "LEGACY_MYSQL_SYNC_ENABLED", False),
             patch.object(api_server, "_sync_henan_task", return_value=None),
+            patch.object(api_server, "HENAN_MYSQL_AUTHORITATIVE", False),
         ]
         for item in self.patchers:
             item.start()

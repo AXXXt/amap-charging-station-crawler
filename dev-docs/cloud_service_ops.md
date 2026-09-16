@@ -6,7 +6,7 @@
 |---|---|
 | 文档版本 | 2.0 |
 | 更新时间 | 2026-09-16 |
-| 线上基线 | 阿里云 ECS `116.62.103.230`，`/opt/amap-crawler`，`api_server.py` md5 `b7f40e32ef9d44c24faf631da4a39af7`（2026-09-16 17:00 部署：**HENAN 任务彻底脱离 SQLite**（读/写/回灌全部切断）+ 修复 claim 500 + 修复结果上报 outbox 死锁，见 §10.3 / §10.5 / §11.7 / §11.8 / §13.1） |
+| 线上基线 | 阿里云 ECS `116.62.103.230`，`/opt/amap-crawler`，`api_server.py` md5 `64e2d64594e96add66e43dca2923d4ca`（2026-09-16 17:40 部署：**HENAN 任务彻底脱离 SQLite**（读/写/回灌/手工建任务全部切断）+ 修复 claim 500 + 修复结果上报 outbox 死锁，见 §10.3 / §10.5 / §11.7 / §11.8 / §13.1） |
 | 当前领取模式 | `MOBILE_CLAIM_MODE=HENAN_ONLY` |
 | 适用范围 | 服务部署、手机接入、任务领取策略、SQLite/MySQL 数据关系、日常运维与排障 |
 
@@ -209,7 +209,7 @@ ssh root@116.62.103.230 "systemctl show amap-api -p ExecMainStartTimestamp --no-
 - **读取侧已完全弃用 SQLite（2026-09-16 收口）**：手机端接口（`claim` / `ack` / `progress` / `complete` / `fail` / `observations/batches`）在 `HENAN_MYSQL_AUTHORITATIVE=1` 时**绝不使用 SQLite 里的 HENAN 行**——**即使 MySQL 查不到也不回退**（回退正是 §11.8 那个 outbox 死锁的根源）。`_require_mobile_task()` 已加硬守卫：取到 HENAN 类型的 SQLite 行一律按 `TASK_NOT_FOUND` 处理，一次覆盖 ack/progress/complete/fail。
   > ✅ **2026-09-16 已完成收口（写侧与回灌也切断）**：`startup()` 不再回灌 SQLite（重启保持 MySQL 现状，不再回滚进度/清空租约，启动也更快）；`POST /api/v1/admin/henan-poi/import` 改为**直写 MySQL**（去重集合与 `station_sequence` 也从 MySQL 读）。至此 HENAN 任务的**读、写、回灌已全部脱离 SQLite**。
   > ⚠️ `SITE_STATION_DETAIL` / `REGION_SCAN`（站探/区域扫描）与设备表**仍以 SQLite 为源**（`station_observation` 有 486 条历史结果依赖它），不要连带清理。
-  > 遗留：`POST /api/v1/admin/tasks` 手工建任务时若指定 HENAN 类型，目前仍只写 SQLite，待收口。
+  > ✅ `POST /api/v1/admin/tasks`（手工建任务）也已收口：指定 HENAN 类型时**直写 MySQL**（`task_key` 退化为 keyword 的 SHA-256，**同 keyword 已存在则跳过**，避免误重置在采任务的租约与状态）；非 HENAN 类型仍写 SQLite。至此 **HENAN 任务在服务端已不存在任何 SQLite 写入路径**。
 
 ### 10.4 重置任务为待领取（示例）
 
@@ -411,6 +411,7 @@ systemctl daemon-reload && systemctl enable --now amap-api
 | **缺陷修复 ②** | `observations/batches` 任务解析改为权威源优先 + 幂等判定提前到租约校验之前（解开设备 outbox 死锁，见 §11.8） |
 | **缺陷修复 ③** | 彻底切断 HENAN 任务对 SQLite 的**读取回退**：观测上报不再回退；`_require_mobile_task()` 硬拒绝 HENAN 类型快照（一次覆盖 ack/progress/complete/fail）。MySQL 查不到即视为 `TASK_NOT_FOUND`，不再退回 SQLite（见 §10.3） |
 | **收口（写侧与回灌）** | `startup()` 关停 SQLite→MySQL 回灌（重启不再回滚进度、不再清空在途租约）；`admin/henan-poi/import` 直写 MySQL（去重与序号也从 MySQL 读）；`reset_tasks.py` 重写为只操作 MySQL 且时间列改用 `UTC_TIMESTAMP()`（见 §10.3 / §10.5） |
+| **收口（admin 建任务）** | `POST /api/v1/admin/tasks` 按类型分流：HENAN → MySQL 权威表（`task_key`=keyword 的 SHA-256，已存在则跳过）；其余 → SQLite。HENAN 任务在服务端再无 SQLite 写入路径 |
 
 **影响面**：手机端接口行为不变（同一套 URL 与鉴权），但**运维方式变了** —— 任务状态权威源、查询入口、重置流程都要按 §10.3 / §10.5 执行。
 

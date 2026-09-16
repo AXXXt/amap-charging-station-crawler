@@ -3203,6 +3203,76 @@ def _henan_task_values_from_poi(
     }
 
 
+def _create_henan_tasks_from_admin(items, now):
+    """把 admin 手工建的任务直写 MySQL 权威表（不再写 SQLite）。
+
+    admin 手工任务没有高德 POI 编号，`task_key` 退化为 keyword 的 SHA-256，
+    因此**同 keyword 重复提交只会命中已有任务、不会误重置它在采的租约与状态**。
+    返回本批真正新建（未被跳过）的行。
+    """
+    if not items:
+        return []
+    _ensure_henan_task_table()
+
+    conn = _henan_mysql_conn()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT COALESCE(MAX(station_sequence), 0) AS max_seq "
+                "FROM henan_heavy_truck_charging_station_task"
+            )
+            sequence = int((cursor.fetchone() or {}).get("max_seq") or 0)
+    finally:
+        conn.close()
+
+    values_batch = []
+    for item in items:
+        sequence += 1
+        values_batch.append(
+            _henan_task_values_from_poi(
+                str(uuid.uuid4()),
+                "",
+                item.keyword,
+                {
+                    "id": "",
+                    "name": str(item.keyword or ""),
+                    "address": str(item.searchRegion or ""),
+                    "latitude": None,
+                    "longitude": None,
+                    "province": str(item.province or "河南省"),
+                    "city": str(item.city or ""),
+                    "district": str(item.district or ""),
+                    "type": "",
+                    "importScope": "admin",
+                    "importAdcode": "",
+                },
+                {"priority": item.priority, "maxAttempts": item.maxAttempts},
+                sequence,
+                now,
+            )
+        )
+
+    keys = [values["task_key"] for values in values_batch]
+    existing = set()
+    if keys:
+        conn = _henan_mysql_conn()
+        try:
+            with conn.cursor() as cursor:
+                placeholders = ", ".join("%s" for _ in keys)
+                cursor.execute(
+                    f"SELECT task_key FROM henan_heavy_truck_charging_station_task "
+                    f"WHERE task_key IN ({placeholders})",
+                    tuple(keys),
+                )
+                existing = {str(row["task_key"]) for row in cursor.fetchall()}
+        finally:
+            conn.close()
+
+    fresh = [values for values in values_batch if values["task_key"] not in existing]
+    _upsert_henan_task_values(fresh)
+    return fresh
+
+
 def _sync_henan_task_rows(rows):
     """把 SQLite scan_task 行推到权威表（保留给 `HENAN_MYSQL_AUTHORITATIVE=0` 回退路径）。
 
@@ -3779,11 +3849,23 @@ def mobile_admin_create_tasks(
 ):
     _require_admin_key(x_admin_key)
     now = _mobile_utc()
+
+    # HENAN 任务不再写 SQLite：直写 MySQL 权威表；其余类型（站探/区域扫描）
+    # 仍以 SQLite 为源，保持原行为。
+    henan_items = []
+    other_items = []
+    for item in request.tasks:
+        if HENAN_MYSQL_AUTHORITATIVE and str(item.type) == HENAN_POI_DETAIL_TASK:
+            henan_items.append(item)
+        else:
+            other_items.append(item)
+    henan_values = _create_henan_tasks_from_admin(henan_items, now)
+
     conn = mobile_conn()
     created_ids = []
     try:
         conn.execute("BEGIN IMMEDIATE")
-        for item in request.tasks:
+        for item in other_items:
             task_id = str(uuid.uuid4())
             available_at = item.availableAt or now
             conn.execute(
@@ -3815,21 +3897,24 @@ def mobile_admin_create_tasks(
     finally:
         conn.close()
 
-    if not created_ids:
-        return {"created": 0, "tasks": []}
-    conn = mobile_conn()
-    placeholders = ",".join("?" for _ in created_ids)
-    rows = conn.execute(
-        f"SELECT * FROM scan_task WHERE id IN ({placeholders}) ORDER BY created_at",
-        created_ids,
-    ).fetchall()
-    conn.close()
-    for row in rows:
-        _sync_mysql_task(row)
-    return {
-        "created": len(created_ids),
-        "tasks": [_mobile_task_payload(row) for row in rows],
-    }
+    tasks = []
+    if created_ids:
+        conn = mobile_conn()
+        placeholders = ",".join("?" for _ in created_ids)
+        rows = conn.execute(
+            f"SELECT * FROM scan_task WHERE id IN ({placeholders}) ORDER BY created_at",
+            created_ids,
+        ).fetchall()
+        conn.close()
+        for row in rows:
+            _sync_mysql_task(row)
+        tasks.extend(_mobile_task_payload(row) for row in rows)
+    for values in henan_values:
+        payload = _mobile_task_payload(_henan_mysql_get_task(values["local_task_id"]))
+        if payload is not None:
+            tasks.append(payload)
+
+    return {"created": len(created_ids) + len(henan_values), "tasks": tasks}
 
 
 @app.post("/api/v1/admin/site-tasks/rerun")

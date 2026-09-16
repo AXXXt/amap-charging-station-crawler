@@ -1299,7 +1299,7 @@ def _mobile_device_payload(row):
         "deviceCode": row["device_code"],
         "name": row["name"],
         "status": row["status"],
-        "capabilities": json.loads(row["capabilities"] or "{}"),
+        "capabilities": _payload_object(row["capabilities"]),
         "appVersion": row["app_version"],
         "parserVersion": row["parser_version"],
         "targetAppVersion": row["target_app_version"],
@@ -1337,8 +1337,8 @@ def _mobile_task_payload(row):
             if "max_recovery_attempts" in row.keys()
             else HENAN_FAILED_RETRY_LIMIT
         ),
-        "progress": json.loads(row["progress"] or "{}"),
-        "resultSummary": json.loads(row["result_summary"] or "{}"),
+        "progress": _payload_object(row["progress"]),
+        "resultSummary": _payload_object(row["result_summary"]),
         "availableAt": row["available_at"],
         "createdAt": row["created_at"],
         "startedAt": row["started_at"],
@@ -1452,6 +1452,26 @@ def _require_admin_key(x_admin_key):
 
 def _mysql_configured():
     return all(DB_CONFIG.get(key) for key in ("host", "user", "database"))
+
+
+def _payload_object(value, default=None):
+    """读取 JSON 列，兼容两种行来源。
+
+    HENAN 任务在 MySQL 侧是权威源，使用 DictCursor 时 JSON 列已被
+    `_normalize_payload()` 解码为 dict/list；而 SQLite 路径仍是 JSON 字符串。
+    旧代码无条件 `json.loads()`，对 dict 会抛
+    `TypeError: the JSON object must be str, bytes or bytearray, not dict`，
+    导致 claim/ack/progress/complete/fail 整片 500。此函数对两种形态都安全。
+    """
+    fallback = {} if default is None else default
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, (str, bytes, bytearray)) and value:
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return fallback
+    return fallback
 
 
 def _normalize_payload(payload):

@@ -6,7 +6,7 @@
 |---|---|
 | 文档版本 | 2.0 |
 | 更新时间 | 2026-09-16 |
-| 线上基线 | 阿里云 ECS `116.62.103.230`，`/opt/amap-crawler`，`api_server.py` md5 `a42a00f640e00e66ca1e879c4f16576b`（2026-09-16 14:48 部署：**HENAN 任务权威源切换为 MySQL** + 修复手机端 claim 500，见 §10.3 / §11.7 / §13.1） |
+| 线上基线 | 阿里云 ECS `116.62.103.230`，`/opt/amap-crawler`，`api_server.py` md5 `8637b87b454cc90df9702144e5eceae2`（2026-09-16 15:43 部署：**HENAN 任务权威源切换为 MySQL** + 修复手机端 claim 500 + 修复结果上报 outbox 死锁，见 §10.3 / §11.7 / §11.8 / §13.1） |
 | 当前领取模式 | `MOBILE_CLAIM_MODE=HENAN_ONLY` |
 | 适用范围 | 服务部署、手机接入、任务领取策略、SQLite/MySQL 数据关系、日常运维与排障 |
 
@@ -285,6 +285,7 @@ systemctl start amap-api
 | 14:38 | 部署 `10e5eab`：HENAN 任务权威源切换为 MySQL；重启时导入 2351 条任务 | 提交 `10e5eab` |
 | 14:39–14:45 | ⚠️ 事故：手机端 claim 连续 500（`json.loads(dict)` 类型错误），采集中断 | 见 §11.7 |
 | 14:48 | 部署修复 `_payload_object()`；服务恢复、Traceback 归零 | `api_server.py.bak-20260916-1448`（md5 `a42a00f640e00e66ca1e879c4f16576b`） |
+| 15:34 / 15:43 | 修复结果上报 outbox 死锁（权威源优先 + 幂等提前），两次重启生效 | `api_server.py.bak-20260916-1540` / `-1545`（md5 `8637b87b454cc90df9702144e5eceae2`） |
 
 ## 11. 常见问题排查
 
@@ -354,6 +355,26 @@ TypeError: the JSON object must be str, bytes or bytearray, not dict
 
 **同类问题排查判据**：凡是从行对象读 JSON 列的地方（`grep -n "json.loads" api_server.py`），都要确认行来源是 SQLite（字符串）还是 MySQL DictCursor（已解码）。
 
+### 11.8 手机端报「服务端未确认 N/M 条采集结果，失败ID=station:xxx」（2026-09-16 已修）
+
+**现象**：手机端持续提示该错误，采集结果卡在本地 outbox 反复重试；服务端 `POST /api/v1/observations/batches` 返回 200，但该条出现在响应体的 `failedIds` 里。
+
+**根因（两个缺陷叠加）**：
+
+1. **任务状态读错了源**：`mobile_observations_batches` 解析任务时是"**SQLite 优先**，查不到才回退 MySQL"，而 HENAN 任务的权威源是 MySQL。SQLite 里是启动导入的旧快照（`status=PENDING`、`lease_token` 为空），于是本该按终态放行的重试被当成"活动任务"去走租约校验。注意：ack/progress/complete/fail 都是 MySQL 优先，**只有结果上报这一处写反了**。
+2. **租约校验挡在幂等之前**：原逻辑先校验租约、再判断结果是否已落库。结果明明已在 `station_observation` 里，却因租约失效被判 `TASK_LEASE_STALE`，永远走不到"重复确认"分支 → outbox 永远排不空。
+
+**触发场景**：任务已到终态、或**服务重启后 MySQL 的租约被 SQLite 快照清空**，而设备本地 outbox 里还留着该任务的结果——手机手里的 `lease_token` 已失效，结果就再也送不进去（重启的连带伤害，呼应 §10.3 的"重启副作用"）。
+
+**修复**：
+
+- 任务解析改为**权威源优先**（`HENAN_MYSQL_AUTHORITATIVE=1` 时先查 MySQL，查不到再回退 SQLite）；
+- 幂等判定**提前到租约校验之前**：`station_observation` 中已存在同 `device_id + observation_id` 的记录 → 无条件确认（计入 `duplicateIds`），不再校验任务状态与租约。
+
+**验证**：修复后该条 `received_at` 由历史值刷新为当天，手机端提示消失；`observations/batches` 全 200、无 409。
+
+**经验判据**：在 `HENAN_MYSQL_AUTHORITATIVE=1` 下，任何"读取任务状态"的代码都必须以 MySQL 为准（§10.3）。排查同类问题：`grep -n "FROM scan_task WHERE id" api_server.py`，逐个确认读取顺序是否为权威源优先。
+
 ## 12. 部署与迁移步骤（复现）
 
 ```bash
@@ -381,7 +402,8 @@ systemctl daemon-reload && systemctl enable --now amap-api
 | **新增开关** | `.env` 的 `HENAN_MYSQL_AUTHORITATIVE`（默认 `1`；设 `0` 回退旧的 SQLite 权威模式，需重启） |
 | **兜底移除** | 原"镜像写失败不影响采集"的兜底消失 → MySQL 被长事务锁住时手机端直接 500，无降级路径 |
 | **附带风险（待评估）** | 重启会用 SQLite 快照覆盖 MySQL 运行期状态，即"重启回滚进度"。建议后续改为"只 INSERT 缺失任务、不覆盖已有任务的 status" |
-| **缺陷修复** | `_mobile_task_payload()` 的 `json.loads(dict)` 类型错误（导致 claim/ack/progress/complete/fail 全片 500），改为 `_payload_object()` 兼容两种行来源（见 §11.7） |
+| **缺陷修复 ①** | `_mobile_task_payload()` 的 `json.loads(dict)` 类型错误（导致 claim/ack/progress/complete/fail 全片 500），改为 `_payload_object()` 兼容两种行来源（见 §11.7） |
+| **缺陷修复 ②** | `observations/batches` 任务解析改为权威源优先 + 幂等判定提前到租约校验之前（解开设备 outbox 死锁，见 §11.8） |
 
 **影响面**：手机端接口行为不变（同一套 URL 与鉴权），但**运维方式变了** —— 任务状态权威源、查询入口、重置流程都要按 §10.3 / §10.5 执行。
 

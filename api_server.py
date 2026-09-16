@@ -2583,30 +2583,50 @@ def mobile_upload_observations(
             task_id = str(item.get("taskId", "") or "")
             if not task_id:
                 task_id = str(device["current_task_id"] or "")
+            # Idempotency first: a result already stored for this device must be
+            # acknowledged regardless of task status or lease. Otherwise a
+            # device whose lease went stale (e.g. a restart re-imported the
+            # SQLite snapshot and cleared lease_token) can never drain its local
+            # outbox and keeps reporting "服务端未确认 N/M 条采集结果".
+            existing = None
+            if observation_id:
+                existing = conn.execute(
+                    """SELECT * FROM station_observation
+                       WHERE device_id = ? AND observation_id = ?""",
+                    (device["id"], observation_id),
+                ).fetchone()
+
             source_task = None
             if task_id:
                 if task_id not in task_cache:
-                    task_cache[task_id] = conn.execute(
-                        "SELECT * FROM scan_task WHERE id = ?",
-                        (task_id,),
-                    ).fetchone()
-                source_task = task_cache[task_id]
-                if source_task is None and HENAN_MYSQL_AUTHORITATIVE:
-                    source_task = _henan_mysql_get_task(task_id)
+                    # HENAN tasks are authoritative in MySQL; the SQLite row is
+                    # only a startup import snapshot whose lease_token is empty.
+                    # Authoritative source must therefore be probed first.
+                    source_task = None
+                    if HENAN_MYSQL_AUTHORITATIVE:
+                        source_task = _henan_mysql_get_task(task_id)
+                    if source_task is None:
+                        source_task = conn.execute(
+                            "SELECT * FROM scan_task WHERE id = ?",
+                            (task_id,),
+                        ).fetchone()
                     task_cache[task_id] = source_task
-                # Active/requeued tasks require the current lease. Terminal
-                # task retries remain idempotent so an outbox can drain after
-                # a successful status update.
-                if source_task is None:
-                    failed_ids.append(observation_id)
-                    errors.append(f"{observation_id}: TASK_NOT_FOUND")
-                    continue
-                if source_task["status"] not in {"COMPLETED", "FAILED", "CANCELLED"} and not _task_lease_is_active(
-                    source_task, device["id"], request.leaseToken, now_value
-                ):
-                    failed_ids.append(observation_id)
-                    errors.append(f"{observation_id}: TASK_LEASE_STALE")
-                    continue
+                source_task = task_cache[task_id]
+                # New results for active/requeued tasks require the current
+                # lease; terminal tasks stay idempotent so an outbox can drain
+                # after a successful status update. Results that are already
+                # stored (existing is not None) skip both checks below.
+                if existing is None:
+                    if source_task is None:
+                        failed_ids.append(observation_id)
+                        errors.append(f"{observation_id}: TASK_NOT_FOUND")
+                        continue
+                    if source_task["status"] not in {"COMPLETED", "FAILED", "CANCELLED"} and not _task_lease_is_active(
+                        source_task, device["id"], request.leaseToken, now_value
+                    ):
+                        failed_ids.append(observation_id)
+                        errors.append(f"{observation_id}: TASK_LEASE_STALE")
+                        continue
             payload = item.get("payload", {})
             payload = _normalize_payload(payload)
             if not observation_id or not station_id:
@@ -2615,11 +2635,6 @@ def mobile_upload_observations(
                 errors.append("observationId and stationId are required")
                 continue
             captured_at = str(item.get("capturedAt", now))
-            existing = conn.execute(
-                """SELECT * FROM station_observation
-                   WHERE device_id = ? AND observation_id = ?""",
-                (device["id"], observation_id),
-            ).fetchone()
             existing_for_task_station = None
             if task_id:
                 existing_for_task_station = conn.execute(

@@ -6,7 +6,7 @@
 |---|---|
 | 文档版本 | 2.0 |
 | 更新时间 | 2026-09-16 |
-| 线上基线 | 阿里云 ECS `116.62.103.230`，`/opt/amap-crawler`，`api_server.py` md5 `8637b87b454cc90df9702144e5eceae2`（2026-09-16 15:43 部署：**HENAN 任务权威源切换为 MySQL** + 修复手机端 claim 500 + 修复结果上报 outbox 死锁，见 §10.3 / §11.7 / §11.8 / §13.1） |
+| 线上基线 | 阿里云 ECS `116.62.103.230`，`/opt/amap-crawler`，`api_server.py` md5 `6b7b48176996fdd2db26e72d20a3ba85`（2026-09-16 15:56 部署：**HENAN 任务权威源切换为 MySQL** + 修复手机端 claim 500 + 修复结果上报 outbox 死锁 + 切断 HENAN 的 SQLite 读取回退，见 §10.3 / §11.7 / §11.8 / §13.1） |
 | 当前领取模式 | `MOBILE_CLAIM_MODE=HENAN_ONLY` |
 | 适用范围 | 服务部署、手机接入、任务领取策略、SQLite/MySQL 数据关系、日常运维与排障 |
 
@@ -206,6 +206,9 @@ ssh root@116.62.103.230 "systemctl show amap-api -p ExecMainStartTimestamp --no-
 - `_sync_henan_task()` 已改为空实现（`return None`）：**旧的"镜像写失败不影响采集"兜底已不存在**，MySQL 被长事务锁住时手机端请求会直接 500（见 §11.7）。
 - **重启副作用**：启动导入会用 SQLite 快照覆盖 MySQL 运行期状态（`status`/`attempt` 等），即"重启把进度刷回去"。正在大批量采集时不要重启。
 - **回退方式**：`.env` 设 `HENAN_MYSQL_AUTHORITATIVE=0` 并重启，即恢复旧的"SQLite 权威"行为。
+- **读取侧已完全弃用 SQLite（2026-09-16 收口）**：手机端接口（`claim` / `ack` / `progress` / `complete` / `fail` / `observations/batches`）在 `HENAN_MYSQL_AUTHORITATIVE=1` 时**绝不使用 SQLite 里的 HENAN 行**——**即使 MySQL 查不到也不回退**（回退正是 §11.8 那个 outbox 死锁的根源）。`_require_mobile_task()` 已加硬守卫：取到 HENAN 类型的 SQLite 行一律按 `TASK_NOT_FOUND` 处理，一次覆盖 ack/progress/complete/fail。
+  > ⚠️ 注意：`SITE_STATION_DETAIL` / `REGION_SCAN`（站探/区域扫描）**仍以 SQLite 为源**，`station_observation` 里已有 486 条非 HENAN 结果，不要连带删除它们的 SQLite 通道。
+  > 仍未切断的 SQLite 依赖（**如需彻底抛弃 SQLite 任务线，这两处必须一起改**）：① `startup()` 的 SQLite→MySQL 全量导入（重启会用旧快照覆盖 MySQL 状态、清空在途 lease，即"重启回滚进度"）；② `POST /api/v1/admin/henan-poi/import` 目前仍写 SQLite，切断 ① 之前必须先让它直写 MySQL，否则新任务进不来。
 
 ### 10.4 重置任务为待领取（示例）
 
@@ -404,6 +407,7 @@ systemctl daemon-reload && systemctl enable --now amap-api
 | **附带风险（待评估）** | 重启会用 SQLite 快照覆盖 MySQL 运行期状态，即"重启回滚进度"。建议后续改为"只 INSERT 缺失任务、不覆盖已有任务的 status" |
 | **缺陷修复 ①** | `_mobile_task_payload()` 的 `json.loads(dict)` 类型错误（导致 claim/ack/progress/complete/fail 全片 500），改为 `_payload_object()` 兼容两种行来源（见 §11.7） |
 | **缺陷修复 ②** | `observations/batches` 任务解析改为权威源优先 + 幂等判定提前到租约校验之前（解开设备 outbox 死锁，见 §11.8） |
+| **缺陷修复 ③** | 彻底切断 HENAN 任务对 SQLite 的**读取回退**：观测上报不再回退；`_require_mobile_task()` 硬拒绝 HENAN 类型快照（一次覆盖 ack/progress/complete/fail）。MySQL 查不到即视为 `TASK_NOT_FOUND`，不再退回 SQLite（见 §10.3） |
 
 **影响面**：手机端接口行为不变（同一套 URL 与鉴权），但**运维方式变了** —— 任务状态权威源、查询入口、重置流程都要按 §10.3 / §10.5 执行。
 

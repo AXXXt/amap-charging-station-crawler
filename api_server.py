@@ -1415,6 +1415,16 @@ def _require_mobile_task(conn, device_id, task_id, lease_token):
         (task_id,),
     ).fetchone()
 
+    # HENAN 任务的权威源是 MySQL，SQLite 里只剩启动导入的过期快照。
+    # 绝不允许拿快照校验租约：任务在 MySQL 侧一旦变更（完成/重派/回收），
+    # 手机端就会拿到虚假的 409，结果永远推不上去。
+    if task is not None and HENAN_MYSQL_AUTHORITATIVE and task["type"] == HENAN_POI_DETAIL_TASK:
+        try:
+            conn.rollback()
+        finally:
+            conn.close()
+        raise HTTPException(404, detail="TASK_NOT_FOUND")
+
     def reject(status_code, detail):
         # Endpoint callers intentionally do not need a second finally block
         # just for validation failures; close this short-lived connection here.
@@ -2604,8 +2614,19 @@ def mobile_upload_observations(
                     # Authoritative source must therefore be probed first.
                     source_task = None
                     if HENAN_MYSQL_AUTHORITATIVE:
+                        # HENAN 任务的权威源只有 MySQL。SQLite 里只剩过期快照，
+                        # 绝不回退使用：快照的 status=PENDING/lease_token 为空
+                        # 会让已完成任务的重试被判 TASK_LEASE_STALE，卡死 outbox。
                         source_task = _henan_mysql_get_task(task_id)
-                    if source_task is None:
+                        if source_task is None:
+                            fallback = conn.execute(
+                                "SELECT * FROM scan_task WHERE id = ?",
+                                (task_id,),
+                            ).fetchone()
+                            # 仅非 HENAN 任务（站探/区域扫描）仍以 SQLite 为源
+                            if fallback is not None and fallback["type"] != HENAN_POI_DETAIL_TASK:
+                                source_task = fallback
+                    else:
                         source_task = conn.execute(
                             "SELECT * FROM scan_task WHERE id = ?",
                             (task_id,),

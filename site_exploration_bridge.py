@@ -6,6 +6,7 @@ import html
 import json
 import os
 import re
+import sys
 import unicodedata
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -20,6 +21,8 @@ HENAN_POI_TASK_TYPE = "HENAN_POI_DETAIL"
 RESULT_TASK_TYPES = {TASK_TYPE, HENAN_POI_TASK_TYPE}
 TERMINAL_STATUSES = {"COMPLETED", "FAILED", "CANCELLED"}
 ACTIVE_STATUSES = {"PENDING", "LEASED", "RUNNING"}
+IDLE_PILE_STATUSES = {"空闲", "空"}
+BUSY_PILE_STATUSES = {"充电中", "使用中", "占用", "已满"}
 
 
 def parse_mysql_database_url(value: str) -> Dict[str, Any]:
@@ -128,6 +131,55 @@ def _as_int(value: Any, default: int) -> int:
         return default
 
 
+def _pile_snapshot_summary(payload: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
+    """按逐桩状态统计快充、超充、慢充的空闲/忙碌/未知数量。"""
+    summary = {
+        "fast": {"idle": 0, "busy": 0, "total": 0},
+        "super": {"idle": 0, "busy": 0, "total": 0},
+        "slow": {"idle": 0, "busy": 0, "total": 0},
+    }
+    overall = {"idle": 0, "busy": 0, "unknown": 0, "total": 0}
+    piles = payload.get("chargingPiles")
+    if not isinstance(piles, list):
+        piles = []
+
+    if piles:
+        for pile in piles:
+            if not isinstance(pile, dict):
+                continue
+            charging_type = str(pile.get("chargingType") or "")
+            if "超" in charging_type:
+                group = "super"
+            elif "慢" in charging_type:
+                group = "slow"
+            else:
+                group = "fast"
+            status = str(pile.get("status") or "").strip()
+            summary[group]["total"] += 1
+            overall["total"] += 1
+            if status in IDLE_PILE_STATUSES:
+                summary[group]["idle"] += 1
+                overall["idle"] += 1
+            elif status in BUSY_PILE_STATUSES:
+                summary[group]["busy"] += 1
+                overall["busy"] += 1
+            else:
+                overall["unknown"] += 1
+        return summary, overall
+
+    # 没有逐桩明细时退化为顶部汇总数量；忙碌数按总数减去可用数计算。
+    for group, prefix in (("fast", "fast"), ("super", "super"), ("slow", "slow")):
+        total = max(0, _as_int(payload.get(f"{prefix}Total"), 0))
+        idle = max(0, _as_int(payload.get(f"{prefix}Available"), 0))
+        busy = max(0, total - idle)
+        summary[group] = {"idle": idle, "busy": busy, "total": total}
+        overall["idle"] += idle
+        overall["busy"] += busy
+        overall["total"] += total
+    overall["unknown"] = max(0, overall["total"] - overall["idle"] - overall["busy"])
+    return summary, overall
+
+
 def _station_key(source_site_id: str, station: Dict[str, Any], index: int) -> Tuple[str, str]:
     """Return a stable *global* identity for one charging station.
 
@@ -172,6 +224,13 @@ class SiteExplorationBridge:
                 "site_exploration_charging_station_result",
             ),
             "site exploration result table",
+        )
+        self.dynamic_history_table = safe_identifier(
+            os.getenv(
+                "SITE_EXPLORATION_DYNAMIC_HISTORY_TABLE",
+                "site_exploration_charging_station_dynamic_history",
+            ),
+            "site exploration dynamic history table",
         )
         self.priority = int(os.getenv("SITE_EXPLORATION_TASK_PRIORITY", "1000"))
         self.max_attempts = int(os.getenv("SITE_EXPLORATION_TASK_MAX_ATTEMPTS", "3"))
@@ -273,6 +332,63 @@ class SiteExplorationBridge:
                     )
             conn.commit()
             self._result_column_meta = self._result_column_metadata(conn, table)
+        finally:
+            conn.close()
+        self._ensure_dynamic_history_table()
+
+    def _ensure_dynamic_history_table(self) -> None:
+        if not self.enabled:
+            return
+        table = quote_identifier(self.dynamic_history_table, "dynamic history table")
+        conn = self.mysql_connect()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {table} (
+                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+                        snapshot_key CHAR(64) COLLATE utf8mb4_general_ci NOT NULL COMMENT '站点source_key+captured_at生成的快照稳定键',
+                        source_key CHAR(64) COLLATE utf8mb4_general_ci NOT NULL COMMENT '站点稳定唯一键',
+                        source_station_id VARCHAR(128) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '高德POI编号',
+                        observation_id VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '采集观测标识',
+                        task_id VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '任务编号',
+                        device_id VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '采集设备编号',
+                        collection_source VARCHAR(32) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '任务来源',
+                        matched_station_name VARCHAR(512) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '站点名称',
+                        captured_at INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '采集时间，Unix秒',
+                        received_at INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '服务端接收时间，Unix秒',
+                        current_price VARCHAR(128) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '采集时的当前电价',
+                        fast_idle INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '快充空闲数量',
+                        fast_busy INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '快充忙碌数量',
+                        fast_total INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '快充总数量',
+                        super_idle INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '超充空闲数量',
+                        super_busy INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '超充忙碌数量',
+                        super_total INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '超充总数量',
+                        slow_idle INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '慢充空闲数量',
+                        slow_busy INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '慢充忙碌数量',
+                        slow_total INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '慢充总数量',
+                        pile_idle INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '全部充电桩空闲数量',
+                        pile_busy INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '全部充电桩忙碌数量',
+                        pile_unknown INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '状态未知的充电桩数量',
+                        pile_total INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '充电桩总数量',
+                        price_json JSON NULL COMMENT '分时电价、服务费、当前价格等动态价格数据',
+                        availability_json JSON NULL COMMENT '快充/超充/慢充空闲、忙碌、总数汇总',
+                        pile_json JSON NULL COMMENT '每根充电桩的编号、类型、功率、电流、电压、状态列表',
+                        snapshot_hash CHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '' COMMENT '动态数据内容哈希',
+                        is_changed TINYINT(1) NOT NULL DEFAULT 1 COMMENT '相对该站点上一条快照是否发生变化',
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '入库时间',
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_dynamic_snapshot (snapshot_key),
+                        KEY idx_dynamic_station_time (source_key, captured_at),
+                        KEY idx_dynamic_station_changed (source_key, is_changed, captured_at),
+                        KEY idx_dynamic_captured_at (captured_at),
+                        KEY idx_dynamic_task (task_id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                      COLLATE=utf8mb4_general_ci
+                      COMMENT='站点动态信息历史快照表，用于电价和充电桩状态趋势分析'
+                    """
+                )
+            conn.commit()
         finally:
             conn.close()
 
@@ -459,6 +575,110 @@ class SiteExplorationBridge:
             "sourcePayload": source_payload,
         }
 
+    def _append_dynamic_snapshot(
+        self,
+        conn,
+        source_key: str,
+        source_station_id: str,
+        observation_id: str,
+        task_id: str,
+        device_id: str,
+        collection_source: str,
+        matched_station_name: str,
+        payload: Dict[str, Any],
+        captured_at: Any,
+        received_at: Any,
+    ) -> None:
+        """Append one dynamic snapshot without affecting the latest-result upsert."""
+        captured_ts = unix_timestamp(captured_at or payload.get("collectedAt")) or int(
+            datetime.now(timezone.utc).timestamp()
+        )
+        received_ts = unix_timestamp(received_at) or captured_ts
+        snapshot_key = hashlib.sha256(
+            f"{source_key}:{captured_ts}".encode("utf-8")
+        ).hexdigest()
+        summary, overall = _pile_snapshot_summary(payload)
+        price_json = {
+            "currentPrice": str(payload.get("currentPrice") or ""),
+            "priceTrendTitle": str(payload.get("priceTrendTitle") or ""),
+            "fastPrices": payload.get("fastPrices") or [],
+            "slowPrices": payload.get("slowPrices") or [],
+        }
+        pile_json = payload.get("chargingPiles") or []
+        if not isinstance(pile_json, list):
+            pile_json = []
+        availability_json = {
+            "fast": summary["fast"],
+            "super": summary["super"],
+            "slow": summary["slow"],
+            "pile": overall,
+        }
+        snapshot_hash = hashlib.sha256(
+            json.dumps(
+                {
+                    "price": price_json,
+                    "availability": availability_json,
+                    "piles": pile_json,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        table = quote_identifier(self.dynamic_history_table, "dynamic history table")
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"SELECT snapshot_hash FROM {table} "
+                "WHERE source_key=%s AND snapshot_key<>%s "
+                "ORDER BY captured_at DESC, id DESC LIMIT 1",
+                (source_key, snapshot_key),
+            )
+            previous = cursor.fetchone()
+            is_changed = 1 if previous is None or str(previous[0] or "") != snapshot_hash else 0
+            values = {
+                "snapshot_key": snapshot_key,
+                "source_key": source_key,
+                "source_station_id": str(source_station_id or ""),
+                "observation_id": str(observation_id or ""),
+                "task_id": str(task_id or ""),
+                "device_id": str(device_id or ""),
+                "collection_source": str(collection_source or ""),
+                "matched_station_name": _fit_text(matched_station_name, 512),
+                "captured_at": captured_ts,
+                "received_at": received_ts,
+                "current_price": _fit_text(str(payload.get("currentPrice") or ""), 128),
+                "fast_idle": summary["fast"]["idle"],
+                "fast_busy": summary["fast"]["busy"],
+                "fast_total": summary["fast"]["total"],
+                "super_idle": summary["super"]["idle"],
+                "super_busy": summary["super"]["busy"],
+                "super_total": summary["super"]["total"],
+                "slow_idle": summary["slow"]["idle"],
+                "slow_busy": summary["slow"]["busy"],
+                "slow_total": summary["slow"]["total"],
+                "pile_idle": overall["idle"],
+                "pile_busy": overall["busy"],
+                "pile_unknown": overall["unknown"],
+                "pile_total": overall["total"],
+                "price_json": json.dumps(price_json, ensure_ascii=False),
+                "availability_json": json.dumps(availability_json, ensure_ascii=False),
+                "pile_json": json.dumps(pile_json, ensure_ascii=False),
+                "snapshot_hash": snapshot_hash,
+                "is_changed": is_changed,
+            }
+            columns = list(values)
+            updates = ", ".join(
+                f"{column}=VALUES({column})"
+                for column in columns
+                if column != "snapshot_key"
+            )
+            cursor.execute(
+                f"INSERT INTO {table} ({', '.join(columns)}) "
+                f"VALUES ({', '.join('%s' for _ in columns)}) "
+                f"ON DUPLICATE KEY UPDATE {updates}",
+                tuple(values[column] for column in columns),
+            )
+
     def upsert_result(
         self,
         task: Any,
@@ -575,6 +795,24 @@ class SiteExplorationBridge:
                     f"ON DUPLICATE KEY UPDATE {', '.join(updates)}",
                     tuple(values[column] for column in columns),
                 )
+            try:
+                self._append_dynamic_snapshot(
+                    conn=conn,
+                    source_key=source_key,
+                    source_station_id=source_station_id,
+                    observation_id=str(observation_id or ""),
+                    task_id=str(task["id"] or ""),
+                    device_id=str(device_id or ""),
+                    collection_source=collection_source,
+                    matched_station_name=matched_name,
+                    payload=payload,
+                    captured_at=captured_at or payload.get("collectedAt"),
+                    received_at=received_at,
+                )
+            except Exception as error:
+                # The dynamic history table must not break the existing latest-result
+                # upsert path. The next successful upload can retry the snapshot.
+                print(f"  Dynamic history snapshot skipped: {error}", file=sys.stderr)
             conn.commit()
         finally:
             conn.close()

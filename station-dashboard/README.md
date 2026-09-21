@@ -40,19 +40,19 @@ npm run dev
 
 ## 服务器部署
 
-推荐目录为 `/opt/station-dashboard`。服务器需要安装 Go 1.22+、Node.js 20+、Nginx。
+推荐目录为 `/opt/amap-crawler-monitor`。服务器需要安装 Go 1.22+、Node.js 20+、Nginx。
 
 ```bash
-sudo mkdir -p /opt/station-dashboard
-sudo chown -R "$USER":"$USER" /opt/station-dashboard
-git clone https://github.com/AXXXt/amap-charging-station-crawler.git /opt/station-dashboard
-cd /opt/station-dashboard/station-dashboard
+sudo mkdir -p /opt/amap-crawler-monitor
+sudo chown -R "$USER":"$USER" /opt/amap-crawler-monitor
+git clone https://github.com/AXXXt/amap-charging-station-crawler.git /opt/amap-crawler-monitor
+cd /opt/amap-crawler-monitor/station-dashboard
 ```
 
 ### 1. 构建后端
 
 ```bash
-cd /opt/station-dashboard/station-dashboard/backend
+cd /opt/amap-crawler-monitor/station-dashboard/backend
 go mod download
 go build -o station-dashboard .
 cp ../deploy/backend.env.example .env
@@ -72,7 +72,7 @@ sudo systemctl status station-dashboard
 ### 2. 构建前端
 
 ```bash
-cd /opt/station-dashboard/station-dashboard/frontend
+cd /opt/amap-crawler-monitor/station-dashboard/frontend
 npm ci
 npm run build
 ```

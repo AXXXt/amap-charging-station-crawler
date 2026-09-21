@@ -142,6 +142,13 @@
             android:enabled="false"
             android:text="开始采集河南省重卡站点" />
 
+        <Button
+            android:id="@+id/reset_henan_tasks_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="重置任务表" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

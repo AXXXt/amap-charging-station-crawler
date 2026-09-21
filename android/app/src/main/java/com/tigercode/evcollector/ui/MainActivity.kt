@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.tigercode.evcollector.AppPreferences
@@ -19,6 +20,7 @@ import com.tigercode.evcollector.data.CollectorRepository
 import com.tigercode.evcollector.databinding.ActivityMainBinding
 import com.tigercode.evcollector.network.RetrofitClient
 import com.tigercode.evcollector.network.HenanPoiImportRequest
+import com.tigercode.evcollector.network.HenanTaskResetRequest
 import com.tigercode.evcollector.engine.CollectionEngine
 import com.tigercode.evcollector.engine.CollectionListener
 import com.tigercode.evcollector.engine.CollectionState
@@ -78,6 +80,7 @@ class MainActivity : AppCompatActivity() {
         binding.syncNowButton.setOnClickListener { syncNow() }
         binding.importHenanPoiButton.setOnClickListener { importHenanPois() }
         binding.startHenanCollectButton.setOnClickListener { startHenanCollect() }
+        binding.resetHenanTasksButton.setOnClickListener { confirmResetHenanTasks() }
         binding.localScanButton.setOnClickListener { startLocalScan() }
         binding.stopRunButton.setOnClickListener { stopRunning() }
         binding.clearLogButton.setOnClickListener { clearLogs() }
@@ -259,6 +262,53 @@ class MainActivity : AppCompatActivity() {
         AppPreferences.appendLog(this, "已启动河南省重卡站点采集调度")
         ChargingAccessibilityService.current()?.launchAmap()
         refreshUi()
+    }
+
+    private fun confirmResetHenanTasks() {
+        AlertDialog.Builder(this)
+            .setTitle("确认重置任务表")
+            .setMessage(
+                "将把全部河南任务重置为待领取，并清空租约、尝试次数和进度。\n\n" +
+                    "结果表和快照表不会删除。建议先停止其他正在采集的手机。"
+            )
+            .setNegativeButton("取消", null)
+            .setPositiveButton("确认重置") { _, _ ->
+                if (AppPreferences.isScanning(this)) stopCollector()
+                resetHenanTasks()
+            }
+            .show()
+    }
+
+    private fun resetHenanTasks() {
+        if (!saveConfig()) return
+        binding.resetHenanTasksButton.isEnabled = false
+        AppPreferences.setRemoteStatus(this, "正在重置任务表")
+        refreshUi()
+        lifecycleScope.launch {
+            try {
+                val api = RetrofitClient.serverApi(
+                    AppPreferences.serverUrl(this@MainActivity),
+                    this@MainActivity,
+                )
+                val response = api.resetHenanTasks(
+                    adminKey = "dev-admin-key",
+                    body = HenanTaskResetRequest(),
+                )
+                val pending = response.statusCounts["PENDING"] ?: response.total
+                val message = "任务表已重置：共 ${response.total} 条，待领取 $pending 条"
+                AppPreferences.setRemoteStatus(this@MainActivity, message)
+                AppPreferences.appendLog(this@MainActivity, message)
+                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+            } catch (error: Exception) {
+                val message = error.message ?: error.javaClass.simpleName
+                AppPreferences.setRemoteStatus(this@MainActivity, "任务表重置失败", message)
+                AppPreferences.appendLog(this@MainActivity, "任务表重置失败: $message")
+                Toast.makeText(this@MainActivity, "重置失败: $message", Toast.LENGTH_LONG).show()
+            } finally {
+                binding.resetHenanTasksButton.isEnabled = true
+                refreshUi()
+            }
+        }
     }
 
     private fun startLocalScan() {

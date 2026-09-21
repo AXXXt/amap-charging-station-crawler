@@ -119,6 +119,16 @@ data class HenanPoiImportResponse(
     @SerializedName("failedCities") val failedCities: List<String> = emptyList(),
 )
 
+data class HenanTaskResetRequest(
+    @SerializedName("confirmation") val confirmation: String = "RESET_ALL_HENAN_TASKS",
+)
+
+data class HenanTaskResetResponse(
+    @SerializedName("total") val total: Int = 0,
+    @SerializedName("reset") val reset: Int = 0,
+    @SerializedName("statusCounts") val statusCounts: Map<String, Int> = emptyMap(),
+)
+
 interface ServerApi {
     @POST("api/v1/devices/register")
     suspend fun register(@Body body: DeviceRegisterRequest): DeviceRegisterResponse
@@ -154,6 +164,12 @@ interface ServerApi {
     suspend fun henanPoiImportStatus(
         @Header("x-admin-key") adminKey: String,
     ): HenanPoiImportResponse
+
+    @POST("api/v1/admin/henan-tasks/reset")
+    suspend fun resetHenanTasks(
+        @Header("x-admin-key") adminKey: String,
+        @Body body: HenanTaskResetRequest,
+    ): HenanTaskResetResponse
 
     @GET("health")
     suspend fun health(): Map<String, String>

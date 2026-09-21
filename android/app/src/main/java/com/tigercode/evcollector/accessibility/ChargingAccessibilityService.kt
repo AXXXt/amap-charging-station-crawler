@@ -859,11 +859,104 @@ class ChargingAccessibilityService : AccessibilityService() {
         )
     }
 
-    fun launchAmap() {
-        val launchIntent = packageManager.getLaunchIntentForPackage(AMAP_PACKAGE) ?: return
-        startActivity(
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
+    fun launchAmap(): Boolean {
+        val label = runCatching {
+            val info = packageManager.getApplicationInfo(AMAP_PACKAGE, 0)
+            packageManager.getApplicationLabel(info).toString()
+        }.getOrDefault("高德地图")
+        return launchApp(AMAP_PACKAGE, label)
+    }
+
+    fun launchCollectorApp(): Boolean {
+        val label = runCatching {
+            val info = packageManager.getApplicationInfo(packageName, 0)
+            packageManager.getApplicationLabel(info).toString()
+        }.getOrDefault("采集终端")
+        return launchApp(packageName, label)
+    }
+
+    private fun launchApp(targetPackage: String, label: String): Boolean {
+        val launchIntent = packageManager.getLaunchIntentForPackage(targetPackage)
+        if (launchIntent != null) {
+            try {
+                startActivity(
+                    launchIntent.addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    )
+                )
+                if (waitForForegroundPackage(targetPackage, 1_200L)) return true
+            } catch (_: Exception) {
+                // Android 15 may reject a background activity launch; use recents instead.
+            }
+        }
+        return launchAppFromRecents(targetPackage, label)
+    }
+
+    private fun launchAppFromRecents(targetPackage: String, label: String): Boolean {
+        if (!performGlobalAction(GLOBAL_ACTION_RECENTS)) return false
+        val deadline = SystemClock.uptimeMillis() + 3_000L
+        while (SystemClock.uptimeMillis() < deadline) {
+            val root = rootInActiveWindow
+            if (root != null) {
+                val clicked = clickRecentAppNode(root, targetPackage, label)
+                root.recycle()
+                if (clicked && waitForForegroundPackage(targetPackage, 2_000L)) return true
+            }
+            SystemClock.sleep(180L)
+        }
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        return false
+    }
+
+    private fun clickRecentAppNode(
+        root: AccessibilityNodeInfo,
+        targetPackage: String,
+        label: String,
+    ): Boolean {
+        val nodePackage = root.packageName?.toString().orEmpty()
+        val nodeText = root.text?.toString().orEmpty()
+        val nodeDescription = root.contentDescription?.toString().orEmpty()
+        val matches = nodePackage == targetPackage ||
+            nodeText == label || nodeDescription == label ||
+            nodeText.contains(label) || nodeDescription.contains(label)
+        if (matches) {
+            var candidate: AccessibilityNodeInfo? = root
+            repeat(4) {
+                val current = candidate ?: return@repeat
+                if (current.isClickable && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    return true
+                }
+                val bounds = Rect()
+                current.getBoundsInScreen(bounds)
+                if (!bounds.isEmpty && clickAt(bounds.centerX(), bounds.centerY())) {
+                    return true
+                }
+                candidate = current.parent
+            }
+        }
+        for (index in 0 until root.childCount) {
+            val child = root.getChild(index) ?: continue
+            try {
+                if (clickRecentAppNode(child, targetPackage, label)) return true
+            } finally {
+                child.recycle()
+            }
+        }
+        return false
+    }
+
+    private fun waitForForegroundPackage(targetPackage: String, timeoutMs: Long): Boolean {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (SystemClock.uptimeMillis() < deadline) {
+            val root = rootInActiveWindow
+            val packageName = root?.packageName?.toString()
+            root?.recycle()
+            if (packageName == targetPackage) return true
+            SystemClock.sleep(100L)
+        }
+        return false
     }
 
     fun scrollForward(): Boolean = gestureScroll(0.83f, 0.27f, 420)

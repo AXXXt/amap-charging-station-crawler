@@ -48,9 +48,17 @@ object ChargingPileDialogParser {
         }
         walk(root)
 
-        if (bestByDevice.isEmpty()) {
-            parseFlatCards(allValues).forEach { pile ->
-                bestByDevice[pile.deviceId] = pile
+        // Always merge the flat-text fallback. AMap can split the last card
+        // across several accessibility nodes at the bottom of the dialog, so
+        // the per-node walk may find N-1 piles while the remaining card is
+        // still present in the flattened value list.
+        parseFlatCards(allValues).forEach { pile ->
+            if (pile.deviceId.isBlank()) return@forEach
+            val current = bestByDevice[pile.deviceId]
+            bestByDevice[pile.deviceId] = if (current == null) {
+                pile
+            } else {
+                mergePile(current, pile)
             }
         }
 

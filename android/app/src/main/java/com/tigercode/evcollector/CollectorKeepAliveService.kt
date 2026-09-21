@@ -116,13 +116,40 @@ class CollectorKeepAliveService : Service() {
                 }
                 // 在领取下一条远程任务前完成批次冷却，避免占着租约等待。
                 val cooldownEndAt = engine.batchCooldownEndAt()
-                if (cooldownEndAt > System.currentTimeMillis()) {
+                val cooldownActive = cooldownEndAt > System.currentTimeMillis()
+                if (cooldownActive) {
                     CooldownAlarmScheduler.schedule(this@CollectorKeepAliveService, cooldownEndAt)
+                    if (shouldKeepCollectorForegroundDuringCooldown()) {
+                        val switched = ChargingAccessibilityService.current()
+                            ?.launchCollectorApp() == true
+                        AppPreferences.appendLog(
+                            this@CollectorKeepAliveService,
+                            if (switched) {
+                                "批次休息开始，已切换至采集 App 等待"
+                            } else {
+                                "批次休息开始，切换采集 App 失败"
+                            },
+                        )
+                        updateNotification("批次休息中，采集 App 保持前台")
+                    }
                 } else {
                     CooldownAlarmScheduler.cancel(this@CollectorKeepAliveService)
                 }
                 engine.awaitReadyForNextTask()
                 CooldownAlarmScheduler.cancel(this@CollectorKeepAliveService)
+                if (cooldownActive && shouldKeepCollectorForegroundDuringCooldown()) {
+                    val switchedBack = ChargingAccessibilityService.current()
+                        ?.launchAmap() == true
+                    AppPreferences.appendLog(
+                        this@CollectorKeepAliveService,
+                        if (switchedBack) {
+                            "批次休息结束，已切换回高德地图"
+                        } else {
+                            "批次休息结束，切换回高德地图失败"
+                        },
+                    )
+                    updateNotification("批次休息结束，正在返回高德采集")
+                }
                 if (!isActive || !AppPreferences.isScanning(this@CollectorKeepAliveService)) break
                 updateNotification("正在同步服务端")
                 // 有任务时快速进入下一轮；没有任务时保留较长轮询间隔，降低服务端请求频率。
@@ -193,6 +220,9 @@ class CollectorKeepAliveService : Service() {
             acquire(WAKE_LOCK_TIMEOUT_MS)
         }
     }
+
+    private fun shouldKeepCollectorForegroundDuringCooldown(): Boolean =
+        Build.MODEL.contains("23013RK75C", ignoreCase = true)
 
     private fun releaseKeepAliveLock() {
         wakeLock?.takeIf { it.isHeld }?.release()

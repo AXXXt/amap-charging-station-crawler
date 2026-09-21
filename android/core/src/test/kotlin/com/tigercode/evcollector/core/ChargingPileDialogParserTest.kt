@@ -107,4 +107,45 @@ class ChargingPileDialogParserTest {
         assertEquals("快充", merged.first().chargingType)
         assertEquals("120kW", merged.first().ratedPower)
     }
+
+    @Test
+    fun parsesLastCardWhenItsNodesAreSplitAtDialogBottom() {
+        val root = checkNotNull(
+            XmlSnapshotParser.parse(
+                """
+                <hierarchy>
+                    <node text="电桩详情" />
+                    <node text="全部 共2" />
+                    <node>
+                        <node text="快充" />
+                        <node text="空闲" />
+                        <node text="设备编号" />
+                        <node text="MAK001_1" />
+                        <node text="额定功率" />
+                        <node text="120kW" />
+                        <node text="额定电流" />
+                        <node text="250A" />
+                    </node>
+                    <node text="超充" />
+                    <node text="充电中" />
+                    <node text="设备编号" />
+                    <node text="MAK002_1" />
+                    <node text="额定功率" />
+                    <node text="320kW" />
+                    <node text="额定电流" />
+                    <node text="250A" />
+                </hierarchy>
+                """.trimIndent()
+            )
+        )
+
+        val result = ChargingPileDialogParser.parse(root)
+
+        assertEquals(2, result.expectedTotal)
+        assertEquals(2, result.piles.size)
+        assertEquals("MAK002_1", result.piles.last().deviceId)
+        assertEquals("超充", result.piles.last().chargingType)
+        assertEquals("充电中", result.piles.last().status)
+        assertEquals("320kW", result.piles.last().ratedPower)
+    }
 }

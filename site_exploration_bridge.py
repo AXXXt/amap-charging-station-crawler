@@ -160,7 +160,7 @@ def _pile_snapshot_summary(payload: Dict[str, Any]) -> Tuple[Dict[str, Dict[str,
             if status in IDLE_PILE_STATUSES:
                 summary[group]["idle"] += 1
                 overall["idle"] += 1
-            elif status in BUSY_PILE_STATUSES:
+            elif status in BUSY_PILE_STATUSES or status == "":
                 summary[group]["busy"] += 1
                 overall["busy"] += 1
             else:

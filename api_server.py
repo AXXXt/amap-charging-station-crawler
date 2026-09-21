@@ -1097,6 +1097,10 @@ class HenanPoiImportRequest(BaseModel):
     skipExistingResults: bool = True
 
 
+class HenanTaskResetRequest(BaseModel):
+    confirmation: str = ""
+
+
 class MobileTaskBatchCreateRequest(BaseModel):
     tasks: List[MobileTaskCreateItem] = []
 
@@ -1398,6 +1402,69 @@ def _validate_device_code(device, requested_code):
 def _task_lease_is_active(task, device_id, lease_token, now=None):
     if task is None or task["status"] not in {"LEASED", "RUNNING"}:
         return False
+
+
+def _price_period_count(value):
+    """Return the number of electricity-price periods in a price payload."""
+    payload = _normalize_payload(value)
+    if not isinstance(payload, dict):
+        return 0
+    fast_prices = payload.get("fastPrices") or []
+    slow_prices = payload.get("slowPrices") or []
+    return (
+        (len(fast_prices) if isinstance(fast_prices, list) else 0)
+        + (len(slow_prices) if isinstance(slow_prices, list) else 0)
+    )
+
+
+def _current_observation_price_periods(task_id):
+    conn = mobile_conn()
+    try:
+        row = conn.execute(
+            "SELECT payload FROM station_observation WHERE task_id = ? "
+            "ORDER BY received_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return 0
+    try:
+        payload = json.loads(row["payload"] or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+    return _price_period_count(payload)
+
+
+def _previous_snapshot_price_periods(source_key):
+    """Read the snapshot immediately before the latest upload for one station."""
+    conn = _henan_mysql_conn()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT price_json FROM site_exploration_charging_station_dynamic_history "
+                "WHERE source_key = %s ORDER BY captured_at DESC, id DESC LIMIT 2",
+                (source_key,),
+            )
+            rows = cursor.fetchall()
+    finally:
+        conn.close()
+    if len(rows) < 2:
+        return 0
+    return _price_period_count(rows[1].get("price_json"))
+
+
+def _should_requeue_for_missing_price(henan_task):
+    attempt = int(henan_task.get("attempt") or 0)
+    if attempt != 1:
+        return False
+    if _current_observation_price_periods(henan_task.get("id")) > 0:
+        return False
+    source_key = station_source_key(
+        henan_task.get("source_station_id"),
+        henan_task.get("keyword") or "",
+    )
+    return _previous_snapshot_price_periods(source_key) > 0
     if task["assigned_device_id"] != device_id or task["lease_token"] != lease_token:
         return False
     expires_at = task["lease_expires_at"]
@@ -2160,6 +2227,46 @@ def mobile_ack_task(
         if not _task_lease_is_active(henan_task, device["id"], request.leaseToken):
             raise HTTPException(409, detail="TASK_LEASE_STALE")
         now = _henan_mysql_utcnow()
+        if _should_requeue_for_missing_price(henan_task):
+            conn = _henan_mysql_conn()
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE henan_heavy_truck_charging_station_task "
+                        "SET status='PENDING', lease_device_id='', lease_token='', "
+                        "lease_expires_at=NULL, last_error='MISSING_PRICE_RETRY_ONCE', "
+                        "progress=NULL, result_summary=%s, finished_at=NULL, "
+                        "available_at=UTC_TIMESTAMP(), updated_at=%s "
+                        "WHERE local_task_id=%s AND lease_device_id=%s AND lease_token=%s "
+                        "AND status IN ('LEASED','RUNNING')",
+                        (
+                            json.dumps(request.resultSummary or {}, ensure_ascii=False),
+                            now,
+                            task_id,
+                            device["id"],
+                            request.leaseToken,
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        raise HTTPException(409, detail="TASK_LEASE_STALE")
+                conn.commit()
+            finally:
+                conn.close()
+            local_conn = mobile_conn()
+            try:
+                with local_conn:
+                    local_conn.execute(
+                        "UPDATE collector_device SET current_task_id=NULL, status='IDLE', "
+                        "updated_at=? WHERE id=? AND current_task_id=?",
+                        (_mobile_utc(), device["id"], task_id),
+                    )
+            finally:
+                local_conn.close()
+            return {
+                "task": _mobile_task_payload(_henan_mysql_get_task(task_id)),
+                "requeued": True,
+                "reason": "MISSING_PRICE_RETRY_ONCE",
+            }
         conn = _henan_mysql_conn()
         try:
             with conn.cursor() as cursor:
@@ -3162,6 +3269,33 @@ def _upsert_henan_task_values(normalized):
     return len(normalized)
 
 
+def _insert_missing_henan_task_values(normalized):
+    """只补充不存在的任务，绝不覆盖已有任务的运行状态。"""
+    normalized = [values for values in normalized if values]
+    if not normalized:
+        return 0
+    _ensure_henan_task_table()
+    columns = list(_HENAN_TASK_COLUMNS)
+    sql = """INSERT INTO henan_heavy_truck_charging_station_task
+                 ({columns})
+             VALUES ({placeholders})
+             ON DUPLICATE KEY UPDATE task_key = task_key""".format(
+        columns=", ".join(columns),
+        placeholders=", ".join("%s" for _ in columns),
+    )
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        with conn.cursor() as cursor:
+            cursor.executemany(
+                sql,
+                [tuple(values.get(column) for column in columns) for values in normalized],
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return len(normalized)
+
+
 def _henan_task_values_from_poi(
     task_id, poi_id, poi_name, poi_payload, request_data, sequence, now
 ):
@@ -3604,6 +3738,145 @@ def _insert_henan_poi_tasks(
     return counters
 
 
+def _normalize_nearby_text(value):
+    return "".join(str(value or "").split()).casefold()
+
+
+def _nearby_task_key(poi_id, station_name, address):
+    identity = str(poi_id or "").strip()
+    if not identity:
+        identity = (
+            "nearby-name:"
+            + _normalize_nearby_text(station_name)
+            + "\0"
+            + _normalize_nearby_text(address)
+        )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _iter_site_exploration_nearby_stations():
+    """读取 site_exploration_site 中的周边站点 JSON，按稳定身份去重。"""
+    table = site_exploration_bridge.source_table
+    column = site_exploration_bridge.station_column
+    conn = pymysql.connect(**DB_CONFIG)
+    seen = set()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"SELECT id, project_name, province_city, county_district, "
+                f"`{column}` AS nearby_json FROM `{table}`"
+            )
+            for source_site_id, project_name, city, district, raw_json in cursor.fetchall():
+                if isinstance(raw_json, str):
+                    try:
+                        nearby = json.loads(raw_json or "[]")
+                    except (TypeError, ValueError):
+                        nearby = []
+                else:
+                    nearby = raw_json or []
+                if not isinstance(nearby, list):
+                    continue
+                for item in nearby:
+                    if not isinstance(item, dict):
+                        continue
+                    poi_id = str(item.get("id") or "").strip()
+                    station_name = str(item.get("name") or "").strip()
+                    address = str(item.get("address") or "").strip()
+                    if not station_name:
+                        continue
+                    identity = poi_id or (
+                        "name:" + _normalize_nearby_text(station_name) + "\0" + _normalize_nearby_text(address)
+                    )
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    yield {
+                        "source_site_id": source_site_id,
+                        "project_name": str(project_name or ""),
+                        "city": str(city or ""),
+                        "district": str(district or ""),
+                        "poi_id": poi_id,
+                        "station_name": station_name,
+                        "address": address,
+                        "longitude": _optional_float(item.get("longitude")),
+                        "latitude": _optional_float(item.get("latitude")),
+                        "category": str(item.get("category") or ""),
+                        "type": str(item.get("type") or ""),
+                    }
+    finally:
+        conn.close()
+
+
+def _insert_site_exploration_nearby_tasks(
+    existing_task_ids,
+    existing_task_keys,
+    existing_station_names,
+    sequence_holder,
+    request_data,
+):
+    """把勘探表周边站点补入河南任务表，不覆盖已有任务状态。"""
+    counters = {
+        "fetched": 0,
+        "created": 0,
+        "skippedTask": 0,
+        "skippedResult": 0,
+        "skippedDuplicatePoi": 0,
+    }
+    now = _mobile_utc()
+    values_batch = []
+    try:
+        nearby_stations = _iter_site_exploration_nearby_stations()
+        for item in nearby_stations:
+            counters["fetched"] += 1
+            poi_id = item["poi_id"]
+            task_key = _nearby_task_key(poi_id, item["station_name"], item["address"])
+            if poi_id and poi_id in existing_task_ids:
+                counters["skippedTask"] += 1
+                continue
+            if task_key in existing_task_keys:
+                counters["skippedTask"] += 1
+                continue
+            if _normalize_nearby_text(item["station_name"]) in existing_station_names:
+                counters["skippedTask"] += 1
+                continue
+            poi_payload = {
+                "id": poi_id,
+                "name": item["station_name"],
+                "address": item["address"],
+                "latitude": item["latitude"],
+                "longitude": item["longitude"],
+                "province": "河南省",
+                "city": item["city"],
+                "district": item["district"],
+                "type": item["type"],
+                "category": item["category"],
+                "source": "SITE_EXPLORATION_NEARBY",
+                "sourceSiteId": str(item["source_site_id"] or ""),
+                "sourceProjectName": item["project_name"],
+            }
+            sequence_holder[0] += 1
+            values = _henan_task_values_from_poi(
+                str(uuid.uuid4()),
+                poi_id,
+                item["station_name"],
+                poi_payload,
+                request_data,
+                sequence_holder[0],
+                now,
+            )
+            values["task_key"] = task_key
+            values_batch.append(values)
+            existing_task_keys.add(task_key)
+            existing_station_names.add(_normalize_nearby_text(item["station_name"]))
+            if poi_id:
+                existing_task_ids.add(poi_id)
+        created = _insert_missing_henan_task_values(values_batch)
+        counters["created"] = int(created or 0)
+    except Exception as error:
+        print(f"  Site exploration nearby sync failed: {error}")
+    return counters
+
+
 def _add_henan_import_counters(counters, reported_total=0):
     with _henan_import_state_lock:
         _henan_import_state["reportedTotal"] += int(reported_total or 0)
@@ -3624,11 +3897,18 @@ def _run_henan_import_job(request_data, city_scopes):
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT amap_poi_id FROM henan_heavy_truck_charging_station_task "
-                    "WHERE amap_poi_id <> ''"
+                    "SELECT amap_poi_id, task_key FROM henan_heavy_truck_charging_station_task"
                 )
+                task_rows = cursor.fetchall()
                 existing_task_ids = {
-                    str(row["amap_poi_id"]) for row in cursor.fetchall()
+                    str(row["amap_poi_id"]) for row in task_rows if str(row["amap_poi_id"] or "")
+                }
+                existing_task_keys = {
+                    str(row["task_key"]) for row in task_rows if str(row["task_key"] or "")
+                }
+                existing_station_names = {
+                    _normalize_nearby_text(row["station_name"]) for row in task_rows
+                    if _normalize_nearby_text(row["station_name"])
                 }
                 cursor.execute(
                     "SELECT COALESCE(MAX(station_sequence), 0) AS max_seq "
@@ -3640,6 +3920,14 @@ def _run_henan_import_job(request_data, city_scopes):
         existing_result_ids, existing_result_keys = _result_identity_sets()
         seen_job_ids = set()
         sequence_holder = [int(max_sequence or 0)]
+        nearby_counters = _insert_site_exploration_nearby_tasks(
+            existing_task_ids,
+            existing_task_keys,
+            existing_station_names,
+            sequence_holder,
+            request_data,
+        )
+        _add_henan_import_counters(nearby_counters)
         successful_cities = 0
         failed_cities = []
         keyword = str(request_data.get("keyword") or "重卡充电站").strip()
@@ -3778,6 +4066,46 @@ def mobile_admin_henan_poi_import_status(
 ):
     _require_admin_key(x_admin_key)
     return _henan_import_snapshot()
+
+
+@app.post("/api/v1/admin/henan-tasks/reset")
+def mobile_admin_reset_henan_tasks(
+    request: HenanTaskResetRequest,
+    x_admin_key: Optional[str] = Header(None),
+):
+    """Reset every HENAN task to PENDING without touching results or snapshots."""
+    _require_admin_key(x_admin_key)
+    if request.confirmation != "RESET_ALL_HENAN_TASKS":
+        raise HTTPException(400, detail="RESET_CONFIRMATION_REQUIRED")
+    _ensure_henan_task_table()
+    conn = _henan_mysql_conn()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) AS total FROM henan_heavy_truck_charging_station_task")
+            total = int((cursor.fetchone() or {}).get("total") or 0)
+            cursor.execute(
+                "UPDATE henan_heavy_truck_charging_station_task "
+                "SET status='PENDING', attempt=0, recovery_attempt=0, "
+                "lease_device_id='', lease_token='', lease_expires_at=NULL, "
+                "started_at=NULL, finished_at=NULL, last_error='', "
+                "progress=NULL, result_summary=NULL, "
+                "available_at=UTC_TIMESTAMP(), updated_at=UTC_TIMESTAMP()"
+            )
+            changed = int(cursor.rowcount or 0)
+        conn.commit()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT status, COUNT(*) AS total FROM henan_heavy_truck_charging_station_task "
+                "GROUP BY status"
+            )
+            counts = {str(row["status"]): int(row["total"]) for row in cursor.fetchall()}
+    finally:
+        conn.close()
+    return {
+        "total": total,
+        "reset": changed,
+        "statusCounts": counts,
+    }
 
 
 @app.get("/api/v1/admin/tasks")

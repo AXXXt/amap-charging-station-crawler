@@ -30,6 +30,12 @@ def _now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _as_utc(value):
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+
 def _conn(db_config):
     config = dict(db_config)
     config.pop("cursorclass", None)
@@ -436,6 +442,7 @@ def _start_next_round(db_config, batch_id):
                 conn.commit()
                 return None
             current_round = int(batch["current_round"] or 0)
+            next_available_at = now
             if current_round:
                 cursor.execute(
                     "SELECT * FROM station_monitor_round WHERE batch_id=%s AND round_no=%s",
@@ -456,6 +463,11 @@ def _start_next_round(db_config, batch_id):
                         "WHERE id=%s AND status<>'COMPLETED'",
                         (now, now, current_round_row["id"]),
                     )
+                if current_round and current_round_row and current_round_row.get("started_at"):
+                    interval_minutes = int(batch.get("target_interval_minutes") or DEFAULT_INTERVAL_MINUTES)
+                    target_at = _as_utc(current_round_row["started_at"]) + timedelta(minutes=interval_minutes)
+                    if target_at > _as_utc(now):
+                        next_available_at = target_at.strftime("%Y-%m-%d %H:%M:%S")
                 if current_round >= int(batch["target_rounds"] or DEFAULT_TARGET_ROUNDS):
                     cursor.execute(
                         "UPDATE station_monitor_batch SET status='COMPLETED', finished_at=%s, updated_at=%s WHERE id=%s",
@@ -482,7 +494,7 @@ def _start_next_round(db_config, batch_id):
                 "bs.source_key, bs.amap_poi_id, bs.station_name, bs.station_address, bs.city, bs.district, "
                 "bs.latitude, bs.longitude, bs.sequence_no, 80, 'HENAN_POI_DETAIL', 'PENDING', 0, 3, %s, %s, %s "
                 "FROM station_monitor_batch_station bs WHERE bs.batch_id=%s",
-                (batch_id, next_round, round_id, next_round, now, now, now, batch_id),
+                (batch_id, next_round, round_id, next_round, next_available_at, now, now, batch_id),
             )
             cursor.execute(
                 "UPDATE station_monitor_batch SET current_round=%s, started_at=COALESCE(started_at,%s), updated_at=%s WHERE id=%s",

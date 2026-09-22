@@ -39,6 +39,7 @@ class SyncManager(
         return withContext(Dispatchers.IO) {
             val deviceCode = AppPreferences.deviceCode(context)
             val activationCode = AppPreferences.activationCode(context)
+            val collectionMode = if (AppPreferences.isMonitorMode(context)) "MONITOR" else "NORMAL"
             var claimedTask: RemoteTaskDto? = null
             var api: ServerApi? = null
             var leaseRenewJob: Job? = null
@@ -80,7 +81,7 @@ class SyncManager(
                     )
                 )
 
-                val claim = activeApi.claimTask(ClaimTaskRequest(deviceCode))
+                val claim = activeApi.claimTask(ClaimTaskRequest(deviceCode, collectionMode))
                 val task = claim.task
                 claimedTask = task
                 if (task == null) {
@@ -104,9 +105,9 @@ class SyncManager(
 
                 activeApi.acknowledgeTask(
                     task.id,
-                    TaskActionRequest(deviceCode = deviceCode, leaseToken = task.leaseToken),
+                    TaskActionRequest(deviceCode = deviceCode, mode = collectionMode, leaseToken = task.leaseToken),
                 )
-                leaseRenewJob = startLeaseRenewal(activeApi, deviceCode, task, leaseLost)
+                leaseRenewJob = startLeaseRenewal(activeApi, deviceCode, collectionMode, task, leaseLost)
                 try {
                     val taskStartedAt = System.currentTimeMillis()
                     val details = if (
@@ -169,6 +170,7 @@ class SyncManager(
                         task.id,
                         TaskActionRequest(
                             deviceCode = deviceCode,
+                            mode = collectionMode,
                             leaseToken = task.leaseToken,
                             resultSummary = summary,
                         ),
@@ -189,6 +191,7 @@ class SyncManager(
                             task.id,
                             TaskActionRequest(
                                 deviceCode = deviceCode,
+                                mode = collectionMode,
                                 leaseToken = task.leaseToken,
                                 resultSummary = linkedMapOf(
                                     "stations" to 0,
@@ -216,6 +219,7 @@ class SyncManager(
                                 task.id,
                                 TaskActionRequest(
                                     deviceCode = deviceCode,
+                                    mode = collectionMode,
                                     leaseToken = task.leaseToken,
                                     errorCode = "SKIP_REPORT_FAILED",
                                     errorMessage = completionError.message
@@ -240,6 +244,7 @@ class SyncManager(
                             task.id,
                             TaskActionRequest(
                                 deviceCode = deviceCode,
+                                mode = collectionMode,
                                 leaseToken = task.leaseToken,
                                 errorCode = "COLLECTION_FAILED",
                                 errorMessage = error.message ?: error.javaClass.simpleName,
@@ -378,6 +383,7 @@ class SyncManager(
     private suspend fun startLeaseRenewal(
         api: ServerApi,
         deviceCode: String,
+        collectionMode: String,
         task: RemoteTaskDto,
         leaseLost: AtomicBoolean,
     ): Job {
@@ -390,6 +396,7 @@ class SyncManager(
                         task.id,
                         TaskActionRequest(
                             deviceCode = deviceCode,
+                            mode = collectionMode,
                             leaseToken = task.leaseToken,
                             progress = mapOf(
                                 "leaseHeartbeatAt" to System.currentTimeMillis(),

@@ -111,8 +111,8 @@ class CollectionEngine(
 
     private val batchTargetMin = 25
     private val batchTargetMax = 30
-    private val batchCooldownMinMs = 8 * 60 * 1000L
-    private val batchCooldownMaxMs = 12 * 60 * 1000L
+    private val batchCooldownMinMs = 9 * 60 * 1000L
+    private val batchCooldownMaxMs = 11 * 60 * 1000L
     private val detailEntryTimes = ArrayDeque<Long>().apply {
         addAll(AppPreferences.pacingDetailEntryTimes(context))
     }

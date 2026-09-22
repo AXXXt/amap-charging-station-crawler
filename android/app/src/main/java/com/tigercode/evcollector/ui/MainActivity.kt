@@ -80,6 +80,7 @@ class MainActivity : AppCompatActivity() {
         binding.syncNowButton.setOnClickListener { syncNow() }
         binding.importHenanPoiButton.setOnClickListener { importHenanPois() }
         binding.startHenanCollectButton.setOnClickListener { startHenanCollect() }
+        binding.startMonitorCollectButton.setOnClickListener { startMonitorCollect() }
         binding.resetHenanTasksButton.setOnClickListener { confirmResetHenanTasks() }
         binding.localScanButton.setOnClickListener { startLocalScan() }
         binding.stopRunButton.setOnClickListener { stopRunning() }
@@ -131,6 +132,7 @@ class MainActivity : AppCompatActivity() {
     private fun startCollector() {
         if (!saveConfig()) return
         requestNotificationPermissionIfNeeded()
+        AppPreferences.setMonitorMode(this, false)
         AppPreferences.setScanning(this, true)
         CollectorKeepAliveService.start(this)
         AppPreferences.setRemoteStatus(this, "设备调度已启动")
@@ -138,6 +140,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopCollector() {
+        AppPreferences.setMonitorMode(this, false)
         AppPreferences.setScanning(this, false)
         CollectorKeepAliveService.stop(this)
         AppPreferences.setRemoteStatus(this, "设备调度已停止")
@@ -246,16 +249,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startHenanCollect() {
-        if (!AppPreferences.isHenanImportReady(this)) {
-            Toast.makeText(this, "请先导入河南全省POI任务", Toast.LENGTH_SHORT).show()
-            return
-        }
         if (!ChargingAccessibilityService.isConnected()) {
             Toast.makeText(this, "请先开启无障碍服务", Toast.LENGTH_SHORT).show()
             openAccessibilitySettings()
             return
         }
         requestNotificationPermissionIfNeeded()
+        AppPreferences.setMonitorMode(this, false)
         AppPreferences.setScanning(this, true)
         CollectorKeepAliveService.start(this)
         AppPreferences.setRemoteStatus(this, "河南站点采集已启动")
@@ -264,6 +264,22 @@ class MainActivity : AppCompatActivity() {
         refreshUi()
     }
 
+    private fun startMonitorCollect() {
+        if (!saveConfig()) return
+        if (!ChargingAccessibilityService.isConnected()) {
+            Toast.makeText(this, "请先开启无障碍服务", Toast.LENGTH_SHORT).show()
+            openAccessibilitySettings()
+            return
+        }
+        requestNotificationPermissionIfNeeded()
+        AppPreferences.setMonitorMode(this, true)
+        AppPreferences.setScanning(this, true)
+        CollectorKeepAliveService.start(this)
+        AppPreferences.setRemoteStatus(this, "重点站点小时监控已启动")
+        AppPreferences.appendLog(this, "已启动重点站点小时监控滚动调度")
+        ChargingAccessibilityService.current()?.launchAmap()
+        refreshUi()
+    }
     private fun confirmResetHenanTasks() {
         AlertDialog.Builder(this)
             .setTitle("确认重置任务表")
@@ -326,6 +342,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopRunning() {
         engine.stop()
+        AppPreferences.setMonitorMode(this, false)
         AppPreferences.setScanning(this, false)
         CollectorKeepAliveService.stop(this)
         AppPreferences.setRemoteStatus(this, "运行已停止")
@@ -385,7 +402,8 @@ class MainActivity : AppCompatActivity() {
         val accessibilityConnected = ChargingAccessibilityService.isConnected()
         val accessibilityEnabled = ChargingAccessibilityService.isEnabled(this)
         val scanning = AppPreferences.isScanning(this)
-        binding.startHenanCollectButton.isEnabled = AppPreferences.isHenanImportReady(this)
+        binding.startHenanCollectButton.isEnabled = !scanning
+        binding.startMonitorCollectButton.isEnabled = !scanning
         binding.serviceStatusText.text = buildString {
             append("无障碍服务: ")
             append(
@@ -397,6 +415,8 @@ class MainActivity : AppCompatActivity() {
             )
             append("\n设备调度: ")
             append(if (scanning) "运行中" else "已停止")
+            append("\n采集模式: ")
+            append(if (AppPreferences.isMonitorMode(this@MainActivity)) "重点站点小时监控" else "普通任务调度")
             append("\n远程状态: ")
             append(AppPreferences.remoteStatus(this@MainActivity).ifBlank { "未同步" })
             if (AppPreferences.remoteError(this@MainActivity).isNotBlank()) {

@@ -36,6 +36,7 @@ data class HeartbeatRequest(
 
 data class ClaimTaskRequest(
     @SerializedName("deviceCode") val deviceCode: String,
+    @SerializedName("mode") val mode: String = "NORMAL",
 )
 
 data class RemoteTaskDto(
@@ -70,6 +71,7 @@ data class ClaimTaskResponse(
 
 data class TaskActionRequest(
     @SerializedName("deviceCode") val deviceCode: String,
+    @SerializedName("mode") val mode: String = "NORMAL",
     @SerializedName("leaseToken") val leaseToken: String,
     @SerializedName("progress") val progress: Map<String, Any>? = null,
     @SerializedName("resultSummary") val resultSummary: Map<String, Any>? = null,

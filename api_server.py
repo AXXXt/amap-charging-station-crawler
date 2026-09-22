@@ -21,6 +21,7 @@ import time
 from datetime import datetime, timezone, timedelta
 import urllib.parse
 import urllib.request
+import monitor_scheduler
 from site_exploration_bridge import (
     SiteExplorationBridge,
     parse_mysql_database_url,
@@ -203,6 +204,7 @@ def init_db():
 @app.on_event("startup")
 async def startup():
     init_mobile_db()
+    monitor_scheduler.init_tables(DB_CONFIG)
     try:
         # HENAN 任务的权威源是 MySQL（见 dev-docs/cloud_service_ops.md §10.3）。
         # 这里**不再**把 SQLite 的 scan_task 回灌 MySQL：SQLite 只剩历史导入快照，
@@ -1056,11 +1058,13 @@ class MobileHeartbeatRequest(BaseModel):
 
 class MobileClaimRequest(BaseModel):
     deviceCode: str = ""
+    mode: str = "NORMAL"
 
 
 class MobileTaskActionRequest(BaseModel):
     deviceCode: str = ""
     leaseToken: str = ""
+    mode: str = "NORMAL"
     progress: Optional[dict] = None
     resultSummary: Optional[dict] = None
     errorCode: str = ""
@@ -1391,6 +1395,19 @@ def _require_mobile_device(authorization):
     if row is None:
         raise HTTPException(401, detail="DEVICE_TOKEN_INVALID")
     return row
+
+
+def _update_monitor_device_task(device_id, task_id, status):
+    now = _mobile_utc()
+    conn = mobile_conn()
+    try:
+        conn.execute(
+            "UPDATE collector_device SET current_task_id=?, status=?, updated_at=? WHERE id=?",
+            (task_id or None, status, now, device_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _validate_device_code(device, requested_code):
@@ -2013,6 +2030,11 @@ def mobile_claim_task(
 ):
     device = _require_mobile_device(authorization)
     _validate_device_code(device, request.deviceCode)
+    if request.mode.strip().upper() == "MONITOR":
+        task, reason = monitor_scheduler.claim(DB_CONFIG, device)
+        if task is not None:
+            _update_monitor_device_task(device["id"], task["id"], "RUNNING")
+        return {"task": task, "reason": reason}
     if HENAN_MYSQL_AUTHORITATIVE:
         _ensure_henan_task_table()
         claimed, claim_reason = _henan_mysql_claim(device)
@@ -2222,6 +2244,13 @@ def mobile_ack_task(
 ):
     device = _require_mobile_device(authorization)
     _validate_device_code(device, request.deviceCode)
+    if request.mode.strip().upper() == "MONITOR":
+        try:
+            task = monitor_scheduler.ack(DB_CONFIG, task_id, device["id"], request.leaseToken)
+        except monitor_scheduler.MonitorTaskError as error:
+            raise HTTPException(409, detail=str(error))
+        _update_monitor_device_task(device["id"], task_id, "RUNNING")
+        return {"task": task}
     henan_task = _henan_mysql_get_task(task_id) if HENAN_MYSQL_AUTHORITATIVE else None
     if HENAN_MYSQL_AUTHORITATIVE and henan_task is not None:
         if not _task_lease_is_active(henan_task, device["id"], request.leaseToken):
@@ -2313,6 +2342,15 @@ def mobile_progress_task(
 ):
     device = _require_mobile_device(authorization)
     _validate_device_code(device, request.deviceCode)
+    if request.mode.strip().upper() == "MONITOR":
+        try:
+            task = monitor_scheduler.progress(
+                DB_CONFIG, task_id, device["id"], request.leaseToken, request.progress
+            )
+        except monitor_scheduler.MonitorTaskError as error:
+            raise HTTPException(409, detail=str(error))
+        _update_monitor_device_task(device["id"], task_id, "RUNNING")
+        return {"task": task}
     henan_task = _henan_mysql_get_task(task_id) if HENAN_MYSQL_AUTHORITATIVE else None
     if HENAN_MYSQL_AUTHORITATIVE and henan_task is not None:
         if not _task_lease_is_active(henan_task, device["id"], request.leaseToken):
@@ -2390,6 +2428,15 @@ def mobile_complete_task(
 ):
     device = _require_mobile_device(authorization)
     _validate_device_code(device, request.deviceCode)
+    if request.mode.strip().upper() == "MONITOR":
+        try:
+            task = monitor_scheduler.complete(
+                DB_CONFIG, task_id, device["id"], request.leaseToken, request.resultSummary
+            )
+        except monitor_scheduler.MonitorTaskError as error:
+            raise HTTPException(409, detail=str(error))
+        _update_monitor_device_task(device["id"], "", "IDLE")
+        return {"task": task}
     henan_task = _henan_mysql_get_task(task_id) if HENAN_MYSQL_AUTHORITATIVE else None
     if HENAN_MYSQL_AUTHORITATIVE and henan_task is not None:
         if not _task_lease_is_active(henan_task, device["id"], request.leaseToken):
@@ -2474,6 +2521,16 @@ def mobile_fail_task(
 ):
     device = _require_mobile_device(authorization)
     _validate_device_code(device, request.deviceCode)
+    if request.mode.strip().upper() == "MONITOR":
+        try:
+            task = monitor_scheduler.fail(
+                DB_CONFIG, task_id, device["id"], request.leaseToken,
+                request.errorCode, request.errorMessage, bool(request.retryable)
+            )
+        except monitor_scheduler.MonitorTaskError as error:
+            raise HTTPException(409, detail=str(error))
+        _update_monitor_device_task(device["id"], "", "IDLE")
+        return {"task": task}
     henan_task = _henan_mysql_get_task(task_id) if HENAN_MYSQL_AUTHORITATIVE else None
     if HENAN_MYSQL_AUTHORITATIVE and henan_task is not None:
         if not _task_lease_is_active(henan_task, device["id"], request.leaseToken):
@@ -2727,7 +2784,7 @@ def mobile_upload_observations(
                         # HENAN 任务的权威源只有 MySQL。SQLite 里只剩过期快照，
                         # 绝不回退使用：快照的 status=PENDING/lease_token 为空
                         # 会让已完成任务的重试被判 TASK_LEASE_STALE，卡死 outbox。
-                        source_task = _henan_mysql_get_task(task_id)
+                        source_task = monitor_scheduler.get_task(DB_CONFIG, task_id) or _henan_mysql_get_task(task_id)
                         if source_task is None:
                             fallback = conn.execute(
                                 "SELECT * FROM scan_task WHERE id = ?",

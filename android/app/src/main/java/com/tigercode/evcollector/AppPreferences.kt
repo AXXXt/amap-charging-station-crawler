@@ -7,8 +7,8 @@ import android.provider.Settings
 import com.tigercode.evcollector.core.engine.CollectionPacingPolicy
 
 object AppPreferences {
-    // 手机通过 Wi-Fi 访问电脑上的服务端；127.0.0.1 在手机上只代表手机自己。
-    private const val DEFAULT_SERVER_URL = "http://192.168.3.65:8800/"
+    // 默认使用已部署到云服务器的调度服务，避免手机受局域网和电脑开关机影响。
+    private const val DEFAULT_SERVER_URL = "http://116.62.103.230:8800/"
     private const val PREFS = "ev_collector_prefs"
     private const val KEY_SERVER_URL = "server_url"
     private const val KEY_DEVICE_CODE = "device_code"
@@ -20,6 +20,7 @@ object AppPreferences {
     private const val KEY_REMOTE_ERROR = "remote_error"
     private const val KEY_LOG = "log"
     private const val KEY_HENAN_IMPORT_READY = "henan_import_ready"
+    private const val KEY_MONITOR_MODE = "monitor_mode"
     private const val KEY_PACING_DETAIL_ENTRIES = "pacing_detail_entries"
     private const val KEY_PACING_BATCH_COMPLETED = "pacing_batch_completed"
     private const val KEY_PACING_BATCH_TARGET = "pacing_batch_target"
@@ -81,6 +82,17 @@ object AppPreferences {
     fun isHenanImportReady(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_HENAN_IMPORT_READY, false)
+
+    fun isMonitorMode(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_MONITOR_MODE, false)
+
+    fun setMonitorMode(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_MONITOR_MODE, enabled)
+            .apply()
+    }
 
     fun setHenanImportReady(context: Context, ready: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

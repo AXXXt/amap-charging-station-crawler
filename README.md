@@ -296,6 +296,7 @@ adb-first/
 | `dev-docs/system_code_guide.md` | 系统代码说明与审查指南 |
 | `dev-docs/cloud_service_ops.md` | **云端采集调度服务部署与运维记录**（部署形态、手机接入、任务领取策略、HENAN 任务权威源、SQLite/MySQL 关系、排障） |
 | `dev-docs/数据修改操作手册.md` | **采集任务数据修改操作手册**（改任务状态 / 重跑采集前必读：权威源、两库同改、排障、FAQ） |
+| `dev-docs/ECS服务部署记录.md` | **ECS 服务器部署记录与规范**（环境概况、服务清单、端口占用、部署规范与踩坑——部署新服务前必读） |
 | `dev-docs/mysql_local_grid_testing.md` | 本地 MySQL 网格任务联调 |
 
 ## 河南城市覆盖

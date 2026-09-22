@@ -1419,6 +1419,18 @@ def _validate_device_code(device, requested_code):
 def _task_lease_is_active(task, device_id, lease_token, now=None):
     if task is None or task["status"] not in {"LEASED", "RUNNING"}:
         return False
+    if task["assigned_device_id"] != device_id or task["lease_token"] != lease_token:
+        return False
+    expires_at = task["lease_expires_at"]
+    if not expires_at:
+        return False
+    try:
+        expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        return expires.astimezone(timezone.utc) >= (now or datetime.now(timezone.utc))
+    except (TypeError, ValueError):
+        return False
 
 
 def _price_period_count(value):
@@ -1482,18 +1494,6 @@ def _should_requeue_for_missing_price(henan_task):
         henan_task.get("keyword") or "",
     )
     return _previous_snapshot_price_periods(source_key) > 0
-    if task["assigned_device_id"] != device_id or task["lease_token"] != lease_token:
-        return False
-    expires_at = task["lease_expires_at"]
-    if not expires_at:
-        return False
-    try:
-        expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
-        if expires.tzinfo is None:
-            expires = expires.replace(tzinfo=timezone.utc)
-        return expires.astimezone(timezone.utc) >= (now or datetime.now(timezone.utc))
-    except (TypeError, ValueError):
-        return False
 
 
 def _require_mobile_task(conn, device_id, task_id, lease_token):

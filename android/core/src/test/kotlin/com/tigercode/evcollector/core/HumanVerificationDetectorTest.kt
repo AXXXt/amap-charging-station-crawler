@@ -46,4 +46,12 @@ class HumanVerificationDetectorTest {
             HumanVerificationDetector.find("请选择符合描述的所有图片"),
         )
     }
+
+    @Test
+    fun detectsVerificationFeedbackLink() {
+        assertEquals(
+            "点我反馈",
+            HumanVerificationDetector.find("验证失败\n点我反馈 >"),
+        )
+    }
 }

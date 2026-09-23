@@ -38,4 +38,12 @@ class HumanVerificationDetectorTest {
     fun detectsAccountControlPage() {
         assertEquals("封控", HumanVerificationDetector.find("当前账号已被封控"))
     }
+
+    @Test
+    fun detectsImageChallengePage() {
+        assertEquals(
+            "请选择符合描述",
+            HumanVerificationDetector.find("请选择符合描述的所有图片"),
+        )
+    }
 }

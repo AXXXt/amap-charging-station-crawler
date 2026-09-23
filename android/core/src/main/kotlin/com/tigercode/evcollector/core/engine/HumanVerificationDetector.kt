@@ -3,6 +3,8 @@ package com.tigercode.evcollector.core.engine
 object HumanVerificationDetector {
     private val phrases = listOf(
         "请按照说明进行验证",
+        "请选择符合描述",
+        "没有新图片可以点后",
         "拖动滑块出现完整的",
         "请按照说明拖动滑块",
         "向右拖动滑块填充拼图",

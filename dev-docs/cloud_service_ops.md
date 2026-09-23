@@ -4,9 +4,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | 2.0 |
-| 更新时间 | 2026-09-16 |
-| 线上基线 | 阿里云 ECS `116.62.103.230`，`/opt/amap-crawler`，`api_server.py` md5 `64e2d64594e96add66e43dca2923d4ca`（2026-09-16 17:40 部署：**HENAN 任务彻底脱离 SQLite**（读/写/回灌/手工建任务全部切断）+ 修复 claim 500 + 修复结果上报 outbox 死锁，见 §10.3 / §10.5 / §11.7 / §11.8 / §13.1） |
+| 文档版本 | 2.1 |
+| 更新时间 | 2026-09-22 |
+| 线上基线 | 阿里云 ECS `116.62.103.230`，`/opt/amap-crawler`，`api_server.py` md5 `562261015963d1659d2614e516935148` + `monitor_scheduler.py` md5 `d8c176594308c142465b3842aa19cc45`（2026-09-22 部署提交 `ac0548d`：新增**监控轮询调度**（`monitor_scheduler` + 手机端 `mode=MONITOR`）+ HENAN 任务彻底脱离 SQLite（读/写/回灌全切断）+ 修复 claim 500 + 修复结果上报 outbox 死锁，见 §10.3 / §10.5 / §11.7 / §11.8 / §13.1 / §13.3） |
 | 当前领取模式 | `MOBILE_CLAIM_MODE=HENAN_ONLY` |
 | 适用范围 | 服务部署、手机接入、任务领取策略、SQLite/MySQL 数据关系、日常运维与排障 |
 
@@ -41,7 +41,7 @@
    ├── nginx :8082  ──反代──▶ uvicorn 0.0.0.0:8800  (api_server.py)
    │                              │
    │                              ├── MySQL   121.41.56.201/evcs       ← ★HENAN 任务权威源★ + 采集结果
-   │                              └── SQLite  data/mobile_control.db   ← 设备/站探任务权威源（HENAN 仅启动导入缓存）
+   │                              └── SQLite  data/mobile_control.db   ← 设备/站探任务权威源（HENAN 行已废弃）
    └── systemd: amap-api.service（开机自启、崩溃自动重启）
 ```
 
@@ -164,13 +164,13 @@ cur.execute(\"SELECT lease_device_id,status,COUNT(*) FROM henan_heavy_truck_char
 ssh root@116.62.103.230 "sqlite3 /opt/amap-crawler/data/mobile_control.db \
   \"SELECT type, status, COUNT(*) FROM scan_task GROUP BY type, status;\""
 
-# 服务是否被重启过（核对"启动导入"是否刷过进度）
+# 服务最近一次重启时间（重启已不影响任务进度，仅用于确认部署时间）
 ssh root@116.62.103.230 "systemctl show amap-api -p ExecMainStartTimestamp --no-pager"
 ```
 
 ## 10. 数据存储说明
 
-### 10.1 SQLite `data/mobile_control.db`（设备/站探任务权威源；HENAN 仅启动导入缓存）
+### 10.1 SQLite `data/mobile_control.db`（设备/站探任务权威源；HENAN 行已废弃）
 
 | 表 | 用途 |
 |---|---|
@@ -188,23 +188,24 @@ ssh root@116.62.103.230 "systemctl show amap-api -p ExecMainStartTimestamp --no-
 
 | 表 | 用途 |
 |---|---|
-| `henan_heavy_truck_charging_station_task` | 河南 POI 任务**权威源**（手机端 claim/ack/progress/complete/fail 直读直写；仅在服务启动时由 SQLite 导入） |
+| `henan_heavy_truck_charging_station_task` | 河南 POI 任务**唯一权威源**（手机端 claim/ack/progress/complete/fail 直读直写；新任务仅经 `admin/henan-poi/import` 直写 MySQL，不复用启动导入） |
 | `site_exploration_charging_station_result` | 采集结果统一表（站点查询接口数据源） |
 | `heavy_truck_stations` | 历史站点表（已由统一结果表替代） |
 
-### 10.3 权威源与同步方向（2026-09-16 已反转，重要）
+### 10.3 权威源与同步方向（2026-09-16 反转；同日已完成收口）
 
 ```
-服务启动时：  SQLite scan_task ──全量 UPSERT──▶ MySQL henan_heavy_truck_charging_station_task
-运行期间：    手机端 ──事务 + 行锁 + 租约校验──▶ MySQL（权威；SQLite 不再参与）
+运行期间：    手机端 ──事务 + 行锁 + 租约校验──▶ MySQL（唯一权威源）
+服务启动时：  只读确认 MySQL 任务表可用并统计条数（不回灌、不导入）
+新任务入表：  仅 POST /api/v1/admin/henan-poi/import（直写 MySQL，按 task_key 只插新增）
 ```
 
-**HENAN 任务的权威源是 MySQL，SQLite 只是「启动导入缓存」。** 因此：
+**HENAN 任务的唯一权威源是 MySQL；SQLite 已从该链路彻底摘除（读、写、回灌三侧全部切断），不再是"启动导入缓存"。** 因此：
 
 - 手机端 claim/ack/progress/complete/fail 全部直连 MySQL，用 `FOR UPDATE` 行锁 + `lease_token`/`lease_expires_at` 租约校验保证并发安全；过期租约由 `_henan_mysql_reap_expired()` 回收。
-- **改状态要改 MySQL**（立即生效）；但**只改 MySQL 会在下次重启时被 SQLite 快照覆盖**，所以两个库必须一起改（见 §10.5），或直接用 `reset_tasks.py --apply`。
+- **改状态只改 MySQL 即可**：立即生效，且**重启不会回滚**（`startup()` 不再回灌 SQLite，见 §11.6）。日常直接 `reset_tasks.py --apply`（§10.5）。
 - `_sync_henan_task()` 已改为空实现（`return None`）：**旧的"镜像写失败不影响采集"兜底已不存在**，MySQL 被长事务锁住时手机端请求会直接 500（见 §11.7）。
-- **重启副作用**：启动导入会用 SQLite 快照覆盖 MySQL 运行期状态（`status`/`attempt` 等），即"重启把进度刷回去"。正在大批量采集时不要重启。
+- **重启不再影响任务状态**：不再有"重启把进度刷回去"的副作用，也不再清空在途租约。因此"大批量采集时不要重启"这条禁忌**已取消**（但重启仍会短暂中断服务，见 §11.6）。
 - **回退方式**：`.env` 设 `HENAN_MYSQL_AUTHORITATIVE=0` 并重启，即恢复旧的"SQLite 权威"行为。
 - **读取侧已完全弃用 SQLite（2026-09-16 收口）**：手机端接口（`claim` / `ack` / `progress` / `complete` / `fail` / `observations/batches`）在 `HENAN_MYSQL_AUTHORITATIVE=1` 时**绝不使用 SQLite 里的 HENAN 行**——**即使 MySQL 查不到也不回退**（回退正是 §11.8 那个 outbox 死锁的根源）。`_require_mobile_task()` 已加硬守卫：取到 HENAN 类型的 SQLite 行一律按 `TASK_NOT_FOUND` 处理，一次覆盖 ack/progress/complete/fail。
   > ✅ **2026-09-16 已完成收口（写侧与回灌也切断）**：`startup()` 不再回灌 SQLite（重启保持 MySQL 现状，不再回滚进度/清空租约，启动也更快）；`POST /api/v1/admin/henan-poi/import` 改为**直写 MySQL**（去重集合与 `station_sequence` 也从 MySQL 读）。至此 HENAN 任务的**读、写、回灌已全部脱离 SQLite**。
@@ -292,6 +293,13 @@ mysqldump --single-transaction -h121.41.56.201 -u<账号> -p evcs henan_heavy_tr
 | 16:16 | 部署 `b7f40e32`：import 改直写 MySQL + 关停 startup 回灌；重启后 MySQL 状态保持 `COMPLETED 2344` 未被覆盖（验证①生效） | `api_server.py.bak-20260916-1700` |
 | 16:19 | 用新版 `reset_tasks.py` 重置 2344 条 → PENDING；手机端恢复领取（`RUNNING 1`，ack 200） | 期间修复脚本 `NOW()`→`UTC_TIMESTAMP()` 时区错误 |
 
+**实操留痕（2026-09-22 部署）**
+
+| 时间 | 操作 | 备份 / 备注 |
+|---|---|---|
+| 11:45 | 部署 `ac0548d`：上传 `api_server.py` + 新模块 `monitor_scheduler.py`（`import` 依赖，非独立服务），重启生效 | `api_server.py.bak-20260922-1145`；md5 `562261015963d1659d2614e516935148` |
+| 11:45 | 重启后 MySQL 保持 `COMPLETED 2524` **未被回滚**，启动仅约 **2 秒**（再次验证收口生效） | 4 张 `station_monitor_*` 表由 `startup()` 自动建好 |
+
 ## 11. 常见问题排查
 
 ### 11.1 公网连不上 8800（安全组已放行）
@@ -336,11 +344,12 @@ journalctl -u amap-api -n 50 --no-pager
 
 高德 Key 若配置了 IP 白名单，需把 ECS 公网 IP 加入白名单。
 
-### 11.6 启动耗时（已不再回灌，约 15 秒）
+### 11.6 启动耗时（约 2 秒；不回灌、不影响任务状态）
 
-`startup` 阶段会执行：初始化 SQLite、**确认 MySQL 权威任务表可用并统计任务数（只读，不再回灌）**、同步站点探索任务、启动租约回收线程。启动完成后端口才开始接受连接。
+`startup` 阶段会执行：初始化 SQLite、初始化监控调度表（`monitor_scheduler.init_tables`）、**确认 MySQL 权威任务表可用并统计任务数（只读，不再回灌）**、同步站点探索任务、启动租约回收线程。启动完成后端口才开始接受连接。
 
-> ✅ 2026-09-16 起启动**不再**用 SQLite 快照覆盖 MySQL：重启不会回滚进度、不会清空在途租约，因此"大批量采集时不要重启"这条禁忌也一并取消（启动耗时同时从约 50 秒降到约 15 秒）。
+> ✅ 2026-09-16 起启动**不再**用 SQLite 快照覆盖 MySQL：重启不会回滚进度、不会清空在途租约，因此"大批量采集时不要重启"这条禁忌也一并取消。
+> 实测耗时：旧版约 50 秒（含全量导入）→ 现在 **约 2 秒**（2026-09-22 实测）。
 
 ### 11.7 手机端 claim/ack 整片 500：`json.loads(dict)` 类型错误（2026-09-16 已修）
 
@@ -369,7 +378,7 @@ TypeError: the JSON object must be str, bytes or bytearray, not dict
 1. **任务状态读错了源**：`mobile_observations_batches` 解析任务时是"**SQLite 优先**，查不到才回退 MySQL"，而 HENAN 任务的权威源是 MySQL。SQLite 里是启动导入的旧快照（`status=PENDING`、`lease_token` 为空），于是本该按终态放行的重试被当成"活动任务"去走租约校验。注意：ack/progress/complete/fail 都是 MySQL 优先，**只有结果上报这一处写反了**。
 2. **租约校验挡在幂等之前**：原逻辑先校验租约、再判断结果是否已落库。结果明明已在 `station_observation` 里，却因租约失效被判 `TASK_LEASE_STALE`，永远走不到"重复确认"分支 → outbox 永远排不空。
 
-**触发场景**：任务已到终态、或**服务重启后 MySQL 的租约被 SQLite 快照清空**，而设备本地 outbox 里还留着该任务的结果——手机手里的 `lease_token` 已失效，结果就再也送不进去（重启的连带伤害，呼应 §10.3 的"重启副作用"）。
+**触发场景（2026-09-16 事故发生时的条件）**：任务已到终态、或**服务重启后 MySQL 的租约被 SQLite 快照清空**（当时尚存的"重启副作用"，已于同日收口取消，见 §10.3），而设备本地 outbox 里还留着该任务的结果——手机手里的 `lease_token` 已失效，结果就再也送不进去。
 
 **修复**：
 
@@ -401,12 +410,12 @@ systemctl daemon-reload && systemctl enable --now amap-api
 
 | 变更 | 说明 |
 |---|---|
-| **权威源切换** | HENAN 任务调度权威源由 ECS SQLite 改为远程 MySQL `henan_heavy_truck_charging_station_task`；SQLite 降级为启动导入缓存 |
-| **运行期回写移除** | `_sync_henan_task()` 改为空实现（`return None`），运行期不再把状态写回 SQLite；同步只剩启动时一次全量 UPSERT |
+| **权威源切换** | HENAN 任务调度权威源由 ECS SQLite 改为远程 MySQL `henan_heavy_truck_charging_station_task`；SQLite 随后被彻底摘除（不读、不写、不回灌） |
+| **运行期回写移除** | `_sync_henan_task()` 改为空实现（`return None`），运行期不再把状态写回 SQLite；后续收口后**启动时也不再回灌**（见下方「收口」行） |
 | **并发安全** | claim/ack/progress/complete/fail 改为 MySQL 事务 + `FOR UPDATE` 行锁 + 租约校验（`lease_token`/`lease_expires_at`），过期租约由 `_henan_mysql_reap_expired()` 回收 |
 | **新增开关** | `.env` 的 `HENAN_MYSQL_AUTHORITATIVE`（默认 `1`；设 `0` 回退旧的 SQLite 权威模式，需重启） |
 | **兜底移除** | 原"镜像写失败不影响采集"的兜底消失 → MySQL 被长事务锁住时手机端直接 500，无降级路径 |
-| **附带风险（待评估）** | 重启会用 SQLite 快照覆盖 MySQL 运行期状态，即"重启回滚进度"。建议后续改为"只 INSERT 缺失任务、不覆盖已有任务的 status" |
+| **附带风险（已解决）** | 切换初期存在"重启会用 SQLite 快照覆盖 MySQL 运行期状态、进度回滚"的风险；**已于同日通过关停启动回灌解决**（见下方「收口」行），原建议的"只 INSERT 缺失任务"已在 `admin/henan-poi/import` 落实 |
 | **缺陷修复 ①** | `_mobile_task_payload()` 的 `json.loads(dict)` 类型错误（导致 claim/ack/progress/complete/fail 全片 500），改为 `_payload_object()` 兼容两种行来源（见 §11.7） |
 | **缺陷修复 ②** | `observations/batches` 任务解析改为权威源优先 + 幂等判定提前到租约校验之前（解开设备 outbox 死锁，见 §11.8） |
 | **缺陷修复 ③** | 彻底切断 HENAN 任务对 SQLite 的**读取回退**：观测上报不再回退；`_require_mobile_task()` 硬拒绝 HENAN 类型快照（一次覆盖 ack/progress/complete/fail）。MySQL 查不到即视为 `TASK_NOT_FOUND`，不再退回 SQLite（见 §10.3） |
@@ -431,3 +440,14 @@ systemctl daemon-reload && systemctl enable --now amap-api
 | `/opt/amap-crawler/api_server.py.bak-before-claim-change` | 领取逻辑改造前的服务端代码 |
 | `/opt/amap-crawler/data/mobile_control.db.empty.bak` | 迁移前 ECS 上的空调度库 |
 | `/opt/amap-crawler/data/mobile_control.db.bak-before-reset` | 任务重置前的调度库快照 |
+
+### 13.3 2026-09-22：新增监控轮询调度（提交 `ac0548d`）
+
+| 变更 | 说明 |
+|---|---|
+| **新增监控轮询模式** | 手机端可在 claim/ack/progress/complete/fail 请求里带 `mode="MONITOR"` 走独立的轮询调度链路；不传则维持原全量采集流程（`mode` 默认 `NORMAL`） |
+| **新模块（非独立服务）** | `monitor_scheduler.py` 仅依赖标准库 + `pymysql`，由 `api_server.py` **以 `import` 方式加载**，与 API 同进程，**无需新增 systemd 单元**；`startup()` 会调用 `monitor_scheduler.init_tables()` |
+| **新增数据表** | `station_monitor_batch` / `_batch_station` / `_round` / `_task`（首次启动自动创建）。**刻意与 `henan_heavy_truck_charging_station_task` 隔离**，不影响原全量采集链路 |
+| **部署要点** | 必须**连同 `monitor_scheduler.py` 一起上传**，否则 `api_server.py` 启动即 `ImportError` |
+
+**文档同步（本次一并修订）**：纠正了此前沿用旧架构的描述（§10.3 正文、§13.1 变更记录，以及《数据修改操作手册》整篇）。明确结论：自 2026-09-16 收口起，`startup()` **不再**从 SQLite 回灌 MySQL —— **重启不会回滚任务进度、不会清空在途租约**，"采集时不要重启"的禁忌已取消，启动耗时约 2 秒。

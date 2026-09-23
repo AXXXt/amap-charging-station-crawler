@@ -1398,14 +1398,44 @@ def _require_mobile_device(authorization):
 
 
 def _update_monitor_device_task(device_id, task_id, status):
+    """更新设备当前任务指针（MONITOR 模式专用）。
+
+    `collector_device.current_task_id` 上有部分唯一索引（`idx_device_current_task`）：
+    **一个任务同时只能挂在一台设备上**。当原设备失联、从未回传 complete/fail 时，
+    它的 `current_task_id` 会永久留在该任务上；此时
+    `monitor_scheduler._reap_expired()` 把任务退回 PENDING 并派给另一台设备，
+    若这里直接 UPDATE 就会撞唯一约束：
+
+        sqlite3.IntegrityError: UNIQUE constraint failed: collector_device.current_task_id
+
+    → claim 返回 500，设备拿不到任务，而 MySQL 侧的租约**已经提交**（幽灵租约），
+    只能等 15 分钟租约过期后再派、再失败，形成 livelock。
+
+    因此与 HENAN 分支（claim 的 HENAN 路径）保持一致：在同一事务里
+    **先把该任务从其它设备上摘掉，再挂给自己**，这同时也自愈历史遗留的陈旧指针。
+
+    另：本函数只维护"展示/辅助用"的设备指针，写失败不应把 claim 打成 500 ——
+    此时 MySQL 租约已提交，抛错只会让设备拿不到任务并留下幽灵租约，故降级为日志。
+    """
     now = _mobile_utc()
     conn = mobile_conn()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        if task_id:
+            conn.execute(
+                """UPDATE collector_device
+                   SET current_task_id = NULL, status = 'IDLE', updated_at = ?
+                   WHERE current_task_id = ? AND id != ?""",
+                (now, task_id, device_id),
+            )
         conn.execute(
             "UPDATE collector_device SET current_task_id=?, status=?, updated_at=? WHERE id=?",
             (task_id or None, status, now, device_id),
         )
         conn.commit()
+    except Exception as error:
+        conn.rollback()
+        print(f"  [monitor] device task pointer not updated: {error}")
     finally:
         conn.close()
 

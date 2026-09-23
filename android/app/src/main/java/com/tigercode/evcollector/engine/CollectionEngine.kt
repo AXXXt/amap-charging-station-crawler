@@ -6,6 +6,7 @@ import com.tigercode.evcollector.AppPreferences
 import com.tigercode.evcollector.accessibility.ChargingAccessibilityService
 import com.tigercode.evcollector.core.engine.CollectionPacingPolicy
 import com.tigercode.evcollector.core.engine.HumanVerificationDetector
+import com.tigercode.evcollector.core.engine.NetworkErrorDetector
 import com.tigercode.evcollector.core.engine.StationMatcher
 import com.tigercode.evcollector.core.model.ChargingPileDetail
 import com.tigercode.evcollector.core.model.NodeSnapshot
@@ -572,10 +573,24 @@ class CollectionEngine(
             service.clickNodeByText(card.name)
         var detailSnapshot = waitForPage(14000, 700) { root ->
             val assessment = PageAssessor.assess(root, card.name)
-            assessment.kind == PageKind.DETAIL ||
+            isNetworkErrorPage(root) ||
+                assessment.kind == PageKind.DETAIL ||
                 (assessment.expectedStationVisible &&
                     assessment.kind != PageKind.SEARCH_RESULTS &&
                     assessment.kind != PageKind.POPUP)
+        }
+        if (detailSnapshot != null && isNetworkErrorPage(detailSnapshot)) {
+            detailSnapshot = recoverDetailNetworkError(service, card.name) ?: run {
+                emit(
+                    CollectionState.ERROR,
+                    "详情页网络异常且刷新失败: ${card.name}",
+                    collectedCount,
+                    card.name,
+                )
+                service.globalBack()
+                humanDelay(1400L, 2200L)
+                return null
+            }
         }
         if (detailSnapshot == null && clicked) {
             emit(
@@ -588,10 +603,14 @@ class CollectionEngine(
             service.clickAt(centerX, centerY) || service.clickStationCard(card.name)
             detailSnapshot = waitForPage(14000, 700) { root ->
                 val assessment = PageAssessor.assess(root, card.name)
-                assessment.kind == PageKind.DETAIL ||
+                isNetworkErrorPage(root) ||
+                    assessment.kind == PageKind.DETAIL ||
                     (assessment.expectedStationVisible &&
                         assessment.kind != PageKind.SEARCH_RESULTS &&
                         assessment.kind != PageKind.POPUP)
+            }
+            if (detailSnapshot != null && isNetworkErrorPage(detailSnapshot)) {
+                detailSnapshot = recoverDetailNetworkError(service, card.name)
             }
         }
         if (detailSnapshot == null) {
@@ -664,6 +683,19 @@ class CollectionEngine(
             } ?: service.freshSnapshot()
             if (refreshedDetail != null) detailSnapshot = refreshedDetail
         }
+        if (detailSnapshot != null && isNetworkErrorPage(detailSnapshot)) {
+            detailSnapshot = recoverDetailNetworkError(service, card.name) ?: run {
+                emit(
+                    CollectionState.ERROR,
+                    "分时电价前网络异常且刷新失败: ${card.name}",
+                    collectedCount,
+                    card.name,
+                )
+                service.globalBack()
+                humanDelay(1400L, 2200L)
+                return null
+            }
+        }
         val pageInfo = DetailPageClassifier.classify(detailSnapshot)
         val scrolls = maxOf(
             when (pageInfo.type) {
@@ -709,6 +741,25 @@ class CollectionEngine(
                 }
                 humanDelay(1800L, 2600L)
                 val scrolledSnapshot = service.snapshot() ?: continue
+                if (isNetworkErrorPage(scrolledSnapshot)) {
+                    val recovered = recoverDetailNetworkError(service, card.name)
+                    if (recovered == null) {
+                        emit(
+                            CollectionState.ERROR,
+                            "详情页网络异常且刷新失败: ${card.name}",
+                            collectedCount,
+                            card.name,
+                        )
+                        stopRequested = true
+                        return null
+                    }
+                    detailSnapshot = recovered
+                    val recoveredParsed = DetailParser.parse(recovered)
+                    if (recoveredParsed.filledFieldCount > 0) {
+                        merged = ResultMerger.merge(merged, recoveredParsed)
+                    }
+                    continue
+                }
                 val parsed = DetailParser.parse(scrolledSnapshot)
                 if (parsed.filledFieldCount > 0) {
                     merged = ResultMerger.merge(merged, parsed)
@@ -1900,6 +1951,75 @@ class CollectionEngine(
             phrase = phrase,
             pageExcerpt = pageText.replace(whitespaceRegex, " ").take(300),
         )
+    }
+
+    private fun isNetworkErrorPage(root: NodeSnapshot): Boolean =
+        NetworkErrorDetector.find(collectPageText(root)) != null
+
+    private fun isLoadedStationDetail(
+        root: NodeSnapshot,
+        expectedStation: String,
+    ): Boolean {
+        if (isNetworkErrorPage(root)) return false
+        val assessment = PageAssessor.assess(root, expectedStation)
+        val looksLikeDetail = assessment.kind == PageKind.DETAIL ||
+            (
+                assessment.expectedStationVisible &&
+                    assessment.kind != PageKind.SEARCH_RESULTS &&
+                    assessment.kind != PageKind.POPUP
+                )
+        if (!looksLikeDetail) return false
+
+        val detail = DetailParser.parse(root)
+        val substantiveFieldCount = listOf(
+            detail.businessHours,
+            detail.address,
+            detail.currentPrice,
+            detail.parkingFee,
+            detail.occupancyFee,
+            detail.fastAvailable,
+            detail.superAvailable,
+            detail.slowAvailable,
+        ).count { it.isNotBlank() } +
+            detail.facilities.size +
+            detail.fastPrices.size +
+            detail.slowPrices.size +
+            detail.chargingPiles.size
+        return detail.filledFieldCount >= 3 && substantiveFieldCount > 0
+    }
+
+    private suspend fun recoverDetailNetworkError(
+        service: ChargingAccessibilityService,
+        stationName: String,
+    ): NodeSnapshot? {
+        emit(
+            CollectionState.OPENING_DETAIL,
+            "详情页网络异常，点击刷新重试: $stationName",
+            collectedCount,
+            stationName,
+        )
+
+        repeat(2) {
+            val current = service.snapshot() ?: service.freshSnapshot()
+            if (current == null) {
+                humanDelay(800L, 1500L)
+                return@repeat
+            }
+            checkPageRisk(current)
+            if (!isNetworkErrorPage(current)) return current
+
+            val clicked = service.clickNodeByText("刷新重试")
+            AppPreferences.appendLog(
+                context,
+                "详情页网络异常，刷新重试点击=$clicked: $stationName",
+            )
+            humanDelay(1800L, 2800L)
+            val loaded = waitForPage(14000, 700) { root ->
+                isLoadedStationDetail(root, stationName)
+            }
+            if (loaded != null) return loaded
+        }
+        return null
     }
 
     private suspend fun handleRiskPause(root: NodeSnapshot) {

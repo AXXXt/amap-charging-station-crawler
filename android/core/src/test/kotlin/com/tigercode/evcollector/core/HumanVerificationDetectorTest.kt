@@ -33,4 +33,9 @@ class HumanVerificationDetectorTest {
             ),
         )
     }
+
+    @Test
+    fun detectsAccountControlPage() {
+        assertEquals("封控", HumanVerificationDetector.find("当前账号已被封控"))
+    }
 }

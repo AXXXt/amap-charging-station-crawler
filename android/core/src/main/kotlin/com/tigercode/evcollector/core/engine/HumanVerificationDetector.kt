@@ -6,6 +6,18 @@ object HumanVerificationDetector {
         "拖动滑块出现完整的",
         "请按照说明拖动滑块",
         "向右拖动滑块填充拼图",
+        "安全验证",
+        "滑块验证",
+        "点击验证",
+        "完成拼图",
+        "账号异常",
+        "账户异常",
+        "访问异常",
+        "环境异常",
+        "已被封禁",
+        "账号封禁",
+        "账户封禁",
+        "封控",
     )
 
     /** Returns the matched phrase, tolerating whitespace inserted by accessibility nodes. */

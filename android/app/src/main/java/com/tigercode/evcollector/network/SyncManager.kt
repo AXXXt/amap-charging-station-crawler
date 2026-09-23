@@ -9,6 +9,7 @@ import com.tigercode.evcollector.accessibility.ChargingAccessibilityService
 import com.tigercode.evcollector.core.model.StationDetail
 import com.tigercode.evcollector.data.CollectorRepository
 import com.tigercode.evcollector.engine.CollectionEngine
+import com.tigercode.evcollector.engine.HumanVerificationException
 import com.tigercode.evcollector.engine.StationNotFoundException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -180,6 +181,28 @@ class SyncManager(
                     leaseRenewJob?.cancelAndJoin()
                     leaseRenewJob = null
                 }
+            } catch (error: HumanVerificationException) {
+                claimedTask?.let { task ->
+                    try {
+                        api?.failTask(
+                            task.id,
+                            TaskActionRequest(
+                                deviceCode = deviceCode,
+                                mode = collectionMode,
+                                leaseToken = task.leaseToken,
+                                errorCode = "HUMAN_VERIFICATION",
+                                errorMessage = error.message
+                                    ?: error.javaClass.simpleName,
+                                retryable = true,
+                            ),
+                        )
+                    } catch (_: Exception) {
+                        // Leave the lease to expire if the release call also fails.
+                    }
+                }
+                SyncOutcome.HumanVerification(
+                    error.message ?: "检测到人机验证，已停止本设备采集",
+                )
             } catch (error: StationNotFoundException) {
                 val task = claimedTask
                 val activeApi = api
@@ -435,6 +458,7 @@ class SyncManager(
 
 sealed class SyncOutcome {
     data class Completed(val stationCount: Int) : SyncOutcome()
+    data class HumanVerification(val message: String) : SyncOutcome()
     data class Skipped(
         val stationName: String,
         val reason: String,

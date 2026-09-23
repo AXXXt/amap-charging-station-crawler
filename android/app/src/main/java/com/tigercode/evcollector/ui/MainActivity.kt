@@ -177,6 +177,16 @@ class MainActivity : AppCompatActivity() {
                         "任务已跳过：${outcome.stationName}（${outcome.reason}）",
                     )
                 }
+                is SyncOutcome.HumanVerification -> {
+                    AppPreferences.setScanning(this@MainActivity, false)
+                    AppPreferences.setRemoteStatus(
+                        this@MainActivity,
+                        "已因人机验证停止",
+                        outcome.message,
+                    )
+                    AppPreferences.appendLog(this@MainActivity, outcome.message)
+                    CollectorKeepAliveService.stop(this@MainActivity)
+                }
                 is SyncOutcome.Failed -> {
                     AppPreferences.setRemoteStatus(
                         this@MainActivity,

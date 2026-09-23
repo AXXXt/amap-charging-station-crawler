@@ -5,6 +5,7 @@ import com.google.gson.Gson
 import com.tigercode.evcollector.AppPreferences
 import com.tigercode.evcollector.accessibility.ChargingAccessibilityService
 import com.tigercode.evcollector.core.engine.CollectionPacingPolicy
+import com.tigercode.evcollector.core.engine.HumanVerificationDetector
 import com.tigercode.evcollector.core.engine.StationMatcher
 import com.tigercode.evcollector.core.model.ChargingPileDetail
 import com.tigercode.evcollector.core.model.NodeSnapshot
@@ -42,6 +43,11 @@ import kotlinx.coroutines.withContext
 class StationNotFoundException(
     val stationName: String,
 ) : IllegalStateException("搜索结果中未找到目标站点: $stationName")
+
+class HumanVerificationException(
+    val phrase: String,
+    val pageExcerpt: String = "",
+) : IllegalStateException("检测到人机验证: $phrase")
 
 enum class CollectionState(val label: String) {
     IDLE("待机"),
@@ -133,6 +139,8 @@ class CollectionEngine(
         "访问过于频繁",
         "您操作太快了",
     )
+
+    private val whitespaceRegex = Regex("\\s+")
 
     private val listLoadingKeywords = listOf("正在加载", "加载中", "加载更多")
     private val listEndKeywords = listOf("暂无更多内容", "没有更多了", "没有更多结果", "已经到底了")
@@ -301,10 +309,8 @@ class CollectionEngine(
                         continue
                     }
 
-                    if (hasRiskPhrase(snapshot)) {
-                        handleRiskPause(snapshot)
-                        break
-                    }
+                    checkPageRisk(snapshot)
+                    if (stopRequested) break
 
                     val cards = StationMatcher.visibleStationCards(snapshot)
                     if (cards.isNotEmpty()) consecutiveRecoveryFails = 0
@@ -456,10 +462,8 @@ class CollectionEngine(
                     } ?: break
                     continue
                 }
-                if (hasRiskPhrase(snapshot)) {
-                    handleRiskPause(snapshot)
-                    break
-                }
+                checkPageRisk(snapshot)
+                if (stopRequested) break
 
                 val match = StationMatcher.bestMatch(snapshot, requestedName)
                 if (match != null) {
@@ -1347,18 +1351,14 @@ class CollectionEngine(
             if (service != null) {
                 val snapshot = service.snapshot()
                 if (snapshot != null) {
-                    if (hasRiskPhrase(snapshot)) {
-                        handleRiskPause(snapshot)
-                        return null
-                    }
+                    checkPageRisk(snapshot)
+                    if (stopRequested) return null
                     if (predicate(snapshot)) return snapshot
                 }
                 val fresh = service.freshSnapshot()
                 if (fresh != null) {
-                    if (hasRiskPhrase(fresh)) {
-                        handleRiskPause(fresh)
-                        return null
-                    }
+                    checkPageRisk(fresh)
+                    if (stopRequested) return null
                     if (predicate(fresh)) return fresh
                 }
             }
@@ -1870,6 +1870,36 @@ class CollectionEngine(
     private fun hasRiskPhrase(root: NodeSnapshot): Boolean {
         val pageText = collectPageText(root)
         return riskPhrases.any { it in pageText }
+    }
+
+    private suspend fun checkPageRisk(root: NodeSnapshot) {
+        val pageText = collectPageText(root)
+        val verificationPhrase = HumanVerificationDetector.find(pageText)
+        if (verificationPhrase != null) {
+            stopForHumanVerification(verificationPhrase, pageText)
+        }
+        if (hasRiskPhrase(root)) {
+            handleRiskPause(root)
+        }
+    }
+
+    private suspend fun stopForHumanVerification(
+        phrase: String,
+        pageText: String,
+    ): Nothing {
+        stopRequested = true
+        val message = "检测到人机验证($phrase)，停止本设备采集并释放当前任务"
+        emit(
+            CollectionState.ERROR,
+            message,
+            collectedCount,
+            "",
+        )
+        AppPreferences.appendLog(context, message)
+        throw HumanVerificationException(
+            phrase = phrase,
+            pageExcerpt = pageText.replace(whitespaceRegex, " ").take(300),
+        )
     }
 
     private suspend fun handleRiskPause(root: NodeSnapshot) {

@@ -34,6 +34,8 @@ object StationMatcher {
         "有人充电",
     )
 
+    private const val MIN_PARTIAL_MATCH_LENGTH = 6
+
     fun listViewport(root: NodeSnapshot): com.tigercode.evcollector.core.model.Rect? {
         var best: NodeSnapshot? = null
 
@@ -129,13 +131,7 @@ object StationMatcher {
                 val values = collectText(node)
                 if (isStationCard(node, label, values, null, root.bounds)) {
                     val candidateName = StationNameNormalizer.normalize(label)
-                    val score = when {
-                        candidateName.isEmpty() -> 0
-                        candidateName == targetName -> 1000
-                        targetName in candidateName -> 800 + targetName.length
-                        candidateName in targetName -> 700 + candidateName.length
-                        else -> 0
-                    }
+                    val score = stationMatchScore(targetName, candidateName)
                     if (score > 0 && node.bounds.isValid) {
                         val candidate = StationMatch(
                             score = score,
@@ -202,5 +198,16 @@ object StationMatcher {
         }
         walk(node)
         return values.joinToString("\n")
+    }
+
+    private fun stationMatchScore(targetName: String, candidateName: String): Int {
+        if (targetName.isEmpty() || candidateName.isEmpty()) return 0
+        if (candidateName == targetName) return 1000
+        if (minOf(targetName.length, candidateName.length) < MIN_PARTIAL_MATCH_LENGTH) return 0
+        return when {
+            targetName in candidateName -> 800 + targetName.length
+            candidateName in targetName -> 700 + candidateName.length
+            else -> 0
+        }
     }
 }

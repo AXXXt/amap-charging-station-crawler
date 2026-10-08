@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -340,12 +341,64 @@ def _active_batch_id(db_config):
         conn.close()
 
 
+_TRAILING_ELLIPSIS_RE = re.compile(r"[.．。…]+\s*$")
+
+
+def _strip_rendered_ellipsis(value: str | None) -> str:
+    return _TRAILING_ELLIPSIS_RE.sub("", (value or "").strip()).strip()
+
+
+def canonical_station_name(matched_name: str | None, requested_name: str | None) -> str:
+    """Choose the fuller station name without copying rendered truncation.
+
+    The monitor batch is built from the unified result table. Older list
+    snapshots could store AMap's rendered card title (for example a title
+    ending in "...") as ``matched_station_name`` while ``requested_name``
+    kept the full search query. Prefer the longer name whenever one cleaned
+    name is a prefix of the other so future rounds do not inherit the
+    truncation and fail with NO_MATCH.
+    """
+    matched = (matched_name or "").strip()
+    requested = (requested_name or "").strip()
+    if not matched:
+        return requested
+    if not requested:
+        return matched
+    clean_matched = _strip_rendered_ellipsis(matched)
+    clean_requested = _strip_rendered_ellipsis(requested)
+
+    if clean_requested.startswith(clean_matched) and len(clean_requested) > len(clean_matched):
+        return requested
+    if clean_matched.startswith(clean_requested) and len(clean_matched) > len(clean_requested):
+        return matched
+
+    common_prefix = len(os.path.commonprefix([clean_matched, clean_requested]))
+    matched_truncated = matched != clean_matched
+    requested_truncated = requested != clean_requested
+    if common_prefix >= 8 and (matched_truncated or requested_truncated):
+        if requested_truncated and not matched_truncated:
+            return matched
+        if matched_truncated and not requested_truncated:
+            return requested
+        return matched if len(clean_matched) >= len(clean_requested) else requested
+    return matched
+
+
+def _canonicalize_candidate_rows(rows):
+    for row in rows:
+        row["matched_station_name"] = canonical_station_name(
+            row.get("matched_station_name"),
+            row.get("requested_name"),
+        )
+    return rows
+
+
 def _candidate_rows(conn, size, city):
     city_filter = "AND r.city=%s" if city else ""
     args = ([city] if city else []) + [size]
     if city:
         query = f"""
-            SELECT r.source_key, r.source_station_id, r.matched_station_name,
+            SELECT r.source_key, r.source_station_id, r.matched_station_name, r.requested_name,
                    r.city, r.district,
                    COALESCE(NULLIF(r.collected_address,''), r.source_address, '') AS station_address,
                    r.source_latitude AS latitude, r.source_longitude AS longitude
@@ -365,7 +418,7 @@ def _candidate_rows(conn, size, city):
     else:
         query = f"""
             WITH ranked AS (
-                SELECT r.source_key, r.source_station_id, r.matched_station_name,
+                SELECT r.source_key, r.source_station_id, r.matched_station_name, r.requested_name,
                        r.city, r.district,
                        COALESCE(NULLIF(r.collected_address,''), r.source_address, '') AS station_address,
                        r.source_latitude AS latitude, r.source_longitude AS longitude,
@@ -380,7 +433,7 @@ def _candidate_rows(conn, size, city):
                        SELECT 1 FROM station_monitor_batch_station bs WHERE bs.source_key=r.source_key
                    )
             )
-            SELECT source_key, source_station_id, matched_station_name,
+            SELECT source_key, source_station_id, matched_station_name, requested_name,
                    city, district, station_address, latitude, longitude
               FROM ranked
              WHERE rn <= 8
@@ -389,7 +442,7 @@ def _candidate_rows(conn, size, city):
         """
     with conn.cursor() as cursor:
         cursor.execute(query, args)
-        return cursor.fetchall()
+        return _canonicalize_candidate_rows(cursor.fetchall())
 
 
 def _all_station_candidates(conn, size):
@@ -397,7 +450,8 @@ def _all_station_candidates(conn, size):
     query = """
         SELECT r.source_key,
                r.source_station_id,
-               COALESCE(NULLIF(r.matched_station_name,''), r.requested_name) AS matched_station_name,
+               r.matched_station_name,
+               r.requested_name,
                r.city, r.district,
                COALESCE(NULLIF(r.collected_address,''), r.source_address, '') AS station_address,
                r.source_latitude AS latitude,
@@ -412,7 +466,7 @@ def _all_station_candidates(conn, size):
             cursor.execute(query + " LIMIT %s", (int(size),))
         else:
             cursor.execute(query)
-        return cursor.fetchall()
+        return _canonicalize_candidate_rows(cursor.fetchall())
 
 
 def _reuse_candidates(conn, size, reuse_batch_ids):
@@ -425,6 +479,7 @@ def _reuse_candidates(conn, size, reuse_batch_ids):
         SELECT bs.source_key,
                bs.amap_poi_id AS source_station_id,
                bs.station_name AS matched_station_name,
+               r.requested_name,
                bs.city, bs.district,
                bs.station_address,
                bs.latitude, bs.longitude
@@ -436,12 +491,14 @@ def _reuse_candidates(conn, size, reuse_batch_ids):
                  GROUP BY source_key
                ) picked
             ON picked.source_key = bs.source_key AND picked.first_batch = bs.batch_id
+          LEFT JOIN site_exploration_charging_station_result r
+            ON r.source_key = bs.source_key
          ORDER BY bs.batch_id, bs.sequence_no
          LIMIT %s
     """
     with conn.cursor() as cursor:
         cursor.execute(query, tuple(ids) + (int(size),))
-        return cursor.fetchall()
+        return _canonicalize_candidate_rows(cursor.fetchall())
 
 
 def close_active_batches(db_config):

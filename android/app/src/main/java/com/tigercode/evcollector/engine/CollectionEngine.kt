@@ -611,7 +611,10 @@ class CollectionEngine(
                     )
                     detail = SearchListSnapshotParser.parse(
                         requestedName = requestedName,
-                        matchedName = match.description,
+                        matchedName = StationNameNormalizer.preferredDisplayName(
+                            match.description,
+                            requestedName,
+                        ),
                         values = match.values,
                         address = address,
                         stationId = stationId,

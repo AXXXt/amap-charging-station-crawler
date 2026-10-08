@@ -15,19 +15,33 @@ from datetime import datetime, timedelta, timezone
 import pymysql
 
 
-def _env_int(name: str, fallback: int) -> int:
+def _env_int(name: str, fallback: int, allow_zero: bool = False) -> int:
     try:
         value = int(os.getenv(name, "") or fallback)
     except (TypeError, ValueError):
         return fallback
+    if value == 0 and allow_zero:
+        return 0
     return value if value > 0 else fallback
 
 
+def _env_flag(name: str, fallback: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return fallback
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
 TASK_TYPE = "HENAN_POI_DETAIL"
-# 默认每批 400 个站点，可用 MONITOR_BATCH_SIZE 环境变量覆盖。
-DEFAULT_BATCH_SIZE = _env_int("MONITOR_BATCH_SIZE", 400)
-DEFAULT_TARGET_ROUNDS = _env_int("MONITOR_TARGET_ROUNDS", 24)
-DEFAULT_INTERVAL_MINUTES = _env_int("MONITOR_INTERVAL_MINUTES", 60)
+# 全库模式（默认开启）：把结果表里所有站点装入同一个批次并无限循环，
+# 跑完一轮立即开始下一轮（轮次间隔 0 分钟）。用 MONITOR_FULL_LIBRARY=0 可关掉。
+FULL_LIBRARY_MODE = _env_flag("MONITOR_FULL_LIBRARY", True)
+# size=0 表示"不限制"（全库）。经典模式默认 400。
+DEFAULT_BATCH_SIZE = _env_int("MONITOR_BATCH_SIZE", 0 if FULL_LIBRARY_MODE else 400, allow_zero=True)
+# rounds=0 表示"无限循环，不自动结束批次"。
+DEFAULT_TARGET_ROUNDS = _env_int("MONITOR_TARGET_ROUNDS", 0 if FULL_LIBRARY_MODE else 24, allow_zero=True)
+# interval=0 表示"上一轮跑完立即开始下一轮"。
+DEFAULT_INTERVAL_MINUTES = _env_int("MONITOR_INTERVAL_MINUTES", 0 if FULL_LIBRARY_MODE else 60, allow_zero=True)
 LEASE_SECONDS = 900
 MAX_ATTEMPTS = 3
 
@@ -378,6 +392,29 @@ def _candidate_rows(conn, size, city):
         return cursor.fetchall()
 
 
+def _all_station_candidates(conn, size):
+    """全库模式：装入结果表里所有有名字的站点（size<=0 表示不限制）。"""
+    query = """
+        SELECT r.source_key,
+               r.source_station_id,
+               COALESCE(NULLIF(r.matched_station_name,''), r.requested_name) AS matched_station_name,
+               r.city, r.district,
+               COALESCE(NULLIF(r.collected_address,''), r.source_address, '') AS station_address,
+               r.source_latitude AS latitude,
+               r.source_longitude AS longitude
+          FROM site_exploration_charging_station_result r
+         WHERE r.source_key <> ''
+           AND TRIM(COALESCE(NULLIF(r.matched_station_name,''), r.requested_name)) <> ''
+         ORDER BY r.city, r.district, r.source_key
+    """
+    with conn.cursor() as cursor:
+        if size and int(size) > 0:
+            cursor.execute(query + " LIMIT %s", (int(size),))
+        else:
+            cursor.execute(query)
+        return cursor.fetchall()
+
+
 def _reuse_candidates(conn, size, reuse_batch_ids):
     """复用已有批次里的站点（多批合并、按 source_key 去重）。"""
     ids = sorted({int(value) for value in reuse_batch_ids})
@@ -427,14 +464,18 @@ def close_active_batches(db_config):
 
 def create_batch(db_config, size=DEFAULT_BATCH_SIZE, target_rounds=DEFAULT_TARGET_ROUNDS,
                  interval_minutes=DEFAULT_INTERVAL_MINUTES, city="", collection_mode="DETAIL",
-                 reuse_batch_ids=None):
+                 reuse_batch_ids=None, all_stations=None):
     init_tables(db_config)
     now = _now()
     code = "MON-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     conn = _conn(db_config)
     try:
+        if all_stations is None:
+            all_stations = FULL_LIBRARY_MODE
         if reuse_batch_ids:
             candidates = _reuse_candidates(conn, size, reuse_batch_ids)
+        elif all_stations:
+            candidates = _all_station_candidates(conn, size)
         else:
             candidates = _candidate_rows(conn, size, city.strip())
         if not candidates:
@@ -545,7 +586,8 @@ def _start_next_round(db_config, batch_id):
                     target_at = _as_utc(current_round_row["started_at"]) + timedelta(minutes=interval_minutes)
                     if target_at > _as_utc(now):
                         next_available_at = target_at.strftime("%Y-%m-%d %H:%M:%S")
-                if current_round >= int(batch["target_rounds"] or DEFAULT_TARGET_ROUNDS):
+                target_rounds = int(batch["target_rounds"] or 0)
+                if target_rounds > 0 and current_round >= target_rounds:
                     cursor.execute(
                         "UPDATE station_monitor_batch SET status='COMPLETED', finished_at=%s, updated_at=%s WHERE id=%s",
                         (now, now, batch_id),
@@ -872,9 +914,10 @@ def _main(argv=None) -> int:
 
     parser = argparse.ArgumentParser(description="重点站点小时监控批次工具")
     parser.add_argument("command", nargs="?", default="create-batch", choices=["create-batch"])
-    parser.add_argument("--size", type=int, default=DEFAULT_BATCH_SIZE, help="批次站点数(默认 400)")
-    parser.add_argument("--rounds", type=int, default=DEFAULT_TARGET_ROUNDS, help="目标轮次(默认 24)")
-    parser.add_argument("--interval", type=int, default=DEFAULT_INTERVAL_MINUTES, help="轮次间隔分钟(默认 60)")
+    parser.add_argument("--size", type=int, default=DEFAULT_BATCH_SIZE, help="批次站点数，0=全库不限制")
+    parser.add_argument("--rounds", type=int, default=DEFAULT_TARGET_ROUNDS, help="目标轮次，0=无限循环")
+    parser.add_argument("--interval", type=int, default=DEFAULT_INTERVAL_MINUTES, help="轮次间隔分钟，0=跑完立即下一轮")
+    parser.add_argument("--all-stations", action="store_true", help="全库模式：装入结果表里的所有站点")
     parser.add_argument("--mode", default="DETAIL", choices=["DETAIL", "LIST"], help="采集模式")
     parser.add_argument("--city", default="", help="仅选择指定城市(复用批次时忽略)")
     parser.add_argument("--reuse-batches", default="", help="复用这些批次的站点, 例如 1,2,3,4")
@@ -899,6 +942,7 @@ def _main(argv=None) -> int:
         city=args.city,
         collection_mode=args.mode,
         reuse_batch_ids=reuse_ids,
+        all_stations=True if args.all_stations else None,
     )
     print("created_batch_id=%s" % batch_id)
     return 0

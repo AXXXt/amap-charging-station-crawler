@@ -7,6 +7,7 @@ keeps its original behavior.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -14,10 +15,19 @@ from datetime import datetime, timedelta, timezone
 import pymysql
 
 
+def _env_int(name: str, fallback: int) -> int:
+    try:
+        value = int(os.getenv(name, "") or fallback)
+    except (TypeError, ValueError):
+        return fallback
+    return value if value > 0 else fallback
+
+
 TASK_TYPE = "HENAN_POI_DETAIL"
-DEFAULT_BATCH_SIZE = 100
-DEFAULT_TARGET_ROUNDS = 24
-DEFAULT_INTERVAL_MINUTES = 60
+# 默认每批 400 个站点，可用 MONITOR_BATCH_SIZE 环境变量覆盖。
+DEFAULT_BATCH_SIZE = _env_int("MONITOR_BATCH_SIZE", 400)
+DEFAULT_TARGET_ROUNDS = _env_int("MONITOR_TARGET_ROUNDS", 24)
+DEFAULT_INTERVAL_MINUTES = _env_int("MONITOR_INTERVAL_MINUTES", 60)
 LEASE_SECONDS = 900
 MAX_ATTEMPTS = 3
 
@@ -368,14 +378,65 @@ def _candidate_rows(conn, size, city):
         return cursor.fetchall()
 
 
+def _reuse_candidates(conn, size, reuse_batch_ids):
+    """复用已有批次里的站点（多批合并、按 source_key 去重）。"""
+    ids = sorted({int(value) for value in reuse_batch_ids})
+    if not ids:
+        return []
+    placeholders = ", ".join(["%s"] * len(ids))
+    query = f"""
+        SELECT bs.source_key,
+               bs.amap_poi_id AS source_station_id,
+               bs.station_name AS matched_station_name,
+               bs.city, bs.district,
+               bs.station_address,
+               bs.latitude, bs.longitude
+          FROM station_monitor_batch_station bs
+          JOIN (
+                SELECT source_key, MIN(batch_id) AS first_batch
+                  FROM station_monitor_batch_station
+                 WHERE batch_id IN ({placeholders})
+                 GROUP BY source_key
+               ) picked
+            ON picked.source_key = bs.source_key AND picked.first_batch = bs.batch_id
+         ORDER BY bs.batch_id, bs.sequence_no
+         LIMIT %s
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(query, tuple(ids) + (int(size),))
+        return cursor.fetchall()
+
+
+def close_active_batches(db_config):
+    """把当前所有 ACTIVE 批次标记为完成，便于新建批次接管。"""
+    now = _now()
+    conn = _conn(db_config)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE station_monitor_batch SET status='COMPLETED', finished_at=%s, updated_at=%s "
+                "WHERE status='ACTIVE'",
+                (now, now),
+            )
+            affected = cursor.rowcount
+        conn.commit()
+        return affected
+    finally:
+        conn.close()
+
+
 def create_batch(db_config, size=DEFAULT_BATCH_SIZE, target_rounds=DEFAULT_TARGET_ROUNDS,
-                 interval_minutes=DEFAULT_INTERVAL_MINUTES, city="", collection_mode="DETAIL"):
+                 interval_minutes=DEFAULT_INTERVAL_MINUTES, city="", collection_mode="DETAIL",
+                 reuse_batch_ids=None):
     init_tables(db_config)
     now = _now()
     code = "MON-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     conn = _conn(db_config)
     try:
-        candidates = _candidate_rows(conn, size, city.strip())
+        if reuse_batch_ids:
+            candidates = _reuse_candidates(conn, size, reuse_batch_ids)
+        else:
+            candidates = _candidate_rows(conn, size, city.strip())
         if not candidates:
             raise RuntimeError("NO_ELIGIBLE_MONITOR_STATIONS")
         with conn.cursor() as cursor:
@@ -766,3 +827,82 @@ def status(db_config):
             return {"active": True, "batch": batch, "taskStatusCounts": counts}
     finally:
         conn.close()
+
+
+def _load_local_env() -> None:
+    """Best-effort .env loader so the CLI behaves like the service."""
+    for candidate in (".env", "../.env", "../../.env", "../../../.env"):
+        path = os.path.abspath(candidate)
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as handle:
+            for raw in handle:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip(chr(34)).strip(chr(39))
+                if key and not os.getenv(key):
+                    os.environ[key] = value
+        return
+
+
+def _db_config_from_env():
+    from site_exploration_bridge import parse_mysql_database_url
+
+    config = parse_mysql_database_url(os.getenv("EVCS_DATABASE_URL", ""))
+    if not config:
+        config = {
+            "host": os.getenv("DB_HOST", ""),
+            "port": _env_int("DB_PORT", 3306),
+            "user": os.getenv("DB_USER", ""),
+            "password": os.getenv("DB_PASSWORD", ""),
+            "database": os.getenv("DB_NAME", ""),
+        }
+    config.setdefault("charset", os.getenv("DB_CHARSET", "utf8mb4"))
+    config.setdefault("connect_timeout", _env_int("DB_CONNECT_TIMEOUT", 5))
+    if not all(config.get(key) for key in ("host", "user", "database")):
+        raise SystemExit("EVCS_DATABASE_URL(或 DB_* 变量)未配置，无法连接数据库")
+    return config
+
+
+def _main(argv=None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="重点站点小时监控批次工具")
+    parser.add_argument("command", nargs="?", default="create-batch", choices=["create-batch"])
+    parser.add_argument("--size", type=int, default=DEFAULT_BATCH_SIZE, help="批次站点数(默认 400)")
+    parser.add_argument("--rounds", type=int, default=DEFAULT_TARGET_ROUNDS, help="目标轮次(默认 24)")
+    parser.add_argument("--interval", type=int, default=DEFAULT_INTERVAL_MINUTES, help="轮次间隔分钟(默认 60)")
+    parser.add_argument("--mode", default="DETAIL", choices=["DETAIL", "LIST"], help="采集模式")
+    parser.add_argument("--city", default="", help="仅选择指定城市(复用批次时忽略)")
+    parser.add_argument("--reuse-batches", default="", help="复用这些批次的站点, 例如 1,2,3,4")
+    parser.add_argument("--close-active", action="store_true", help="先把当前 ACTIVE 批次标记为完成")
+    args = parser.parse_args(argv)
+
+    _load_local_env()
+    db_config = _db_config_from_env()
+    reuse_ids = [
+        int(part)
+        for part in args.reuse_batches.replace(",", ",").split(",")
+        if part.strip()
+    ]
+    if args.close_active:
+        closed = close_active_batches(db_config)
+        print("closed_active_batches=%s" % closed)
+    batch_id = create_batch(
+        db_config,
+        size=args.size,
+        target_rounds=args.rounds,
+        interval_minutes=args.interval,
+        city=args.city,
+        collection_mode=args.mode,
+        reuse_batch_ids=reuse_ids,
+    )
+    print("created_batch_id=%s" % batch_id)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

@@ -7,32 +7,100 @@ import com.tigercode.evcollector.core.model.StationDetail
  * search-result card: the current price plus aggregated idle/total pile
  * counts. It never opens the station detail page, so per-pile states and
  * time-of-use price ladders stay whatever the last full detail round captured.
+ *
+ * AMap cards are inconsistent: the price may read "￥0.60/度", "0.60元/度" or
+ * "0.60元/kWh", and pile lines may or may not carry a "根" suffix. Everything
+ * is therefore parsed defensively with sanity checks so that unrelated numbers
+ * (power ratings like 160KW, distances, fees) are never mistaken for a price.
  */
 object SearchListSnapshotParser {
-    private val priceRegex = Regex(
-        pattern = "(?:￥|¥)?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(?:元\\s*/\\s*(?:kWh|度(?:电)?)|元/度电|元/度|元/kWh|元)",
-        options = setOf(RegexOption.IGNORE_CASE),
+    private val yuanUnitPriceRegex = Regex(
+        "([0-9]+(?:\\.[0-9]+)?)\\s*元\\s*/?\\s*(?:kWh|KW·h|kw·h|度(?:电)?)",
+        RegexOption.IGNORE_CASE,
     )
-    private val idleRegex = Regex("(?:空闲|可充|空余|剩余)\\s*([0-9]+)\\s*(?:根|个)?")
-    private val busyRegex = Regex("(?:忙碌|充电中|使用中|占用|已满)\\s*([0-9]+)\\s*(?:根|个)?")
+    private val currencyPriceRegex = Regex("(?:￥|¥)\\s*([0-9]+(?:\\.[0-9]+)?)")
+    private val bareYuanPriceRegex = Regex("([0-9]+(?:\\.[0-9]+)?)\\s*元")
+    private val idleRegex = Regex("(?:空闲|可充|空余|剩余)\\s*([0-9]{1,3})")
+    private val busyRegex = Regex("(?:忙碌|充电中|使用中|占用|已满)\\s*([0-9]{1,3})")
+    private val overallRatioRegex = Regex("(?:空闲|空余|剩余|空)\\s*([0-9]{1,3})\\s*/\\s*([0-9]{1,3})")
 
     private data class TypeCounts(val total: String, val idle: String)
 
-    private fun parseTypeCounts(joined: String, keywords: List<String>): TypeCounts {
+    private fun priceCandidate(text: String): String {
+        val value = text.toDoubleOrNull() ?: return ""
+        // A charging price outside 0.1 - 5.0 元/kWh is almost certainly a
+        // power rating, distance or fee that leaked into the regex.
+        if (value < 0.1 || value > 5.0) return ""
+        return text
+    }
+
+    private fun extractPrice(joined: String): String {
+        for (regex in listOf(yuanUnitPriceRegex, currencyPriceRegex, bareYuanPriceRegex)) {
+            for (match in regex.findAll(joined)) {
+                val candidate = priceCandidate(match.groupValues[1])
+                if (candidate.isNotEmpty()) return candidate
+            }
+        }
+        return ""
+    }
+
+    private fun stripPriceSpans(joined: String): String {
+        var text = joined
+        for (regex in listOf(yuanUnitPriceRegex, currencyPriceRegex, bareYuanPriceRegex)) {
+            text = regex.replace(text, " ")
+        }
+        return text
+    }
+
+    private fun safeTotal(joined: String, index: Int, length: Int, value: String): Boolean {
+        if (value.length > 3) return false
+        val tail = joined.substring(index + length, minOf(joined.length, index + length + 4))
+        val blocked = listOf("kW", "KW", "kw", "公里", "米", "元", "度", "%", "km")
+        return blocked.none { tail.startsWith(it) }
+    }
+
+    private fun parseTypeCounts(pileText: String, keywords: List<String>): TypeCounts {
         var total = ""
         var idle = ""
         for (keyword in keywords) {
             if (total.isEmpty()) {
-                val withUnit = Regex("$keyword[^0-9]{0,4}([0-9]+)\\s*(?:根|个)").find(joined)
-                val beforeStatus = Regex(
-                    "$keyword[^0-9]{0,4}([0-9]+)(?=[^0-9]{0,4}(?:空闲|可充|空余|剩余|忙碌|充电中|使用中|占用|已满))"
-                ).find(joined)
-                val match = withUnit ?: beforeStatus
-                if (match != null) total = match.groupValues[1]
+                // 高德列表卡片常用 "超充 空2/6" 这种成对写法（空闲/总数）。
+                val emptyRatio = Regex(
+                    "$keyword[^0-9]{0,8}(?:空闲|空余|剩余|空)\\s*([0-9]{1,3})\\s*/\\s*([0-9]{1,3})"
+                ).find(pileText)
+                if (emptyRatio != null) {
+                    idle = emptyRatio.groupValues[1]
+                    total = emptyRatio.groupValues[2]
+                }
+            }
+            if (total.isEmpty()) {
+                val ratio = Regex("$keyword[^0-9\\n]{0,4}([0-9]{1,3})\\s*/\\s*([0-9]{1,3})\\s*(?:根|个)")
+                    .find(pileText)
+                if (ratio != null) {
+                    idle = ratio.groupValues[1]
+                    total = ratio.groupValues[2]
+                }
+            }
+            if (total.isEmpty()) {
+                val withUnit = Regex("$keyword[^0-9\\n]{0,4}([0-9]{1,3})\\s*(?:根|个)")
+                    .find(pileText)
+                if (withUnit != null) {
+                    total = withUnit.groupValues[1]
+                }
+            }
+            if (total.isEmpty()) {
+                val bare = Regex("$keyword[^0-9\\n]{0,3}([0-9]{1,3})").findAll(pileText)
+                for (match in bare) {
+                    val value = match.groupValues[1]
+                    if (safeTotal(pileText, match.range.first, match.value.length, value)) {
+                        total = value
+                        break
+                    }
+                }
             }
             if (idle.isEmpty()) {
-                val match = Regex("$keyword[^\\n]{0,12}?(?:空闲|可充|空余|剩余)\\s*([0-9]+)")
-                    .find(joined)
+                val match = Regex("$keyword[^\\n]{0,12}?(?:空闲|可充|空余|剩余)\\s*([0-9]{1,3})")
+                    .find(pileText)
                 if (match != null) idle = match.groupValues[1]
             }
         }
@@ -56,17 +124,14 @@ object SearchListSnapshotParser {
         val joined = (listOf(matchedName, requestedName) + values)
             .filter { it.isNotBlank() }
             .joinToString("\n")
-        val price = priceRegex.findAll(joined)
-            .mapNotNull { it.groupValues[1].toBigDecimalOrNull() }
-            .map { it.toPlainString() }
-            .firstOrNull()
-            .orEmpty()
+        val price = extractPrice(joined)
+        val pileText = stripPriceSpans(joined)
 
-        val fast = parseTypeCounts(joined, listOf("快充", "快"))
-        val superType = parseTypeCounts(joined, listOf("超充", "超"))
-        val slow = parseTypeCounts(joined, listOf("慢充", "慢"))
-        val overallIdle = idleRegex.find(joined)?.groupValues?.get(1).orEmpty()
-        val overallBusy = busyRegex.find(joined)?.groupValues?.get(1).orEmpty()
+        val fast = parseTypeCounts(pileText, listOf("快充", "快"))
+        val superType = parseTypeCounts(pileText, listOf("超充", "超"))
+        val slow = parseTypeCounts(pileText, listOf("慢充", "慢"))
+        val overallIdle = idleRegex.find(pileText)?.groupValues?.get(1).orEmpty()
+        val overallBusy = busyRegex.find(pileText)?.groupValues?.get(1).orEmpty()
 
         val totals = linkedMapOf("fast" to fast.total, "super" to superType.total, "slow" to slow.total)
         val idles = linkedMapOf("fast" to fast.idle, "super" to superType.idle, "slow" to slow.idle)
@@ -96,7 +161,22 @@ object SearchListSnapshotParser {
             if (biggest != null) idles[biggest] = clampIdle(overallIdle, totals[biggest].orEmpty())
         }
 
-        val totalSum = totals.values.mapNotNull { it.toIntOrNull() }.sum()
+        var totalSum = totals.values.mapNotNull { it.toIntOrNull() }.sum()
+        if (totalSum == 0) {
+            // Fall back to an aggregate "空闲 X/Y 根" style line if present.
+            val ratio = overallRatioRegex.find(pileText)
+            if (ratio != null) {
+                val ratioIdle = ratio.groupValues[1]
+                val ratioTotal = ratio.groupValues[2]
+                val bucket = present.firstOrNull()
+                    ?: totals.keys.firstOrNull { listOf("超充", "快充", "慢充").any { it in pileText } }
+                if (bucket != null && ratioTotal.toIntOrNull() != null) {
+                    totals[bucket] = ratioTotal
+                    idles[bucket] = clampIdle(ratioIdle, ratioTotal)
+                    totalSum = ratioTotal.toIntOrNull() ?: 0
+                }
+            }
+        }
         val chargingPileTotal = if (totalSum > 0) {
             totalSum
         } else {

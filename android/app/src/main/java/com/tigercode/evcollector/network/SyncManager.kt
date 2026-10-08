@@ -30,6 +30,7 @@ import java.net.UnknownHostException
 
 private const val SITE_STATION_DETAIL_TASK = "SITE_STATION_DETAIL"
 private const val HENAN_POI_DETAIL_TASK = "HENAN_POI_DETAIL"
+private const val HENAN_POI_LIST_TASK = "HENAN_POI_LIST"
 
 class SyncManager(
     private val context: Context,
@@ -40,6 +41,10 @@ class SyncManager(
         return withContext(Dispatchers.IO) {
             val deviceCode = AppPreferences.deviceCode(context)
             val activationCode = AppPreferences.activationCode(context)
+            // Keep the claim mode backward compatible with the deployed API
+            // ("MONITOR" endpoints). The list-vs-detail choice stays local and
+            // travels in the observation payload (collectionMode=LIST_SNAPSHOT)
+            // so an older server can still accept and store the snapshot.
             val collectionMode = if (AppPreferences.isMonitorMode(context)) "MONITOR" else "NORMAL"
             var claimedTask: RemoteTaskDto? = null
             var api: ServerApi? = null
@@ -111,7 +116,23 @@ class SyncManager(
                 leaseRenewJob = startLeaseRenewal(activeApi, deviceCode, collectionMode, task, leaseLost)
                 try {
                     val taskStartedAt = System.currentTimeMillis()
+                    val listSnapshotMode =
+                        AppPreferences.isMonitorMode(context) && AppPreferences.isMonitorListMode(context)
                     val details = if (
+                        task.type == HENAN_POI_LIST_TASK ||
+                        (listSnapshotMode && task.type == HENAN_POI_DETAIL_TASK)
+                    ) {
+                        val requestedName = task.stationName.ifBlank { task.keyword }
+                        val detail = engine.runStationListSnapshotTask(
+                            stationId = task.stationId,
+                            stationName = requestedName,
+                            address = task.stationAddress,
+                            latitude = task.stationLatitude,
+                            longitude = task.stationLongitude,
+                            remoteTaskId = task.id,
+                        ) ?: throw IllegalStateException("未采集到目标站点: $requestedName")
+                        listOf(detail)
+                    } else if (
                         task.type == SITE_STATION_DETAIL_TASK ||
                         task.type == HENAN_POI_DETAIL_TASK
                     ) {
@@ -143,7 +164,8 @@ class SyncManager(
                     )
                     if (
                         task.type == SITE_STATION_DETAIL_TASK ||
-                        task.type == HENAN_POI_DETAIL_TASK
+                        task.type == HENAN_POI_DETAIL_TASK ||
+                        task.type == HENAN_POI_LIST_TASK
                     ) {
                         summary["sourceSiteId"] = task.sourceSiteId
                         summary["sourceSiteOrder"] = task.sourceSiteOrder

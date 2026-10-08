@@ -48,6 +48,15 @@ def _conn(db_config):
     )
 
 
+def _add_column_if_missing(cursor, table, column, definition):
+    cursor.execute(
+        "SELECT COUNT(*) AS count FROM information_schema.columns "
+        "WHERE table_schema=DATABASE() AND table_name=%s AND column_name=%s",
+        (table, column),
+    )
+    if int(cursor.fetchone()["count"]) == 0:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
 def init_tables(db_config):
     ddl = [
         """
@@ -60,6 +69,7 @@ def init_tables(db_config):
             target_rounds INT UNSIGNED NOT NULL DEFAULT 24,
             target_interval_minutes INT UNSIGNED NOT NULL DEFAULT 60,
             current_round INT UNSIGNED NOT NULL DEFAULT 0,
+            collection_mode VARCHAR(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'DETAIL',
             started_at DATETIME NULL,
             finished_at DATETIME NULL,
             created_at DATETIME NOT NULL,
@@ -125,6 +135,7 @@ def init_tables(db_config):
             longitude DECIMAL(12,8) NULL,
             sequence_no INT UNSIGNED NOT NULL DEFAULT 0,
             priority INT UNSIGNED NOT NULL DEFAULT 80,
+            collection_mode VARCHAR(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'DETAIL',
             type VARCHAR(32) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'HENAN_POI_DETAIL',
             status VARCHAR(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'PENDING',
             attempt SMALLINT UNSIGNED NOT NULL DEFAULT 0,
@@ -154,6 +165,8 @@ def init_tables(db_config):
         with conn.cursor() as cursor:
             for statement in ddl:
                 cursor.execute(statement)
+            _add_column_if_missing(cursor, "station_monitor_batch", "collection_mode", "VARCHAR(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'DETAIL'")
+            _add_column_if_missing(cursor, "station_monitor_task", "collection_mode", "VARCHAR(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'DETAIL'")
         conn.commit()
     finally:
         conn.close()
@@ -211,6 +224,7 @@ def task_payload(row):
         "stationLongitude": longitude,
         "stationSequence": int(row.get("sequence_no") or 0),
         "sourcePayload": source_payload,
+        "collectionMode": row.get("collection_mode") or "DETAIL",
     }
 
 
@@ -219,7 +233,7 @@ def legacy_task(row):
     payload = task_payload(row)
     return {
         "id": row["local_task_id"],
-        "type": TASK_TYPE,
+        "type": row.get("type") or TASK_TYPE,
         "priority": payload["priority"],
         "province": payload["province"],
         "city": payload["city"],
@@ -245,6 +259,7 @@ def legacy_task(row):
         "source_station_id": payload["stationId"],
         "source_payload": payload["sourcePayload"],
         "source_sequence": payload["stationSequence"],
+        "collection_mode": row.get("collection_mode") or "DETAIL",
     }
 
 
@@ -354,7 +369,7 @@ def _candidate_rows(conn, size, city):
 
 
 def create_batch(db_config, size=DEFAULT_BATCH_SIZE, target_rounds=DEFAULT_TARGET_ROUNDS,
-                 interval_minutes=DEFAULT_INTERVAL_MINUTES, city=""):
+                 interval_minutes=DEFAULT_INTERVAL_MINUTES, city="", collection_mode="DETAIL"):
     init_tables(db_config)
     now = _now()
     code = "MON-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
@@ -366,14 +381,15 @@ def create_batch(db_config, size=DEFAULT_BATCH_SIZE, target_rounds=DEFAULT_TARGE
         with conn.cursor() as cursor:
             cursor.execute(
                 "INSERT INTO station_monitor_batch "
-                "(batch_code,name,status,station_count,target_rounds,target_interval_minutes,created_at,updated_at) "
-                "VALUES (%s,%s,'ACTIVE',%s,%s,%s,%s,%s)",
+                "(batch_code,name,status,station_count,target_rounds,target_interval_minutes,collection_mode,created_at,updated_at) "
+                "VALUES (%s,%s,'ACTIVE',%s,%s,%s,%s,%s,%s)",
                 (
                     code,
                     f"重点站点监控批次 {code}",
                     len(candidates),
                     target_rounds,
                     interval_minutes,
+                    collection_mode,
                     now,
                     now,
                 ),
@@ -489,11 +505,16 @@ def _start_next_round(db_config, batch_id):
                 "INSERT INTO station_monitor_task "
                 "(task_key,local_task_id,batch_id,round_id,round_no,source_key,amap_poi_id,"
                 "station_name,station_address,city,district,latitude,longitude,sequence_no,"
-                "priority,type,status,attempt,max_attempts,available_at,created_at,updated_at) "
+                "priority,collection_mode,type,status,attempt,max_attempts,available_at,created_at,updated_at) "
                 "SELECT SHA2(CONCAT(%s,':',%s,':',bs.source_key),256), UUID(), bs.batch_id, %s, %s, "
                 "bs.source_key, bs.amap_poi_id, bs.station_name, bs.station_address, bs.city, bs.district, "
-                "bs.latitude, bs.longitude, bs.sequence_no, 80, 'HENAN_POI_DETAIL', 'PENDING', 0, 3, %s, %s, %s "
-                "FROM station_monitor_batch_station bs WHERE bs.batch_id=%s",
+                "bs.latitude, bs.longitude, bs.sequence_no, 80, "
+                "CASE WHEN b.collection_mode='LIST' THEN 'LIST' ELSE 'DETAIL' END, "
+                "CASE WHEN b.collection_mode='LIST' THEN 'HENAN_POI_LIST' ELSE 'HENAN_POI_DETAIL' END, "
+                "'PENDING', 0, 3, %s, %s, %s "
+                "FROM station_monitor_batch_station bs "
+                "JOIN station_monitor_batch b ON b.id=bs.batch_id "
+                "WHERE bs.batch_id=%s",
                 (batch_id, next_round, round_id, next_round, next_available_at, now, now, batch_id),
             )
             cursor.execute(
@@ -528,8 +549,9 @@ def claim(db_config, device):
             conn.begin()
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT * FROM station_monitor_task "
-                    "WHERE batch_id=%s AND round_no=%s AND status='PENDING' "
+                    "SELECT t.*, b.collection_mode "
+                    "FROM station_monitor_task t JOIN station_monitor_batch b ON b.id=t.batch_id "
+                    "WHERE t.batch_id=%s AND t.round_no=%s AND t.status='PENDING' "
                     "AND available_at<=%s AND attempt<max_attempts "
                     "ORDER BY attempt, id LIMIT 1 FOR UPDATE SKIP LOCKED",
                     (batch_id, round_no, now),

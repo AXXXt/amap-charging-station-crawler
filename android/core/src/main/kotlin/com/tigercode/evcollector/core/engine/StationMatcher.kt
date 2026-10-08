@@ -9,6 +9,7 @@ data class StationMatch(
     val centerX: Int,
     val centerY: Int,
     val description: String,
+    val values: List<String> = emptyList(),
 )
 
 object StationMatcher {
@@ -125,7 +126,8 @@ object StationMatcher {
                 val description = node.contentDescription.trim()
                 val text = node.text.trim()
                 val label = description.ifEmpty { text }
-                if (isStationCard(node, label, collectText(node), null, root.bounds)) {
+                val values = collectText(node)
+                if (isStationCard(node, label, values, null, root.bounds)) {
                     val candidateName = StationNameNormalizer.normalize(label)
                     val score = when {
                         candidateName.isEmpty() -> 0
@@ -140,6 +142,7 @@ object StationMatcher {
                             centerX = node.bounds.centerX,
                             centerY = node.bounds.centerY,
                             description = label,
+                            values = listOf(values),
                         )
                         if (best == null || candidate.score > best!!.score) {
                             best = candidate

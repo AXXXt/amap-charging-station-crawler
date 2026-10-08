@@ -81,6 +81,7 @@ class MainActivity : AppCompatActivity() {
         binding.importHenanPoiButton.setOnClickListener { importHenanPois() }
         binding.startHenanCollectButton.setOnClickListener { startHenanCollect() }
         binding.startMonitorCollectButton.setOnClickListener { startMonitorCollect() }
+        binding.startMonitorListButton.setOnClickListener { startMonitorListCollect() }
         binding.resetHenanTasksButton.setOnClickListener { confirmResetHenanTasks() }
         binding.localScanButton.setOnClickListener { startLocalScan() }
         binding.stopRunButton.setOnClickListener { stopRunning() }
@@ -283,6 +284,7 @@ class MainActivity : AppCompatActivity() {
         }
         requestNotificationPermissionIfNeeded()
         AppPreferences.setMonitorMode(this, true)
+        AppPreferences.setMonitorListMode(this, false)
         AppPreferences.setScanning(this, true)
         CollectorKeepAliveService.start(this)
         AppPreferences.setRemoteStatus(this, "重点站点小时监控已启动")
@@ -290,6 +292,24 @@ class MainActivity : AppCompatActivity() {
         ChargingAccessibilityService.current()?.launchAmap()
         refreshUi()
     }
+    private fun startMonitorListCollect() {
+        if (!saveConfig()) return
+        if (!ChargingAccessibilityService.isConnected()) {
+            Toast.makeText(this, "请先开启无障碍服务", Toast.LENGTH_SHORT).show()
+            openAccessibilitySettings()
+            return
+        }
+        requestNotificationPermissionIfNeeded()
+        AppPreferences.setMonitorMode(this, true)
+        AppPreferences.setMonitorListMode(this, true)
+        AppPreferences.setScanning(this, true)
+        CollectorKeepAliveService.start(this)
+        AppPreferences.setRemoteStatus(this, "重点站点列表快照采集已启动")
+        AppPreferences.appendLog(this, "已启动重点站点列表快照滚动调度")
+        ChargingAccessibilityService.current()?.launchAmap()
+        refreshUi()
+    }
+
     private fun confirmResetHenanTasks() {
         AlertDialog.Builder(this)
             .setTitle("确认重置任务表")
@@ -414,6 +434,7 @@ class MainActivity : AppCompatActivity() {
         val scanning = AppPreferences.isScanning(this)
         binding.startHenanCollectButton.isEnabled = !scanning
         binding.startMonitorCollectButton.isEnabled = !scanning
+        binding.startMonitorListButton.isEnabled = !scanning
         binding.serviceStatusText.text = buildString {
             append("无障碍服务: ")
             append(

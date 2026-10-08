@@ -29,6 +29,8 @@ data class StationDetail(
     val slowPrices: List<PricePeriod> = emptyList(),
     val chargingPileTotal: Int = 0,
     val chargingPiles: List<ChargingPileDetail> = emptyList(),
+    val sourcePage: String = "",
+    val collectionMode: String = "",
 ) {
     val filledFieldCount: Int
         get() {

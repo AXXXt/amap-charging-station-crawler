@@ -18,7 +18,8 @@ import pymysql
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 TASK_TYPE = "SITE_STATION_DETAIL"
 HENAN_POI_TASK_TYPE = "HENAN_POI_DETAIL"
-RESULT_TASK_TYPES = {TASK_TYPE, HENAN_POI_TASK_TYPE}
+HENAN_POI_LIST_TASK_TYPE = "HENAN_POI_LIST"
+RESULT_TASK_TYPES = {TASK_TYPE, HENAN_POI_TASK_TYPE, HENAN_POI_LIST_TASK_TYPE}
 TERMINAL_STATUSES = {"COMPLETED", "FAILED", "CANCELLED"}
 ACTIVE_STATUSES = {"PENDING", "LEASED", "RUNNING"}
 IDLE_PILE_STATUSES = {"空闲", "空"}
@@ -679,6 +680,56 @@ class SiteExplorationBridge:
                 tuple(values[column] for column in columns),
             )
 
+    def _merge_list_snapshot_payload(self, conn, source_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep detail-only fields when a search-list snapshot arrives.
+
+        The list snapshot only carries the current price plus aggregated pile
+        counts.  Pile details and time-of-use ladders cannot be observed there,
+        so an empty value from a list round must not wipe the last full detail
+        collection stored on the latest-result row.
+        """
+        mode = str(payload.get("collectionMode") or "").upper()
+        source_page = str(payload.get("sourcePage") or "").upper()
+        if mode != "LIST_SNAPSHOT" and source_page != "SEARCH_LIST":
+            return payload
+
+        static_fields = (
+            "chargingPiles", "fastPrices", "slowPrices", "priceTrendTitle",
+            "fastPower", "superPower", "slowPower",
+        )
+        missing = [field for field in static_fields if not payload.get(field)]
+        if not missing:
+            return payload
+
+        table = quote_identifier(self.result_table, "result table")
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"SELECT result_payload FROM {table} WHERE source_key=%s LIMIT 1",
+                (source_key,),
+            )
+            row = cursor.fetchone()
+        if not row:
+            return payload
+        raw = row.get("result_payload") if isinstance(row, dict) else row[0]
+        try:
+            previous = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            return payload
+        if not isinstance(previous, dict):
+            return payload
+
+        merged = dict(payload)
+        for field in missing:
+            value = previous.get(field)
+            if value:
+                merged[field] = value
+        for field in ("fastTotal", "superTotal", "slowTotal", "chargingPileTotal", "chargingPileCount"):
+            if not merged.get(field) and previous.get(field):
+                merged[field] = previous[field]
+        if not merged.get("chargingPileCount"):
+            merged["chargingPileCount"] = len(merged.get("chargingPiles") or [])
+        return merged
+
     def upsert_result(
         self,
         task: Any,
@@ -692,7 +743,7 @@ class SiteExplorationBridge:
         if not self.enabled or task is None or task["type"] not in RESULT_TASK_TYPES:
             return
         source_payload = _json_value(task["source_payload"]) or {}
-        is_henan_poi = task["type"] == HENAN_POI_TASK_TYPE
+        is_henan_poi = task["type"] in {HENAN_POI_TASK_TYPE, HENAN_POI_LIST_TASK_TYPE}
         collection_source = "HENAN_POI" if is_henan_poi else "SITE_EXPLORATION"
         source_site_id = "" if is_henan_poi else str(task["source_site_id"] or "")
         source_station_id = str(task["source_station_id"] or station_id or "")
@@ -727,6 +778,7 @@ class SiteExplorationBridge:
                 if not uses_unix_time
                 else now_value
             )
+            merged_payload = self._merge_list_snapshot_payload(conn, source_key, payload)
             values = {
                 "source_key": source_key,
                 "observation_id": str(observation_id or ""),
@@ -748,16 +800,16 @@ class SiteExplorationBridge:
                 "business_hours": str(payload.get("businessHours") or ""),
                 "current_price": str(payload.get("currentPrice") or ""),
                 "parking_fee": str(payload.get("parkingFee") or ""),
-                "fast_available": str(payload.get("fastAvailable") or ""),
-                "fast_total": str(payload.get("fastTotal") or ""),
-                "fast_power": str(payload.get("fastPower") or ""),
-                "super_available": str(payload.get("superAvailable") or ""),
-                "super_total": str(payload.get("superTotal") or ""),
-                "super_power": str(payload.get("superPower") or ""),
-                "slow_available": str(payload.get("slowAvailable") or ""),
-                "slow_total": str(payload.get("slowTotal") or ""),
-                "slow_power": str(payload.get("slowPower") or ""),
-                "result_payload": json.dumps(payload, ensure_ascii=False),
+                "fast_available": str(merged_payload.get("fastAvailable") or ""),
+                "fast_total": str(merged_payload.get("fastTotal") or ""),
+                "fast_power": str(merged_payload.get("fastPower") or ""),
+                "super_available": str(merged_payload.get("superAvailable") or ""),
+                "super_total": str(merged_payload.get("superTotal") or ""),
+                "super_power": str(merged_payload.get("superPower") or ""),
+                "slow_available": str(merged_payload.get("slowAvailable") or ""),
+                "slow_total": str(merged_payload.get("slowTotal") or ""),
+                "slow_power": str(merged_payload.get("slowPower") or ""),
+                "result_payload": json.dumps(merged_payload, ensure_ascii=False),
                 "captured_at": captured_value,
                 "received_at": received_value,
                 "created_at": created_value,

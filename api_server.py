@@ -942,6 +942,7 @@ MOBILE_CLAIM_MAX_RETRIES = int(os.getenv("MOBILE_CLAIM_MAX_RETRIES", "3"))
 #                  两类都没有时直接返回无任务（QUEUE_EMPTY），不再回退领取其他任务类型
 MOBILE_CLAIM_MODE = (os.getenv("MOBILE_CLAIM_MODE") or "LEGACY").strip().upper()
 HENAN_POI_DETAIL_TASK = "HENAN_POI_DETAIL"
+HENAN_POI_LIST_TASK = "HENAN_POI_LIST"
 HENAN_FAILED_RETRY_LIMIT = max(
     0,
     int(os.getenv("HENAN_FAILED_RETRY_LIMIT", "2")),
@@ -2060,7 +2061,7 @@ def mobile_claim_task(
 ):
     device = _require_mobile_device(authorization)
     _validate_device_code(device, request.deviceCode)
-    if request.mode.strip().upper() == "MONITOR":
+    if request.mode.strip().upper().startswith("MONITOR"):
         task, reason = monitor_scheduler.claim(DB_CONFIG, device)
         if task is not None:
             _update_monitor_device_task(device["id"], task["id"], "RUNNING")
@@ -2274,7 +2275,7 @@ def mobile_ack_task(
 ):
     device = _require_mobile_device(authorization)
     _validate_device_code(device, request.deviceCode)
-    if request.mode.strip().upper() == "MONITOR":
+    if request.mode.strip().upper().startswith("MONITOR"):
         try:
             task = monitor_scheduler.ack(DB_CONFIG, task_id, device["id"], request.leaseToken)
         except monitor_scheduler.MonitorTaskError as error:
@@ -2372,7 +2373,7 @@ def mobile_progress_task(
 ):
     device = _require_mobile_device(authorization)
     _validate_device_code(device, request.deviceCode)
-    if request.mode.strip().upper() == "MONITOR":
+    if request.mode.strip().upper().startswith("MONITOR"):
         try:
             task = monitor_scheduler.progress(
                 DB_CONFIG, task_id, device["id"], request.leaseToken, request.progress
@@ -2458,7 +2459,7 @@ def mobile_complete_task(
 ):
     device = _require_mobile_device(authorization)
     _validate_device_code(device, request.deviceCode)
-    if request.mode.strip().upper() == "MONITOR":
+    if request.mode.strip().upper().startswith("MONITOR"):
         try:
             task = monitor_scheduler.complete(
                 DB_CONFIG, task_id, device["id"], request.leaseToken, request.resultSummary
@@ -2551,7 +2552,7 @@ def mobile_fail_task(
 ):
     device = _require_mobile_device(authorization)
     _validate_device_code(device, request.deviceCode)
-    if request.mode.strip().upper() == "MONITOR":
+    if request.mode.strip().upper().startswith("MONITOR"):
         try:
             task = monitor_scheduler.fail(
                 DB_CONFIG, task_id, device["id"], request.leaseToken,
@@ -2974,7 +2975,7 @@ def mobile_upload_observations(
         )
         if (
             observation[5] is None
-            or observation[5]["type"] != HENAN_POI_DETAIL_TASK
+            or observation[5]["type"] not in {HENAN_POI_DETAIL_TASK, HENAN_POI_LIST_TASK}
         ) and LOCAL_RESULT_SYNC_ENABLED:
             try:
                 _sync_local_station_result(

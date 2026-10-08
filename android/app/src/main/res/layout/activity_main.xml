@@ -150,6 +150,13 @@
             android:text="开始重点站点小时监控" />
 
         <Button
+            android:id="@+id/start_monitor_list_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="开始重点站点列表快照采集" />
+
+        <Button
             android:id="@+id/reset_henan_tasks_button"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

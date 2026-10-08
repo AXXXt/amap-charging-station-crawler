@@ -21,6 +21,7 @@ import com.tigercode.evcollector.core.parser.ChargingPileDialogParser
 import com.tigercode.evcollector.core.parser.PageAssessor
 import com.tigercode.evcollector.core.parser.PriceDetailParser
 import com.tigercode.evcollector.core.parser.ResultMerger
+import com.tigercode.evcollector.core.parser.SearchListSnapshotParser
 import com.tigercode.evcollector.core.parser.StationNameNormalizer
 import com.tigercode.evcollector.data.CollectorRepository
 import com.tigercode.evcollector.data.ScanTaskEntity
@@ -551,6 +552,112 @@ class CollectionEngine(
         }
     }
 
+    suspend fun runStationListSnapshotTask(
+        stationId: String,
+        stationName: String,
+        address: String,
+        latitude: Double?,
+        longitude: Double?,
+        remoteTaskId: String = "",
+    ): StationDetail? = runMutex.withLock {
+        withContext(Dispatchers.Main.immediate) {
+            stopRequested = false
+            collectedCount = 0
+            val requestedName = stationName.trim()
+            require(requestedName.isNotBlank()) { "站点名称不能为空" }
+            val service = waitForService() ?: throw IllegalStateException(
+                "无障碍服务未连接，请先到系统设置开启采集助手"
+            )
+
+            emit(CollectionState.OPENING_AMAP, "列表快照：打开高德地图", 0, requestedName)
+            ensureAmapAdClosed(service)
+            emit(CollectionState.SCANNING_RESULTS, "列表快照：搜索 $requestedName", 0, requestedName)
+            humanDelay(900L, 1800L)
+            if (!openSearchViaSearchBar(service, requestedName)) {
+                service.openAmapSearch(requestedName)
+            }
+            var snapshot = waitForSearchResults(service, requestedName) ?: throw IllegalStateException(
+                "高德地图搜索页打开失败: $requestedName"
+            )
+            var matched = false
+            var scrollAttempts = 0
+            var lastSignature = ""
+            var detail: StationDetail? = null
+            while (!stopRequested && scrollAttempts <= MAX_TARGET_RESULT_SCROLLS) {
+                val assessment = PageAssessor.assess(snapshot)
+                if (assessment.kind == PageKind.POPUP) {
+                    dismissPopup(service)
+                    snapshot = waitForPage(8000, 650) { root ->
+                        PageAssessor.assess(root).kind == PageKind.SEARCH_RESULTS
+                    } ?: break
+                    continue
+                }
+                checkPageRisk(snapshot)
+                if (stopRequested) break
+
+                val match = StationMatcher.bestMatch(snapshot, requestedName)
+                if (match != null) {
+                    matched = true
+                    val card = StationCandidate(
+                        name = requestedName,
+                        id = stationId,
+                        address = address,
+                        latitude = latitude,
+                        longitude = longitude,
+                        centerX = match.centerX,
+                        centerY = match.centerY,
+                        searchQuery = requestedName,
+                        clickVisible = false,
+                    )
+                    detail = SearchListSnapshotParser.parse(
+                        requestedName = requestedName,
+                        matchedName = match.description,
+                        values = match.values,
+                        address = address,
+                        stationId = stationId,
+                    )
+                    saveDetail(
+                        card = card,
+                        detail = detail,
+                        city = "",
+                        district = "",
+                        query = requestedName,
+                        remoteTaskId = remoteTaskId,
+                    )
+                    collectedCount = 1
+                    emit(CollectionState.DONE, "列表快照采集完成", 1, requestedName)
+                    break
+                }
+
+                val signature = StationMatcher.visibleStationCards(snapshot)
+                    .joinToString("|") { cardFingerprint(it) }
+                if (signature.isNotBlank() && signature == lastSignature) break
+                lastSignature = signature
+                emit(
+                    CollectionState.SCANNING_RESULTS,
+                    "未匹配到目标站点，向下滚动查找 (${scrollAttempts + 1}/$MAX_TARGET_RESULT_SCROLLS)",
+                    0,
+                    requestedName,
+                )
+                if (!scrollResultsDown(service, snapshot, requestedName, conservative = false)) break
+                scrollAttempts += 1
+                snapshot = waitForPage(7000, 600) { root ->
+                    isConfirmedSearchResults(root, requestedName) ||
+                        PageAssessor.assess(root).kind == PageKind.POPUP
+                } ?: break
+            }
+
+            if (matched && detail != null) {
+                stopRequested = false
+                emit(CollectionState.DONE, "列表快照采集完成", 1, requestedName)
+                detail
+            } else {
+                stopRequested = false
+                throw StationNotFoundException(requestedName)
+            }
+        }
+    }
+
     private suspend fun collectStation(
         service: ChargingAccessibilityService,
         card: StationCandidate,
@@ -1015,6 +1122,8 @@ class CollectionEngine(
             "latitude" to card.latitude,
             "longitude" to card.longitude,
             "collectedAt" to now,
+            "sourcePage" to detail.sourcePage,
+            "collectionMode" to detail.collectionMode,
         )
         val resultJson = gson.toJson(payload)
         val task = ScanTaskEntity(

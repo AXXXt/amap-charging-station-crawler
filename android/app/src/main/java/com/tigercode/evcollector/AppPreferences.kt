@@ -21,6 +21,7 @@ object AppPreferences {
     private const val KEY_LOG = "log"
     private const val KEY_HENAN_IMPORT_READY = "henan_import_ready"
     private const val KEY_MONITOR_MODE = "monitor_mode"
+    private const val KEY_MONITOR_LIST_MODE = "monitor_list_mode"
     private const val KEY_PACING_DETAIL_ENTRIES = "pacing_detail_entries"
     private const val KEY_PACING_BATCH_COMPLETED = "pacing_batch_completed"
     private const val KEY_PACING_BATCH_TARGET = "pacing_batch_target"
@@ -86,6 +87,17 @@ object AppPreferences {
     fun isMonitorMode(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_MONITOR_MODE, false)
+
+    fun isMonitorListMode(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_MONITOR_LIST_MODE, false)
+
+    fun setMonitorListMode(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_MONITOR_LIST_MODE, enabled)
+            .apply()
+    }
 
     fun setMonitorMode(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

@@ -51,6 +51,12 @@ class HumanVerificationException(
     val pageExcerpt: String = "",
 ) : IllegalStateException("检测到人机验证: $phrase")
 
+class DetailPageRiskControlException(
+    val stationName: String,
+    val phrase: String,
+    val pageExcerpt: String = "",
+) : IllegalStateException("详情页触发风控($phrase): $stationName")
+
 enum class CollectionState(val label: String) {
     IDLE("待机"),
     WAITING_SERVICE("等待无障碍服务"),
@@ -718,21 +724,38 @@ class CollectionEngine(
         }
         humanDelay(1700L, 2600L)
 
-        var detailSnapshot = waitForPage(15000, 600) { root ->
-            val assessment = PageAssessor.assess(root, requestedName)
-            val pageText = collectPageText(root)
-            val hasDetailMarkers = "电站信息" in pageText ||
-                "营业时间" in pageText ||
-                "导航" in pageText
-            assessment.kind == PageKind.SEARCH_RESULTS ||
-                assessment.kind == PageKind.DETAIL ||
-                assessment.kind == PageKind.PRICE_DETAIL ||
-                (assessment.expectedStationVisible && hasDetailMarkers)
-        } ?: run {
-            AppPreferences.appendLog(context, "联想详情页未识别(超时): $requestedName")
+        var detailSnapshot = try {
+            waitForPage(15000, 600) { root ->
+                val assessment = PageAssessor.assess(root, requestedName)
+                val pageText = collectPageText(root)
+                val hasDetailMarkers = "电站信息" in pageText ||
+                    "营业时间" in pageText ||
+                    "导航" in pageText
+                assessment.kind == PageKind.SEARCH_RESULTS ||
+                    assessment.kind == PageKind.DETAIL ||
+                    assessment.kind == PageKind.PRICE_DETAIL ||
+                    (assessment.expectedStationVisible && hasDetailMarkers)
+            } ?: run {
+                AppPreferences.appendLog(context, "联想详情页未识别(超时): $requestedName")
+                service.globalBack()
+                humanDelay(600L, 1000L)
+                return null
+            }
+        } catch (error: HumanVerificationException) {
+            AppPreferences.appendLog(
+                context,
+                "联想详情页触发封控(${error.phrase})，释放当前任务并返回列表继续: $requestedName",
+            )
+            stopRequested = false
             service.globalBack()
-            humanDelay(600L, 1000L)
-            return null
+            humanDelay(700L, 1200L)
+            service.globalBack()
+            humanDelay(700L, 1200L)
+            throw DetailPageRiskControlException(
+                stationName = requestedName,
+                phrase = error.phrase,
+                pageExcerpt = error.pageExcerpt,
+            )
         }
 
         val detailAssessment = PageAssessor.assess(detailSnapshot, requestedName)

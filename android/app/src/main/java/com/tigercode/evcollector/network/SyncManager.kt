@@ -9,6 +9,7 @@ import com.tigercode.evcollector.accessibility.ChargingAccessibilityService
 import com.tigercode.evcollector.core.model.StationDetail
 import com.tigercode.evcollector.data.CollectorRepository
 import com.tigercode.evcollector.engine.CollectionEngine
+import com.tigercode.evcollector.engine.DetailPageRiskControlException
 import com.tigercode.evcollector.engine.HumanVerificationException
 import com.tigercode.evcollector.engine.StationNotFoundException
 import kotlinx.coroutines.CancellationException
@@ -203,6 +204,27 @@ class SyncManager(
                     leaseRenewJob?.cancelAndJoin()
                     leaseRenewJob = null
                 }
+            } catch (error: DetailPageRiskControlException) {
+                claimedTask?.let { task ->
+                    try {
+                        api?.failTask(
+                            task.id,
+                            TaskActionRequest(
+                                deviceCode = deviceCode,
+                                mode = collectionMode,
+                                leaseToken = task.leaseToken,
+                                errorCode = "DETAIL_RISK_CONTROL",
+                                errorMessage = error.message ?: "详情页触发风控",
+                                retryable = true,
+                            ),
+                        )
+                    } catch (_: Exception) {
+                        // Leave the lease to expire if the release call also fails.
+                    }
+                }
+                SyncOutcome.DetailRiskReleased(
+                    error.message ?: "详情页触发风控，任务已释放",
+                )
             } catch (error: HumanVerificationException) {
                 claimedTask?.let { task ->
                     try {
@@ -481,6 +503,7 @@ class SyncManager(
 sealed class SyncOutcome {
     data class Completed(val stationCount: Int) : SyncOutcome()
     data class HumanVerification(val message: String) : SyncOutcome()
+    data class DetailRiskReleased(val message: String) : SyncOutcome()
     data class Skipped(
         val stationName: String,
         val reason: String,

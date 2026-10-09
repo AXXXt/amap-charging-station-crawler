@@ -178,6 +178,17 @@ class MainActivity : AppCompatActivity() {
                         "任务已跳过：${outcome.stationName}（${outcome.reason}）",
                     )
                 }
+                is SyncOutcome.DetailRiskReleased -> {
+                    AppPreferences.setRemoteStatus(
+                        this@MainActivity,
+                        "详情页风控，任务已释放",
+                        outcome.message,
+                    )
+                    AppPreferences.appendLog(
+                        this@MainActivity,
+                        "详情页风控，任务已释放: ${outcome.message}",
+                    )
+                }
                 is SyncOutcome.HumanVerification -> {
                     AppPreferences.setScanning(this@MainActivity, false)
                     AppPreferences.setRemoteStatus(

@@ -180,6 +180,18 @@ class CollectorKeepAliveService : Service() {
                         waitingToastShown = false
                         3_000L
                     }
+                    is SyncOutcome.DetailRiskReleased -> {
+                        val message = "详情页风控，当前任务已释放，继续列表采集"
+                        AppPreferences.setRemoteStatus(
+                            this@CollectorKeepAliveService,
+                            "详情页风控，继续采集",
+                            outcome.message,
+                        )
+                        updateNotification(message)
+                        showStepToast(message)
+                        waitingToastShown = false
+                        8_000L
+                    }
                     is SyncOutcome.HumanVerification -> {
                         val message = "检测到人机验证，本设备已停止；当前任务已释放"
                         AppPreferences.setScanning(this@CollectorKeepAliveService, false)

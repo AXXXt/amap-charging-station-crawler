@@ -718,25 +718,51 @@ class CollectionEngine(
         }
         humanDelay(1700L, 2600L)
 
-        var detailSnapshot = waitForPage(12000, 600) { root ->
-            val kind = PageAssessor.assess(root, requestedName).kind
-            kind == PageKind.DETAIL || kind == PageKind.SEARCH_RESULTS
-        } ?: return null
+        var detailSnapshot = waitForPage(15000, 600) { root ->
+            val assessment = PageAssessor.assess(root, requestedName)
+            val pageText = collectPageText(root)
+            val hasDetailMarkers = "电站信息" in pageText ||
+                "营业时间" in pageText ||
+                "导航" in pageText
+            assessment.kind == PageKind.SEARCH_RESULTS ||
+                assessment.kind == PageKind.DETAIL ||
+                assessment.kind == PageKind.PRICE_DETAIL ||
+                (assessment.expectedStationVisible && hasDetailMarkers)
+        } ?: run {
+            AppPreferences.appendLog(context, "联想详情页未识别(超时): $requestedName")
+            service.globalBack()
+            humanDelay(600L, 1000L)
+            return null
+        }
 
         val detailAssessment = PageAssessor.assess(detailSnapshot, requestedName)
-        if (detailAssessment.kind != PageKind.DETAIL) {
+        val detailPageText = collectPageText(detailSnapshot)
+        val hasDetailMarkers = "电站信息" in detailPageText ||
+            "营业时间" in detailPageText ||
+            "导航" in detailPageText
+        val stationNameVisible = pageContainsStationName(detailSnapshot, requestedName)
+        val detailLike = detailAssessment.kind == PageKind.DETAIL ||
+            detailAssessment.kind == PageKind.PRICE_DETAIL ||
+            (stationNameVisible && hasDetailMarkers)
+        if (!detailLike) {
             AppPreferences.appendLog(context, "联想结果仍是列表，真正跳过: $requestedName")
             service.globalBack()
             humanDelay(600L, 1000L)
             return null
         }
-        if (!pageContainsStationName(detailSnapshot, requestedName)) {
+        if (!stationNameVisible) {
             AppPreferences.appendLog(context, "联想详情页站点名不匹配，跳过: $requestedName")
             service.globalBack()
             humanDelay(600L, 1000L)
             return null
         }
 
+        // The detail-page shell can be recognized before the bottom sheet has
+        // finished rendering, especially on slower devices. Wait for the
+        // visible price/pile content before parsing or scrolling.
+        emit(CollectionState.READING_DETAIL, "联想详情页加载等待...", 0, requestedName)
+        humanDelay(2500L, 4000L)
+        detailSnapshot = service.freshSnapshot() ?: detailSnapshot
         var detail = parseVisibleDetail(detailSnapshot, requestedName, address)
         if (!hasVisiblePriceOrPiles(detail)) {
             val viewport = StationMatcher.listViewport(detailSnapshot)

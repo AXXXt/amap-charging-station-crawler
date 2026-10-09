@@ -12,8 +12,8 @@ android {
         applicationId = "com.tigercode.evcollector"
         minSdk = 26
         targetSdk = 35
-        versionCode = 32
-        versionName = "0.1.32"
+        versionCode = 34
+        versionName = "0.1.34"
     }
 
     buildTypes {

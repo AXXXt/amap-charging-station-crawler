@@ -565,6 +565,11 @@ class CollectionEngine(
             collectedCount = 0
             val requestedName = stationName.trim()
             require(requestedName.isNotBlank()) { "站点名称不能为空" }
+            if (StationNameNormalizer.isGenericStationName(requestedName)) {
+                AppPreferences.appendLog(context, "泛化名称，直接跳过: $requestedName")
+                stopRequested = false
+                throw StationNotFoundException(requestedName)
+            }
             val service = waitForService() ?: throw IllegalStateException(
                 "无障碍服务未连接，请先到系统设置开启采集助手"
             )
@@ -655,11 +660,174 @@ class CollectionEngine(
                 emit(CollectionState.DONE, "列表快照采集完成", 1, requestedName)
                 detail
             } else {
-                stopRequested = false
-                throw StationNotFoundException(requestedName)
+                val fallbackDetail = runSuggestionFallback(
+                    service = service,
+                    requestedName = requestedName,
+                    stationId = stationId,
+                    address = address,
+                    latitude = latitude,
+                    longitude = longitude,
+                    remoteTaskId = remoteTaskId,
+                )
+                if (fallbackDetail != null) {
+                    stopRequested = false
+                    emit(CollectionState.DONE, "联想详情采集完成", 1, requestedName)
+                    fallbackDetail
+                } else {
+                    stopRequested = false
+                    throw StationNotFoundException(requestedName)
+                }
             }
         }
     }
+
+    private suspend fun runSuggestionFallback(
+        service: ChargingAccessibilityService,
+        requestedName: String,
+        stationId: String,
+        address: String,
+        latitude: Double?,
+        longitude: Double?,
+        remoteTaskId: String,
+    ): StationDetail? {
+        if (stopRequested) return null
+        emit(CollectionState.SCANNING_RESULTS, "NO_MATCH，尝试联想搜索: $requestedName", 0, requestedName)
+        humanDelay(600L, 1100L)
+
+        if (!reopenSearchSuggestions(service, requestedName)) {
+            AppPreferences.appendLog(context, "联想搜索输入框未打开: $requestedName")
+            return null
+        }
+
+        val suggestionSnapshot = waitForSuggestionList(service, requestedName) ?: run {
+            AppPreferences.appendLog(context, "联想列表未出现: $requestedName")
+            return null
+        }
+        val suggestion = StationMatcher.bestMatch(suggestionSnapshot, requestedName) ?: run {
+            AppPreferences.appendLog(context, "联想列表没有匹配项: $requestedName")
+            return null
+        }
+        AppPreferences.appendLog(context, "联想命中: ${suggestion.description}")
+        val clicked = service.clickAt(suggestion.centerX, suggestion.centerY) ||
+            service.clickNodeByText(suggestion.description) ||
+            service.clickNodeByText(requestedName)
+        if (!clicked) {
+            AppPreferences.appendLog(context, "联想点击失败: $requestedName")
+            return null
+        }
+        humanDelay(1700L, 2600L)
+
+        var detailSnapshot = waitForPage(12000, 600) { root ->
+            val kind = PageAssessor.assess(root, requestedName).kind
+            kind == PageKind.DETAIL || kind == PageKind.SEARCH_RESULTS
+        } ?: return null
+
+        if (PageAssessor.assess(detailSnapshot, requestedName).kind != PageKind.DETAIL) {
+            AppPreferences.appendLog(context, "联想结果仍是列表，真正跳过: $requestedName")
+            service.globalBack()
+            humanDelay(600L, 1000L)
+            return null
+        }
+
+        var detail = parseVisibleDetail(detailSnapshot, requestedName, address)
+        if (!hasVisiblePriceOrPiles(detail)) {
+            val viewport = StationMatcher.listViewport(detailSnapshot)
+            if (viewport != null) {
+                service.scrollWithin(viewport, 360)
+            } else {
+                service.scrollForward()
+            }
+            humanDelay(850L, 1300L)
+            detailSnapshot = service.freshSnapshot() ?: detailSnapshot
+            detail = parseVisibleDetail(detailSnapshot, requestedName, address)
+        }
+        if (!hasVisiblePriceOrPiles(detail)) {
+            AppPreferences.appendLog(context, "联想详情没有可见电价/桩数，跳过: $requestedName")
+            service.globalBack()
+            humanDelay(600L, 1000L)
+            return null
+        }
+
+        val card = StationCandidate(
+            name = requestedName,
+            id = stationId,
+            address = address,
+            latitude = latitude,
+            longitude = longitude,
+            searchQuery = requestedName,
+            clickVisible = false,
+        )
+        saveDetail(
+            card = card,
+            detail = detail,
+            city = "",
+            district = "",
+            query = requestedName,
+            remoteTaskId = remoteTaskId,
+        )
+        collectedCount = 1
+        service.globalBack()
+        humanDelay(650L, 1100L)
+        return detail
+    }
+
+    private suspend fun reopenSearchSuggestions(
+        service: ChargingAccessibilityService,
+        query: String,
+    ): Boolean {
+        if (!ensureAmapAdClosed(service)) return false
+        val opened = service.clickNodeByRegex("搜索框") ||
+            service.clickTopSearchBar() ||
+            service.focusSearchInput()
+        if (!opened) return false
+        humanDelay(700L, 1200L)
+        if (!service.focusSearchInput()) return false
+        humanDelay(250L, 500L)
+        if (!service.setFocusedText(query)) return false
+        humanDelay(900L, 1500L)
+        return true
+    }
+
+    private suspend fun waitForSuggestionList(
+        service: ChargingAccessibilityService,
+        query: String,
+    ): NodeSnapshot? {
+        return waitForPage(9000, 500) { root ->
+            val pageText = collectPageText(root)
+            val match = StationMatcher.bestMatch(root, query)
+            val deepSearch = "深度搜索" in pageText
+            val belowSearch = match != null && match.centerY > 250
+            val looksLikeResultList = "暂无更多内容" in pageText ||
+                "展开列表" in pageText ||
+                "查看地图" in pageText
+            match != null && deepSearch && belowSearch && !looksLikeResultList
+        }
+    }
+
+    private fun parseVisibleDetail(
+        snapshot: NodeSnapshot,
+        requestedName: String,
+        fallbackAddress: String,
+    ): StationDetail {
+        val parsed = DetailParser.parse(snapshot)
+        val total = listOf(parsed.fastTotal, parsed.superTotal, parsed.slowTotal)
+            .mapNotNull { it.toIntOrNull() }
+            .sum()
+        return parsed.copy(
+            stationName = parsed.stationName.ifBlank { requestedName },
+            address = parsed.address.ifBlank { fallbackAddress },
+            chargingPileTotal = if (total > 0) total else parsed.chargingPileTotal,
+            sourcePage = "SUGGESTION_DETAIL",
+            collectionMode = "VISIBLE_DETAIL",
+        )
+    }
+
+    private fun hasVisiblePriceOrPiles(detail: StationDetail): Boolean =
+        detail.currentPrice.isNotBlank() ||
+            detail.fastTotal.isNotBlank() ||
+            detail.superTotal.isNotBlank() ||
+            detail.slowTotal.isNotBlank() ||
+            detail.chargingPileTotal > 0
 
     private suspend fun collectStation(
         service: ChargingAccessibilityService,

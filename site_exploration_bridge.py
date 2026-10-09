@@ -690,7 +690,13 @@ class SiteExplorationBridge:
         """
         mode = str(payload.get("collectionMode") or "").upper()
         source_page = str(payload.get("sourcePage") or "").upper()
-        if mode != "LIST_SNAPSHOT" and source_page != "SEARCH_LIST":
+        # Visible detail pages intentionally do not open the historical-idle
+        # or time-of-use sub-pages. Preserve the old static details when the
+        # new payload leaves those fields empty.
+        if (
+            mode not in {"LIST_SNAPSHOT", "VISIBLE_DETAIL"}
+            and source_page not in {"SEARCH_LIST", "SUGGESTION_DETAIL"}
+        ):
             return payload
 
         static_fields = (

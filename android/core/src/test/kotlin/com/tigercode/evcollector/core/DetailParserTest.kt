@@ -75,4 +75,37 @@ class DetailParserTest {
         assertEquals("云快充", result.operator)
         assertTrue("地上" in result.facilities)
     }
+
+    @Test
+    fun visibleDetailParsesPriceAndAggregatePiles() {
+        val xml = """
+            <hierarchy>
+                <node content-desc="金冠智充汽车充电站(源平新能源重卡快速充电站)" />
+                <node text="营业时间" />
+                <node text="电站信息" />
+                <node text="超充" />
+                <node text="空闲" />
+                <node text="2" />
+                <node text="/8" />
+                <node text="400.0kW｜1000V" />
+                <node text="快充" />
+                <node text="空闲" />
+                <node text="6" />
+                <node text="/8" />
+                <node text="320.0kW-400.0kW｜1000V" />
+                <node text="0.66" />
+                <node text="/度" />
+                <node text="14:00起涨至¥0.96/度" />
+            </hierarchy>
+        """.trimIndent()
+
+        val result = DetailParser.parse(root(xml))
+        assertEquals("0.66", result.currentPrice)
+        assertEquals("2", result.superAvailable)
+        assertEquals("8", result.superTotal)
+        assertEquals("6", result.fastAvailable)
+        assertEquals("8", result.fastTotal)
+        assertTrue(result.superPower.contains("400.0kW"))
+        assertTrue(result.fastPower.contains("320.0kW"))
+    }
 }

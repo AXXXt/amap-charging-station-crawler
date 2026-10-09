@@ -67,4 +67,14 @@ class StationNameMatchingTest {
         assertEquals(full, StationNameNormalizer.preferredDisplayName(truncated, full))
         assertEquals(full, StationNameNormalizer.preferredDisplayName(full, truncated))
     }
+
+    @Test
+    fun detectsGenericStationNames() {
+        assertTrue(StationNameNormalizer.isGenericStationName("汽车充电站"))
+        assertTrue(StationNameNormalizer.isGenericStationName("重卡充电站"))
+        assertEquals(
+            false,
+            StationNameNormalizer.isGenericStationName("云快充汽车充电站(红旗岗李建发快速充电站)"),
+        )
+    }
 }

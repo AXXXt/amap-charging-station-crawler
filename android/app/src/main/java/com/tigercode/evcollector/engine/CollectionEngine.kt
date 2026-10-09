@@ -722,8 +722,15 @@ class CollectionEngine(
             kind == PageKind.DETAIL || kind == PageKind.SEARCH_RESULTS
         } ?: return null
 
-        if (PageAssessor.assess(detailSnapshot, requestedName).kind != PageKind.DETAIL) {
+        val detailAssessment = PageAssessor.assess(detailSnapshot, requestedName)
+        if (detailAssessment.kind != PageKind.DETAIL) {
             AppPreferences.appendLog(context, "联想结果仍是列表，真正跳过: $requestedName")
+            service.globalBack()
+            humanDelay(600L, 1000L)
+            return null
+        }
+        if (!pageContainsStationName(detailSnapshot, requestedName)) {
+            AppPreferences.appendLog(context, "联想详情页站点名不匹配，跳过: $requestedName")
             service.globalBack()
             humanDelay(600L, 1000L)
             return null
@@ -783,8 +790,13 @@ class CollectionEngine(
         humanDelay(700L, 1200L)
         if (!service.focusSearchInput()) return false
         humanDelay(250L, 500L)
+        // Clear first so the same query triggers a fresh suggestion request.
+        service.clickNodeByText("清空")
+        humanDelay(250L, 450L)
+        service.setFocusedText("")
+        humanDelay(250L, 450L)
         if (!service.setFocusedText(query)) return false
-        humanDelay(900L, 1500L)
+        humanDelay(1000L, 1600L)
         return true
     }
 
@@ -792,15 +804,15 @@ class CollectionEngine(
         service: ChargingAccessibilityService,
         query: String,
     ): NodeSnapshot? {
-        return waitForPage(9000, 500) { root ->
+        return waitForPage(10000, 500) { root ->
             val pageText = collectPageText(root)
             val match = StationMatcher.bestMatch(root, query)
-            val deepSearch = "深度搜索" in pageText
+            val suggestionUi = "深度搜索" in pageText || "清空" in pageText
             val belowSearch = match != null && match.centerY > 250
             val looksLikeResultList = "暂无更多内容" in pageText ||
                 "展开列表" in pageText ||
                 "查看地图" in pageText
-            match != null && deepSearch && belowSearch && !looksLikeResultList
+            match != null && suggestionUi && belowSearch && !looksLikeResultList
         }
     }
 
@@ -814,12 +826,21 @@ class CollectionEngine(
             .mapNotNull { it.toIntOrNull() }
             .sum()
         return parsed.copy(
-            stationName = parsed.stationName.ifBlank { requestedName },
+            stationName = requestedName,
             address = parsed.address.ifBlank { fallbackAddress },
             chargingPileTotal = if (total > 0) total else parsed.chargingPileTotal,
             sourcePage = "SUGGESTION_DETAIL",
             collectionMode = "VISIBLE_DETAIL",
         )
+    }
+
+    private fun pageContainsStationName(root: NodeSnapshot, requestedName: String): Boolean {
+        val target = StationNameNormalizer.normalize(requestedName)
+        if (target.isEmpty()) return false
+        val page = StationNameNormalizer.normalize(collectPageText(root))
+        if (target in page) return true
+        val prefix = target.take(minOf(12, target.length))
+        return prefix.length >= 6 && prefix in page
     }
 
     private fun hasVisiblePriceOrPiles(detail: StationDetail): Boolean =

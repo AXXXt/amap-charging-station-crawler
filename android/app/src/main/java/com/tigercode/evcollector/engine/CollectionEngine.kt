@@ -317,7 +317,7 @@ class CollectionEngine(
                         continue
                     }
 
-                    checkPageRisk(snapshot)
+                    checkPageRisk(service, snapshot)
                     if (stopRequested) break
 
                     val cards = StationMatcher.visibleStationCards(snapshot)
@@ -470,7 +470,7 @@ class CollectionEngine(
                     } ?: break
                     continue
                 }
-                checkPageRisk(snapshot)
+                checkPageRisk(service, snapshot)
                 if (stopRequested) break
 
                 val match = StationMatcher.bestMatch(snapshot, requestedName, address)
@@ -603,7 +603,7 @@ class CollectionEngine(
                     } ?: break
                     continue
                 }
-                checkPageRisk(snapshot)
+                checkPageRisk(service, snapshot)
                 if (stopRequested) break
 
                 val match = StationMatcher.bestMatch(snapshot, requestedName, address)
@@ -1754,13 +1754,13 @@ class CollectionEngine(
             if (service != null) {
                 val snapshot = service.snapshot()
                 if (snapshot != null) {
-                    checkPageRisk(snapshot)
+                    checkPageRisk(service, snapshot)
                     if (stopRequested) return null
                     if (predicate(snapshot)) return snapshot
                 }
                 val fresh = service.freshSnapshot()
                 if (fresh != null) {
-                    checkPageRisk(fresh)
+                    checkPageRisk(service, fresh)
                     if (stopRequested) return null
                     if (predicate(fresh)) return fresh
                 }
@@ -2275,11 +2275,11 @@ class CollectionEngine(
         return riskPhrases.any { it in pageText }
     }
 
-    private suspend fun checkPageRisk(root: NodeSnapshot) {
+    private suspend fun checkPageRisk(service: ChargingAccessibilityService, root: NodeSnapshot) {
         val pageText = collectPageText(root)
         val verificationPhrase = HumanVerificationDetector.find(pageText)
         if (verificationPhrase != null) {
-            stopForHumanVerification(verificationPhrase, pageText)
+            stopForHumanVerification(service, verificationPhrase, pageText)
         }
         if (hasRiskPhrase(root)) {
             handleRiskPause(root)
@@ -2287,11 +2287,15 @@ class CollectionEngine(
     }
 
     private suspend fun stopForHumanVerification(
+        service: ChargingAccessibilityService,
         phrase: String,
         pageText: String,
     ): Nothing {
-        stopRequested = true
-        val message = "检测到人机验证($phrase)，停止本设备采集并释放当前任务"
+        // Do not stop this device. SyncManager releases the current task with
+        // retryable=true; here we only go back to the search list and throw so
+        // the cooldown loop can continue with the next task.
+        stopRequested = false
+        val message = "检测到人机验证($phrase)，释放当前任务并返回列表继续"
         emit(
             CollectionState.ERROR,
             message,
@@ -2299,10 +2303,22 @@ class CollectionEngine(
             "",
         )
         AppPreferences.appendLog(context, message)
+        returnToSearchList(service)
         throw HumanVerificationException(
             phrase = phrase,
             pageExcerpt = pageText.replace(whitespaceRegex, " ").take(300),
         )
+    }
+
+    private suspend fun returnToSearchList(service: ChargingAccessibilityService) {
+        repeat(3) {
+            val snapshot = service.snapshot() ?: service.freshSnapshot()
+            if (snapshot != null && PageAssessor.assess(snapshot).kind == PageKind.SEARCH_RESULTS) {
+                return
+            }
+            service.globalBack()
+            humanDelay(700L, 1200L)
+        }
     }
 
     private fun isNetworkErrorPage(root: NodeSnapshot): Boolean =
@@ -2357,7 +2373,7 @@ class CollectionEngine(
                 humanDelay(800L, 1500L)
                 return@repeat
             }
-            checkPageRisk(current)
+            checkPageRisk(service, current)
             if (!isNetworkErrorPage(current)) return current
 
             val clicked = service.clickNodeByText("刷新重试")

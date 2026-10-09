@@ -193,18 +193,16 @@ class CollectorKeepAliveService : Service() {
                         8_000L
                     }
                     is SyncOutcome.HumanVerification -> {
-                        val message = "检测到人机验证，本设备已停止；当前任务已释放"
-                        AppPreferences.setScanning(this@CollectorKeepAliveService, false)
+                        val message = "检测到人机验证，当前任务已释放，返回列表继续采集"
                         AppPreferences.setRemoteStatus(
                             this@CollectorKeepAliveService,
-                            "已因人机验证停止",
+                            "人机验证，继续采集",
                             outcome.message,
                         )
                         updateNotification(message)
                         showStepToast(message)
-                        engine.stop()
-                        stopSelf()
-                        0L
+                        waitingToastShown = false
+                        8_000L
                     }
                     is SyncOutcome.Failed -> {
                         AppPreferences.setRemoteStatus(

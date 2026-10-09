@@ -190,14 +190,15 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
                 is SyncOutcome.HumanVerification -> {
-                    AppPreferences.setScanning(this@MainActivity, false)
                     AppPreferences.setRemoteStatus(
                         this@MainActivity,
-                        "已因人机验证停止",
+                        "人机验证，任务已释放",
                         outcome.message,
                     )
-                    AppPreferences.appendLog(this@MainActivity, outcome.message)
-                    CollectorKeepAliveService.stop(this@MainActivity)
+                    AppPreferences.appendLog(
+                        this@MainActivity,
+                        "人机验证，任务已释放，返回列表继续: ${outcome.message}",
+                    )
                 }
                 is SyncOutcome.Failed -> {
                     AppPreferences.setRemoteStatus(

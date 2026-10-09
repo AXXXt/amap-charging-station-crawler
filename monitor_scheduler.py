@@ -841,10 +841,85 @@ def _advance_round(db_config, batch_id):
     _start_next_round(db_config, batch_id)
 
 
+def _has_historical_data(db_config, source_key):
+    """Only retry NO_MATCH for stations that have produced real data before."""
+    if not source_key:
+        return False
+    conn = _conn(db_config)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM site_exploration_charging_station_result "
+                "WHERE source_key=%s AND ("
+                "(current_price IS NOT NULL AND current_price<>'') "
+                "OR COALESCE(fast_total,0)>0 OR COALESCE(super_total,0)>0 "
+                "OR COALESCE(slow_total,0)>0) LIMIT 1",
+                (source_key,),
+            )
+            return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
 def complete(db_config, task_id, device_id, lease_token, result_summary):
     row = _get_row(db_config, task_id)
     _assert_lease(row, device_id, lease_token)
     now = _now()
+    summary = result_summary or {}
+    skip_reason = str(summary.get("skipReason") or "").strip().upper()
+    progress = _json_object(row.get("progress"))
+    already_retried = bool(progress.get("_noMatchRetryScheduled"))
+
+    if (
+        skip_reason == "NO_MATCH"
+        and not already_retried
+        and _has_historical_data(db_config, row.get("source_key"))
+    ):
+        max_attempts = int(row.get("max_attempts") or MAX_ATTEMPTS)
+        retry_attempt = max(max_attempts - 1, 0)
+        retry_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=10)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        retry_progress = dict(progress)
+        retry_progress["_noMatchRetryScheduled"] = True
+        retry_progress["_noMatchRetryAt"] = now
+        message = (
+            f"NO_MATCH_RETRY: {summary.get('skipMessage') or summary.get('stationName') or ''}"
+        )[:1000]
+        conn = _conn(db_config)
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE station_monitor_task SET status='PENDING', attempt=%s, "
+                    "lease_device_id='', lease_token='', lease_expires_at=NULL, "
+                    "available_at=%s, finished_at=NULL, result_summary=NULL, "
+                    "progress=%s, last_error=%s, updated_at=%s "
+                    "WHERE local_task_id=%s AND lease_device_id=%s AND lease_token=%s",
+                    (
+                        retry_attempt,
+                        retry_at,
+                        json.dumps(retry_progress, ensure_ascii=False),
+                        message,
+                        now,
+                        task_id,
+                        device_id,
+                        lease_token,
+                    ),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        row["status"] = "PENDING"
+        row["attempt"] = retry_attempt
+        row["lease_device_id"] = ""
+        row["lease_token"] = ""
+        row["lease_expires_at"] = None
+        row["available_at"] = retry_at
+        row["result_summary"] = None
+        row["progress"] = retry_progress
+        row["last_error"] = message
+        return task_payload(row)
+
     conn = _conn(db_config)
     try:
         with conn.cursor() as cursor:
@@ -852,7 +927,7 @@ def complete(db_config, task_id, device_id, lease_token, result_summary):
                 "UPDATE station_monitor_task SET status='COMPLETED', result_summary=%s, "
                 "lease_device_id='', lease_token='', lease_expires_at=NULL, finished_at=%s, updated_at=%s "
                 "WHERE local_task_id=%s AND lease_device_id=%s AND lease_token=%s",
-                (json.dumps(result_summary or {}, ensure_ascii=False), now, now, task_id, device_id, lease_token),
+                (json.dumps(summary, ensure_ascii=False), now, now, task_id, device_id, lease_token),
             )
             cursor.execute(
                 "UPDATE station_monitor_round SET completed_count=completed_count+1, updated_at=%s WHERE id=%s",

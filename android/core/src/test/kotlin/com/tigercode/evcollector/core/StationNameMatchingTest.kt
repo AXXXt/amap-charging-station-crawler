@@ -79,6 +79,55 @@ class StationNameMatchingTest {
     }
 
     @Test
+    fun bestMatchPrefersSameNameCardWithExpectedAddress() {
+        val name = "黑豹能源岛重卡超充电站(元宇宙充电站)"
+        val expectedAddress = "新郑市拥军路与合欢路交叉口西40米"
+        val xml = """
+            <hierarchy bounds="[0,0][1080,2400]">
+                <node clickable="true" content-desc="$name" bounds="[33,300][1047,650]">
+                    <node text="尚居·倍利产业园·地上" />
+                    <node text="31.3公里" />
+                </node>
+                <node clickable="true" content-desc="$name" bounds="[33,700][1047,1150]">
+                    <node text="拥军路与合欢路交叉口西40米·地面" />
+                    <node text="超充" />
+                    <node text="空6/6" />
+                    <node text="31.4公里" />
+                    <node text="电" />
+                    <node text="0.46" />
+                </node>
+            </hierarchy>
+        """.trimIndent()
+
+        val match = StationMatcher.bestMatch(root(xml), name, expectedAddress)
+
+        assertEquals(925, match?.centerY)
+    }
+
+    @Test
+    fun bestMatchPrefersSameNameCardWithDynamicDataWithoutAddress() {
+        val name = "黑豹能源岛重卡超充电站(元宇宙充电站)"
+        val xml = """
+            <hierarchy bounds="[0,0][1080,2400]">
+                <node clickable="true" content-desc="$name" bounds="[33,300][1047,650]">
+                    <node text="尚居·倍利产业园·地上" />
+                    <node text="31.3公里" />
+                </node>
+                <node clickable="true" content-desc="$name" bounds="[33,700][1047,1150]">
+                    <node text="拥军路与合欢路交叉口西40米·地面" />
+                    <node text="超充" />
+                    <node text="空6/6" />
+                    <node text="31.4公里" />
+                </node>
+            </hierarchy>
+        """.trimIndent()
+
+        val match = StationMatcher.bestMatch(root(xml), name)
+
+        assertEquals(925, match?.centerY)
+    }
+
+    @Test
     fun bestSuggestionMatchAcceptsNameAndAddressOnly() {
         val xml = """
             <hierarchy bounds="[0,0][1080,2400]">

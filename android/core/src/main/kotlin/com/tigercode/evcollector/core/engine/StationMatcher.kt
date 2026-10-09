@@ -119,9 +119,15 @@ object StationMatcher {
         return (median + overlapMargin).coerceIn(260, viewportCap)
     }
 
-    fun bestMatch(root: NodeSnapshot, stationName: String): StationMatch? {
+    fun bestMatch(
+        root: NodeSnapshot,
+        stationName: String,
+        expectedAddress: String = "",
+    ): StationMatch? {
         val targetName = StationNameNormalizer.normalize(stationName)
+        val addressShingles = addressShingles(expectedAddress)
         var best: StationMatch? = null
+        var bestRank = Long.MIN_VALUE
 
         fun walk(node: NodeSnapshot) {
             if (node.clickable) {
@@ -140,8 +146,10 @@ object StationMatcher {
                             description = label,
                             values = listOf(values),
                         )
-                        if (best == null || candidate.score > best!!.score) {
+                        val rank = candidateRank(score, addressShingles, values)
+                        if (best == null || rank > bestRank) {
                             best = candidate
+                            bestRank = rank
                         }
                     }
                 }
@@ -151,6 +159,40 @@ object StationMatcher {
 
         walk(root)
         return best
+    }
+
+    /**
+     * Name score is the primary key. Address overlap breaks ties between
+     * same-name cards; dynamic data (price / pile counts) is the final
+     * tie-breaker so a card that can actually be collected wins.
+     */
+    private fun candidateRank(
+        nameScore: Int,
+        expectedShingles: Set<String>,
+        candidateText: String,
+    ): Long {
+        val normalized = normalizeAddressText(candidateText)
+        val addressHits = expectedShingles.count { it in normalized }.coerceAtMost(9)
+        val dataBonus = if (hasDynamicStationData(candidateText)) 1 else 0
+        return nameScore.toLong() * 10000L + addressHits.toLong() * 100L + dataBonus.toLong()
+    }
+
+    private fun addressShingles(address: String): Set<String> {
+        val normalized = normalizeAddressText(address)
+        if (normalized.length < 3) return emptySet()
+        return normalized.windowed(3).toSet()
+    }
+
+    private fun normalizeAddressText(value: String): String =
+        value.replace(Regex("[\\s·,，。.、\\-—()（）]"), "")
+
+    private fun hasDynamicStationData(text: String): Boolean {
+        if (text.isBlank()) return false
+        if (Regex("空\\s*\\d+\\s*/\\s*\\d+").containsMatchIn(text)) return true
+        if (Regex("(?:¥|￥)?\\s*\\d+(?:\\.\\d+)?\\s*(?:元)?\\s*/\\s*度").containsMatchIn(text)) return true
+        // Do not use "超充"/"快充" here: they often appear inside the station
+        // name itself (e.g. 重卡超充电站) and would tie every same-name card.
+        return listOf("停车费", "有人充电", "空闲", "忙碌").any { it in text }
     }
 
     /**

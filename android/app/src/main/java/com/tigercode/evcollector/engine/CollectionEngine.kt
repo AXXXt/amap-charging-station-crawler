@@ -473,7 +473,7 @@ class CollectionEngine(
                 checkPageRisk(snapshot)
                 if (stopRequested) break
 
-                val match = StationMatcher.bestMatch(snapshot, requestedName)
+                val match = StationMatcher.bestMatch(snapshot, requestedName, address)
                 if (match != null) {
                     matchedTarget = true
                     val card = StationCandidate(
@@ -606,7 +606,7 @@ class CollectionEngine(
                 checkPageRisk(snapshot)
                 if (stopRequested) break
 
-                val match = StationMatcher.bestMatch(snapshot, requestedName)
+                val match = StationMatcher.bestMatch(snapshot, requestedName, address)
                 if (match != null) {
                     matched = true
                     val card = StationCandidate(

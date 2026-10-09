@@ -52,11 +52,28 @@ object SearchListSnapshotParser {
         return text
     }
 
-    private fun safeTotal(joined: String, index: Int, length: Int, value: String): Boolean {
-        if (value.length > 3) return false
-        val tail = joined.substring(index + length, minOf(joined.length, index + length + 4))
-        val blocked = listOf("kW", "KW", "kw", "公里", "米", "元", "度", "%", "km")
-        return blocked.none { tail.startsWith(it) }
+    private val phoneRegex = Regex("(?:☎|电话|Tel|TEL|tel)\\s*[:：]?\\s*[0-9][0-9\\s\\-]{5,}[0-9]")
+    private val longDigitRegex = Regex("(?<![0-9])[0-9]{7,}(?![0-9])")
+    private val roadRegex = Regex("(?:[GSX]\\s*[0-9]{1,4}|[0-9]{1,4}\\s*(?:省道|国道|高速|收费站))")
+    private val powerRegex = Regex("[0-9]{1,4}\\s*(?:kW|KW|kw|Kw|kWh|KWH|千瓦)")
+    private val distanceRegex = Regex("[0-9]+(?:\\.[0-9]+)?\\s*(?:公里|km|KM|Km|米)")
+    private val clockRegex = Regex("[0-9]{1,2}\\s*[:：]\\s*[0-9]{2}")
+    private val priceContextRegex = Regex("(?:￥|¥)?\\s*[0-9]+(?:\\.[0-9]+)?\\s*(?:元|度|/度)")
+
+    private fun sanitizePileText(text: String): String {
+        var sanitized = text
+        for (regex in listOf(
+            phoneRegex,
+            longDigitRegex,
+            roadRegex,
+            powerRegex,
+            distanceRegex,
+            clockRegex,
+            priceContextRegex,
+        )) {
+            sanitized = regex.replace(sanitized, " ")
+        }
+        return sanitized
     }
 
     private fun parseTypeCounts(pileText: String, keywords: List<String>): TypeCounts {
@@ -89,14 +106,15 @@ object SearchListSnapshotParser {
                 }
             }
             if (total.isEmpty()) {
-                val bare = Regex("$keyword[^0-9\\n]{0,3}([0-9]{1,3})").findAll(pileText)
-                for (match in bare) {
-                    val value = match.groupValues[1]
-                    if (safeTotal(pileText, match.range.first, match.value.length, value)) {
-                        total = value
-                        break
-                    }
-                }
+                // A number is only accepted as a pile total when it is
+                // explicitly followed by a pile unit. Do not accept a bare
+                // number after the type keyword: station names contain phone
+                // numbers (☎:156...), road numbers (317省道) and power
+                // ratings (160KW), all of which used to leak in here.
+                val bareWithUnit = Regex(
+                    "$keyword[^0-9\\n]{0,8}([0-9]{1,3})\\s*(?:根|个|桩|枪)"
+                ).find(pileText)
+                if (bareWithUnit != null) total = bareWithUnit.groupValues[1]
             }
             if (idle.isEmpty()) {
                 val match = Regex("$keyword[^\\n]{0,12}?(?:空闲|可充|空余|剩余)\\s*([0-9]{1,3})")
@@ -121,11 +139,15 @@ object SearchListSnapshotParser {
         operator: String = "",
         stationId: String = "",
     ): StationDetail {
+        val detailText = values.filter { it.isNotBlank() }.joinToString("\n")
         val joined = (listOf(matchedName, requestedName) + values)
             .filter { it.isNotBlank() }
             .joinToString("\n")
-        val price = extractPrice(joined)
-        val pileText = stripPriceSpans(joined)
+        // Pile counts may only come from the card's detail rows. The station
+        // name is deliberately excluded: it often contains phone numbers and
+        // road numbers that are not pile counts.
+        val price = extractPrice(if (detailText.isNotBlank()) detailText else joined)
+        val pileText = sanitizePileText(stripPriceSpans(detailText))
 
         val fast = parseTypeCounts(pileText, listOf("快充", "快"))
         val superType = parseTypeCounts(pileText, listOf("超充", "超"))

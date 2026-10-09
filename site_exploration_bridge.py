@@ -591,6 +591,17 @@ class SiteExplorationBridge:
         received_at: Any,
     ) -> None:
         """Append one dynamic snapshot without affecting the latest-result upsert."""
+        # A list-snapshot round can return no price and no pile information at
+        # all (for example when the AMap card does not render those fields).
+        # Do not persist an all-zero snapshot: it would pollute the trend chart
+        # and make it look like the station had zero piles / no price.
+        has_price = bool(payload.get("currentPrice")) or bool(payload.get("fastPrices")) or bool(payload.get("slowPrices"))
+        has_piles = bool(payload.get("chargingPiles")) or any(
+            payload.get(field)
+            for field in ("fastTotal", "superTotal", "slowTotal", "chargingPileTotal", "chargingPileCount")
+        )
+        if not has_price and not has_piles:
+            return
         captured_ts = unix_timestamp(captured_at or payload.get("collectedAt")) or int(
             datetime.now(timezone.utc).timestamp()
         )
@@ -831,6 +842,12 @@ class SiteExplorationBridge:
             preserve_if_blank = {
                 "province", "city", "district", "source_site_id", "source_station_id",
                 "requested_name", "matched_station_name", "source_address",
+                # A list-snapshot round may not render price / pile fields.
+                # Keep the last known non-empty values instead of wiping them.
+                "current_price", "parking_fee", "business_hours", "operator",
+                "fast_available", "fast_total", "fast_power",
+                "super_available", "super_total", "super_power",
+                "slow_available", "slow_total", "slow_power",
             }
             updates = []
             for column in columns:

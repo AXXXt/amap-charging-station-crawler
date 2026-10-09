@@ -823,7 +823,8 @@ class CollectionEngine(
         service.setFocusedText("")
         humanDelay(250L, 450L)
         if (!service.setFocusedText(query)) return false
-        humanDelay(1000L, 1600L)
+        AppPreferences.appendLog(context, "重新输入完成，等待联想列表加载(2~3秒): $query")
+        humanDelay(2000L, 3000L)
         return true
     }
 

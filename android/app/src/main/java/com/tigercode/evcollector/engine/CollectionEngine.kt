@@ -708,7 +708,7 @@ class CollectionEngine(
             AppPreferences.appendLog(context, "联想列表没有匹配项: $requestedName")
             return null
         }
-        AppPreferences.appendLog(context, "联想命中: ${suggestion.description}")
+        AppPreferences.appendLog(context, "联想命中: ${suggestion.description} centerY=${suggestion.centerY}")
         val clicked = service.clickAt(suggestion.centerX, suggestion.centerY) ||
             service.clickNodeByText(suggestion.description) ||
             service.clickNodeByText(requestedName)

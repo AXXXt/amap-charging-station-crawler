@@ -97,4 +97,21 @@ class StationNameMatchingTest {
 
         assertEquals("中国石化汽车充电站(中国石化第二十九...", match?.description)
     }
+
+    @Test
+    fun bestSuggestionMatchPrefersPoiRowOverSearchAction() {
+        val name = "云快充汽车充电站(柳河西充电站)"
+        val xml = """
+            <hierarchy bounds="[0,0][1080,2400]">
+                <node clickable="true" content-desc="$name" bounds="[52,401][1048,461]" />
+                <node clickable="true" content-desc="$name" bounds="[52,504][827,608]" />
+                <node clickable="true" content-desc="打车" bounds="[837,503][921,609]" />
+                <node clickable="true" content-desc="路线" bounds="[921,503][1047,609]" />
+            </hierarchy>
+        """.trimIndent()
+
+        val match = StationMatcher.bestSuggestionMatch(root(xml), name)
+
+        assertEquals(556, match?.centerY)
+    }
 }

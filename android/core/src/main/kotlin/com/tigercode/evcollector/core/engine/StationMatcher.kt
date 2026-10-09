@@ -160,8 +160,16 @@ object StationMatcher {
      */
     fun bestSuggestionMatch(root: NodeSnapshot, stationName: String): StationMatch? {
         val targetName = StationNameNormalizer.normalize(stationName)
-        var best: StationMatch? = null
+        val allNodes = mutableListOf<NodeSnapshot>()
+        fun collect(node: NodeSnapshot) {
+            allNodes.add(node)
+            node.children.forEach(::collect)
+        }
+        collect(root)
 
+        data class Candidate(val match: StationMatch, val poiLike: Boolean, val height: Int)
+
+        val candidates = mutableListOf<Candidate>()
         fun walk(node: NodeSnapshot) {
             if (node.clickable) {
                 val description = node.contentDescription.trim()
@@ -179,16 +187,20 @@ object StationMatcher {
                         val candidateName = StationNameNormalizer.normalize(label)
                         val score = stationMatchScore(targetName, candidateName)
                         if (score > 0) {
-                            val candidate = StationMatch(
-                                score = score,
-                                centerX = node.bounds.centerX,
-                                centerY = node.bounds.centerY,
-                                description = label,
-                                values = listOf(collectText(node)),
+                            val poiLike = node.bounds.height >= 80 || hasActionSibling(node, allNodes)
+                            candidates.add(
+                                Candidate(
+                                    match = StationMatch(
+                                        score = score,
+                                        centerX = node.bounds.centerX,
+                                        centerY = node.bounds.centerY,
+                                        description = label,
+                                        values = listOf(collectText(node)),
+                                    ),
+                                    poiLike = poiLike,
+                                    height = node.bounds.height,
+                                )
                             )
-                            if (best == null || candidate.score > best!!.score) {
-                                best = candidate
-                            }
                         }
                     }
                 }
@@ -197,7 +209,27 @@ object StationMatcher {
         }
 
         walk(root)
-        return best
+        // Search-action rows and POI suggestions can have the same title. Prefer
+        // the POI row (taller and/or paired with 打车/路线); only fall back to a
+        // plain row when no POI-like candidate exists.
+        val preferred = candidates.filter { it.poiLike }.ifEmpty { candidates }
+        return preferred.maxWithOrNull(
+            compareBy<Candidate> { it.match.score }
+                .thenBy { it.poiLike }
+                .thenBy { it.height }
+                .thenBy { -it.match.centerY },
+        )?.match
+    }
+
+    private fun hasActionSibling(node: NodeSnapshot, allNodes: List<NodeSnapshot>): Boolean {
+        if (!node.bounds.isValid) return false
+        return allNodes.any { candidate ->
+            if (!candidate.bounds.isValid) return@any false
+            val label = candidate.contentDescription.ifBlank { candidate.text }
+            (label == "打车" || label == "路线") &&
+                minOf(node.bounds.bottom, candidate.bounds.bottom) >
+                maxOf(node.bounds.top, candidate.bounds.top)
+        }
     }
 
     private fun isStationCard(

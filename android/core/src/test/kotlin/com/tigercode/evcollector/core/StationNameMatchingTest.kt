@@ -77,4 +77,24 @@ class StationNameMatchingTest {
             StationNameNormalizer.isGenericStationName("云快充汽车充电站(红旗岗李建发快速充电站)"),
         )
     }
+
+    @Test
+    fun bestSuggestionMatchAcceptsNameAndAddressOnly() {
+        val xml = """
+            <hierarchy bounds="[0,0][1080,2400]">
+                <node clickable="true"
+                      content-desc="中国石化汽车充电站(中国石化第二十九..."
+                      bounds="[112,362][840,514]">
+                    <node text="安阳市 殷都区文明大道西段安林高速上道口西500米" />
+                </node>
+            </hierarchy>
+        """.trimIndent()
+
+        val match = StationMatcher.bestSuggestionMatch(
+            root(xml),
+            "中国石化汽车充电站(中国石化第二十九充电站)",
+        )
+
+        assertEquals("中国石化汽车充电站(中国石化第二十九...", match?.description)
+    }
 }

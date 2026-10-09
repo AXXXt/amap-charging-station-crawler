@@ -699,11 +699,12 @@ class CollectionEngine(
             return null
         }
 
+        AppPreferences.appendLog(context, "等待联想列表(最多20秒): $requestedName")
         val suggestionSnapshot = waitForSuggestionList(service, requestedName) ?: run {
-            AppPreferences.appendLog(context, "联想列表未出现: $requestedName")
+            AppPreferences.appendLog(context, "联想列表未出现(等待20秒): $requestedName")
             return null
         }
-        val suggestion = StationMatcher.bestMatch(suggestionSnapshot, requestedName) ?: run {
+        val suggestion = StationMatcher.bestSuggestionMatch(suggestionSnapshot, requestedName) ?: run {
             AppPreferences.appendLog(context, "联想列表没有匹配项: $requestedName")
             return null
         }
@@ -803,16 +804,16 @@ class CollectionEngine(
     private suspend fun waitForSuggestionList(
         service: ChargingAccessibilityService,
         query: String,
+        timeoutMs: Long = 20_000L,
     ): NodeSnapshot? {
-        return waitForPage(10000, 500) { root ->
+        return waitForPage(timeoutMs, 500) { root ->
             val pageText = collectPageText(root)
-            val match = StationMatcher.bestMatch(root, query)
-            val suggestionUi = "深度搜索" in pageText || "清空" in pageText
+            val match = StationMatcher.bestSuggestionMatch(root, query)
             val belowSearch = match != null && match.centerY > 250
             val looksLikeResultList = "暂无更多内容" in pageText ||
                 "展开列表" in pageText ||
                 "查看地图" in pageText
-            match != null && suggestionUi && belowSearch && !looksLikeResultList
+            match != null && belowSearch && !looksLikeResultList
         }
     }
 

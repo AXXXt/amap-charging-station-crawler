@@ -153,6 +153,53 @@ object StationMatcher {
         return best
     }
 
+    /**
+     * Match a search-suggestion item. Suggestion rows often contain only a
+     * station name and an address, so the stricter result-card checks used by
+     * [bestMatch] must not be applied here.
+     */
+    fun bestSuggestionMatch(root: NodeSnapshot, stationName: String): StationMatch? {
+        val targetName = StationNameNormalizer.normalize(stationName)
+        var best: StationMatch? = null
+
+        fun walk(node: NodeSnapshot) {
+            if (node.clickable) {
+                val description = node.contentDescription.trim()
+                val text = node.text.trim()
+                val label = description.ifEmpty { text }
+                if (
+                    label.isNotBlank() &&
+                    node.bounds.isValid &&
+                    node.bounds.height >= 48 &&
+                    !isTopSearchInput(node, root.bounds)
+                ) {
+                    val hasStationName =
+                        (label.contains("充") && label.contains("站")) || label.contains("电站")
+                    if (hasStationName) {
+                        val candidateName = StationNameNormalizer.normalize(label)
+                        val score = stationMatchScore(targetName, candidateName)
+                        if (score > 0) {
+                            val candidate = StationMatch(
+                                score = score,
+                                centerX = node.bounds.centerX,
+                                centerY = node.bounds.centerY,
+                                description = label,
+                                values = listOf(collectText(node)),
+                            )
+                            if (best == null || candidate.score > best!!.score) {
+                                best = candidate
+                            }
+                        }
+                    }
+                }
+            }
+            node.children.forEach(::walk)
+        }
+
+        walk(root)
+        return best
+    }
+
     private fun isStationCard(
         node: NodeSnapshot,
         label: String,

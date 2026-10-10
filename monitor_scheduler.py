@@ -848,15 +848,23 @@ def _has_historical_data(db_config, source_key):
     conn = _conn(db_config)
     try:
         with conn.cursor() as cursor:
-            cursor.execute(
+            checks = (
                 "SELECT 1 FROM site_exploration_charging_station_result "
                 "WHERE source_key=%s AND ("
                 "(current_price IS NOT NULL AND current_price<>'') "
                 "OR COALESCE(fast_total,0)>0 OR COALESCE(super_total,0)>0 "
                 "OR COALESCE(slow_total,0)>0) LIMIT 1",
-                (source_key,),
+                "SELECT 1 FROM site_exploration_charging_station_dynamic_history "
+                "WHERE source_key=%s AND ("
+                "(current_price IS NOT NULL AND current_price<>'') "
+                "OR COALESCE(pile_total,0)>0 OR COALESCE(fast_total,0)>0 "
+                "OR COALESCE(super_total,0)>0 OR COALESCE(slow_total,0)>0) LIMIT 1",
             )
-            return cursor.fetchone() is not None
+            for sql in checks:
+                cursor.execute(sql, (source_key,))
+                if cursor.fetchone():
+                    return True
+            return False
     finally:
         conn.close()
 

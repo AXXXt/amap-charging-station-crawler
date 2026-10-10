@@ -833,22 +833,53 @@ class CollectionEngine(
         query: String,
     ): Boolean {
         if (!ensureAmapAdClosed(service)) return false
-        val opened = service.clickNodeByRegex("搜索框") ||
-            service.clickTopSearchBar() ||
-            service.focusSearchInput()
-        if (!opened) return false
-        humanDelay(700L, 1200L)
-        if (!service.focusSearchInput()) return false
-        humanDelay(250L, 500L)
-        // Clear first so the same query triggers a fresh suggestion request.
-        service.clickNodeByText("清空")
-        humanDelay(250L, 450L)
-        service.setFocusedText("")
-        humanDelay(250L, 450L)
-        if (!service.setFocusedText(query)) return false
-        AppPreferences.appendLog(context, "重新输入完成，等待联想列表加载(2~3秒): $query")
-        humanDelay(2000L, 3000L)
-        return true
+
+        // MI8 devices can still be loading the result page when the fallback
+        // starts. Try the full open/clear/type sequence twice instead of
+        // giving up after the first miss.
+        repeat(2) { attempt ->
+            val opened = service.clickNodeByRegex("搜索框") ||
+                service.clickTopSearchBar() ||
+                service.focusSearchInput()
+            if (opened) {
+                humanDelay(700L, 1200L)
+                if (service.focusSearchInput()) {
+                    humanDelay(250L, 500L)
+                    // Clear first so the same query triggers a fresh suggestion request.
+                    service.clickNodeByText("清空")
+                    humanDelay(250L, 450L)
+                    service.setFocusedText("")
+                    humanDelay(250L, 450L)
+                    if (service.setFocusedText(query)) {
+                        AppPreferences.appendLog(context, "重新输入完成，等待联想列表加载(2~3秒): $query")
+                        humanDelay(2000L, 3000L)
+                        return true
+                    }
+                    AppPreferences.appendLog(context, "联想搜索输入框写入失败(${attempt + 1}/2): $query")
+                } else {
+                    AppPreferences.appendLog(context, "联想搜索输入框聚焦失败(${attempt + 1}/2): $query")
+                }
+            } else {
+                AppPreferences.appendLog(context, "联想搜索框打开失败(${attempt + 1}/2): $query")
+            }
+            humanDelay(1500L, 2500L)
+        }
+
+        // Last resort: reopen AMap's search page with the keyword and retry
+        // the clear/type once more. This recovers from a stale result page.
+        AppPreferences.appendLog(context, "联想搜索兜底重开高德搜索页: $query")
+        service.openAmapSearch(query)
+        humanDelay(2500L, 3500L)
+        if (service.focusSearchInput()) {
+            service.setFocusedText("")
+            humanDelay(300L, 500L)
+            if (service.setFocusedText(query)) {
+                AppPreferences.appendLog(context, "重开搜索页后重新输入完成: $query")
+                humanDelay(2000L, 3000L)
+                return true
+            }
+        }
+        return false
     }
 
     private suspend fun waitForSuggestionList(

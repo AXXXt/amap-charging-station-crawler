@@ -57,6 +57,12 @@ class DetailPageRiskControlException(
     val pageExcerpt: String = "",
 ) : IllegalStateException("详情页触发风控($phrase): $stationName")
 
+class SuggestionSearchNotStartedException(
+    val stationName: String,
+    val stage: String,
+    val detail: String = "",
+) : IllegalStateException("联想搜索未真正开始($stage): $stationName")
+
 enum class CollectionState(val label: String) {
     IDLE("待机"),
     WAITING_SERVICE("等待无障碍服务"),
@@ -701,17 +707,26 @@ class CollectionEngine(
         humanDelay(600L, 1100L)
 
         if (!reopenSearchSuggestions(service, requestedName)) {
-            AppPreferences.appendLog(context, "联想搜索输入框未打开: $requestedName")
-            return null
+            AppPreferences.appendLog(
+                context,
+                "联想搜索未真正开始（搜索框未打开），释放任务重试: $requestedName",
+            )
+            throw SuggestionSearchNotStartedException(requestedName, "INPUT_NOT_OPENED")
         }
 
         AppPreferences.appendLog(context, "等待联想列表(最多20秒): $requestedName")
         val suggestionSnapshot = waitForSuggestionList(service, requestedName) ?: run {
-            AppPreferences.appendLog(context, "联想列表未出现(等待20秒): $requestedName")
-            return null
+            AppPreferences.appendLog(
+                context,
+                "联想搜索已输入但联想列表未出现，释放任务重试: $requestedName",
+            )
+            throw SuggestionSearchNotStartedException(requestedName, "SUGGESTION_LIST_MISSING")
         }
         val suggestion = StationMatcher.bestSuggestionMatch(suggestionSnapshot, requestedName) ?: run {
-            AppPreferences.appendLog(context, "联想列表没有匹配项: $requestedName")
+            AppPreferences.appendLog(
+                context,
+                "联想列表已出现但没有匹配项，确认 NO_MATCH: $requestedName",
+            )
             return null
         }
         AppPreferences.appendLog(context, "联想命中: ${suggestion.description} centerY=${suggestion.centerY}")
@@ -719,8 +734,8 @@ class CollectionEngine(
             service.clickNodeByText(suggestion.description) ||
             service.clickNodeByText(requestedName)
         if (!clicked) {
-            AppPreferences.appendLog(context, "联想点击失败: $requestedName")
-            return null
+            AppPreferences.appendLog(context, "联想点击失败，释放任务重试: $requestedName")
+            throw SuggestionSearchNotStartedException(requestedName, "SUGGESTION_CLICK_FAILED")
         }
         humanDelay(1700L, 2600L)
 

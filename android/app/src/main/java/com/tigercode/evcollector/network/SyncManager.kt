@@ -11,6 +11,7 @@ import com.tigercode.evcollector.data.CollectorRepository
 import com.tigercode.evcollector.engine.CollectionEngine
 import com.tigercode.evcollector.engine.DetailPageRiskControlException
 import com.tigercode.evcollector.engine.HumanVerificationException
+import com.tigercode.evcollector.engine.SuggestionSearchNotStartedException
 import com.tigercode.evcollector.engine.StationNotFoundException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -246,6 +247,27 @@ class SyncManager(
                 }
                 SyncOutcome.HumanVerification(
                     error.message ?: "检测到人机验证，已停止本设备采集",
+                )
+            } catch (error: SuggestionSearchNotStartedException) {
+                claimedTask?.let { task ->
+                    try {
+                        api?.failTask(
+                            task.id,
+                            TaskActionRequest(
+                                deviceCode = deviceCode,
+                                mode = collectionMode,
+                                leaseToken = task.leaseToken,
+                                errorCode = "SUGGESTION_NOT_STARTED",
+                                errorMessage = error.message ?: "联想搜索未真正开始",
+                                retryable = true,
+                            ),
+                        )
+                    } catch (_: Exception) {
+                        // Leave the lease to expire if the release call also fails.
+                    }
+                }
+                SyncOutcome.DetailRiskReleased(
+                    error.message ?: "联想搜索未真正开始，任务已释放重试",
                 )
             } catch (error: StationNotFoundException) {
                 val task = claimedTask

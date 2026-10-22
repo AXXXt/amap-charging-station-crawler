@@ -2868,27 +2868,54 @@ def mobile_upload_observations(
                 # Same device/idempotency key: refresh the durable local copy,
                 # then let the remote upsert repair a previously interrupted
                 # network delivery without creating a second row.
-                conn.execute(
-                    """UPDATE station_observation
-                       SET task_id = ?, station_id = ?, captured_at = ?,
-                           received_at = ?, payload = ?
-                       WHERE device_id = ? AND observation_id = ?""",
-                    (
-                        task_id,
-                        station_id,
-                        captured_at,
-                        now,
-                        payload_json,
-                        device["id"],
-                        observation_id,
-                    ),
+                conflicting_row = existing_for_task_station is not None and (
+                    existing_for_task_station["device_id"] != existing["device_id"]
+                    or existing_for_task_station["observation_id"] != existing["observation_id"]
                 )
+                if conflicting_row:
+                    # 该 task/station 已被另一条记录占用：常见于同一任务被重派给
+                    # 另一台设备，而新设备本地幂等键固定为 station:<stationId>，
+                    # 早已存在旧任务的行。此时改写 task_id/station_id 会撞
+                    # idx_obs_task_station 唯一索引，导致整批 500、outbox 永久重试。
+                    # 这里保留原归属，只刷新采集内容。
+                    stored_station_id = existing["station_id"]
+                    stored_task_id = existing["task_id"] or ""
+                    conn.execute(
+                        """UPDATE station_observation
+                           SET captured_at = ?, received_at = ?, payload = ?
+                           WHERE device_id = ? AND observation_id = ?""",
+                        (
+                            captured_at,
+                            now,
+                            payload_json,
+                            device["id"],
+                            observation_id,
+                        ),
+                    )
+                else:
+                    stored_station_id = station_id
+                    stored_task_id = task_id
+                    conn.execute(
+                        """UPDATE station_observation
+                           SET task_id = ?, station_id = ?, captured_at = ?,
+                               received_at = ?, payload = ?
+                           WHERE device_id = ? AND observation_id = ?""",
+                        (
+                            task_id,
+                            station_id,
+                            captured_at,
+                            now,
+                            payload_json,
+                            device["id"],
+                            observation_id,
+                        ),
+                    )
                 duplicates += 1
                 duplicate_ids.append(observation_id)
                 sync_observation = (
                     observation_id,
-                    station_id,
-                    task_id,
+                    stored_station_id,
+                    stored_task_id,
                     payload,
                     captured_at,
                     source_task,

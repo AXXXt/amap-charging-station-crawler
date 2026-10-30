@@ -11,6 +11,7 @@ __pycache__/
 # Data outputs
 *.json
 !batch_test_result.json
+!config/priority_station_scopes.json
 data/*.db
 data/*.pid
 logs/

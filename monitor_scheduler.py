@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pymysql
+import priority_station_scopes
 
 
 def _env_int(name: str, fallback: int, allow_zero: bool = False) -> int:
@@ -80,7 +81,12 @@ def _add_column_if_missing(cursor, table, column, definition):
         (table, column),
     )
     if int(cursor.fetchone()["count"]) == 0:
-        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        try:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        except pymysql.err.OperationalError as error:
+            # Multiple API workers can run the same startup migration together.
+            if error.args[0] != 1060:
+                raise
 
 def init_tables(db_config):
     ddl = [
@@ -95,6 +101,7 @@ def init_tables(db_config):
             target_interval_minutes INT UNSIGNED NOT NULL DEFAULT 60,
             current_round INT UNSIGNED NOT NULL DEFAULT 0,
             collection_mode VARCHAR(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'DETAIL',
+            scope_key VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
             started_at DATETIME NULL,
             finished_at DATETIME NULL,
             created_at DATETIME NOT NULL,
@@ -191,6 +198,7 @@ def init_tables(db_config):
             for statement in ddl:
                 cursor.execute(statement)
             _add_column_if_missing(cursor, "station_monitor_batch", "collection_mode", "VARCHAR(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'DETAIL'")
+            _add_column_if_missing(cursor, "station_monitor_batch", "scope_key", "VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT ''")
             _add_column_if_missing(cursor, "station_monitor_task", "collection_mode", "VARCHAR(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'DETAIL'")
         conn.commit()
     finally:
@@ -328,12 +336,14 @@ def _reap_expired(db_config):
         conn.close()
 
 
-def _active_batch_id(db_config):
+def _active_batch_id(db_config, scope_key=""):
     conn = _conn(db_config)
     try:
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT id FROM station_monitor_batch WHERE status='ACTIVE' ORDER BY id LIMIT 1"
+                "SELECT id FROM station_monitor_batch WHERE status='ACTIVE' "
+                "AND scope_key=%s ORDER BY id LIMIT 1",
+                (scope_key,),
             )
             row = cursor.fetchone()
         return int(row["id"]) if row else None
@@ -521,15 +531,21 @@ def close_active_batches(db_config):
 
 def create_batch(db_config, size=DEFAULT_BATCH_SIZE, target_rounds=DEFAULT_TARGET_ROUNDS,
                  interval_minutes=DEFAULT_INTERVAL_MINUTES, city="", collection_mode="DETAIL",
-                 reuse_batch_ids=None, all_stations=None):
+                 reuse_batch_ids=None, all_stations=None, scope_key=""):
     init_tables(db_config)
     now = _now()
-    code = "MON-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    code = "MON-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + secrets.token_hex(3)
     conn = _conn(db_config)
     try:
         if all_stations is None:
             all_stations = FULL_LIBRARY_MODE
-        if reuse_batch_ids:
+        if scope_key:
+            scope = priority_station_scopes.load_scopes()[scope_key]
+            collection_mode = scope["collection_mode"]
+            target_rounds = 0
+            interval_minutes = 0
+            candidates = priority_station_scopes.candidate_rows(conn, scope_key)
+        elif reuse_batch_ids:
             candidates = _reuse_candidates(conn, size, reuse_batch_ids)
         elif all_stations:
             candidates = _all_station_candidates(conn, size)
@@ -540,15 +556,16 @@ def create_batch(db_config, size=DEFAULT_BATCH_SIZE, target_rounds=DEFAULT_TARGE
         with conn.cursor() as cursor:
             cursor.execute(
                 "INSERT INTO station_monitor_batch "
-                "(batch_code,name,status,station_count,target_rounds,target_interval_minutes,collection_mode,created_at,updated_at) "
-                "VALUES (%s,%s,'ACTIVE',%s,%s,%s,%s,%s,%s)",
+                "(batch_code,name,status,station_count,target_rounds,target_interval_minutes,collection_mode,scope_key,created_at,updated_at) "
+                "VALUES (%s,%s,'ACTIVE',%s,%s,%s,%s,%s,%s,%s)",
                 (
                     code,
-                    f"重点站点监控批次 {code}",
+                    f"{scope_key or '重点站点监控批次'} {code}",
                     len(candidates),
                     target_rounds,
                     interval_minutes,
                     collection_mode,
+                    scope_key,
                     now,
                     now,
                 ),
@@ -582,22 +599,23 @@ def create_batch(db_config, size=DEFAULT_BATCH_SIZE, target_rounds=DEFAULT_TARGE
         conn.close()
 
 
-def _ensure_active_batch(db_config):
+def _ensure_active_batch(db_config, scope_key=""):
+    lock_name = "station_monitor_batch:" + (scope_key or "legacy")
     lock_conn = _conn(db_config)
     try:
         with lock_conn.cursor() as cursor:
-            cursor.execute("SELECT GET_LOCK('station_monitor_active_batch', 30) AS got")
+            cursor.execute("SELECT GET_LOCK(%s, 30) AS got", (lock_name,))
             got = cursor.fetchone()
             if not got or int(got.get("got") or 0) != 1:
                 raise RuntimeError("MONITOR_BATCH_LOCK_TIMEOUT")
-        batch_id = _active_batch_id(db_config)
+        batch_id = _active_batch_id(db_config, scope_key)
         if batch_id:
             return batch_id
-        return create_batch(db_config)
+        return create_batch(db_config, scope_key=scope_key)
     finally:
         try:
             with lock_conn.cursor() as cursor:
-                cursor.execute("SELECT RELEASE_LOCK('station_monitor_active_batch')")
+                cursor.execute("SELECT RELEASE_LOCK(%s)", (lock_name,))
         finally:
             lock_conn.close()
 
@@ -639,7 +657,8 @@ def _start_next_round(db_config, batch_id):
                         (now, now, current_round_row["id"]),
                     )
                 if current_round and current_round_row and current_round_row.get("started_at"):
-                    interval_minutes = int(batch.get("target_interval_minutes") or DEFAULT_INTERVAL_MINUTES)
+                    interval = batch.get("target_interval_minutes")
+                    interval_minutes = int(DEFAULT_INTERVAL_MINUTES if interval is None else interval)
                     target_at = _as_utc(current_round_row["started_at"]) + timedelta(minutes=interval_minutes)
                     if target_at > _as_utc(now):
                         next_available_at = target_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -690,11 +709,11 @@ def _start_next_round(db_config, batch_id):
         conn.close()
 
 
-def claim(db_config, device):
+def claim(db_config, device, scope_key=""):
     init_tables(db_config)
     _reap_expired(db_config)
     try:
-        batch_id = _ensure_active_batch(db_config)
+        batch_id = _ensure_active_batch(db_config, scope_key)
     except RuntimeError as error:
         if str(error) == "NO_ELIGIBLE_MONITOR_STATIONS":
             return None, "ALL_BATCHES_COMPLETED"

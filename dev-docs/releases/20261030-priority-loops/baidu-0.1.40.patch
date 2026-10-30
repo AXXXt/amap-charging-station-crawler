@@ -1,0 +1,73 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -12,8 +12,8 @@
+         applicationId = "com.tigercode.bdcollector"
+         minSdk = 26
+         targetSdk = 35
+-        versionCode = 40
+-        versionName = "0.1.39"
++        versionCode = 41
++        versionName = "0.1.40"
+     }
+ 
+     buildTypes {
+diff --git a/app/src/main/java/com/tigercode/evcollector/network/ServerApi.kt b/app/src/main/java/com/tigercode/evcollector/network/ServerApi.kt
+--- a/app/src/main/java/com/tigercode/evcollector/network/ServerApi.kt
++++ b/app/src/main/java/com/tigercode/evcollector/network/ServerApi.kt
+@@ -23,6 +23,7 @@
+     @SerializedName("deviceToken") val deviceToken: String = "",
+     @SerializedName("heartbeatIntervalSeconds") val heartbeatIntervalSeconds: Int = 15,
+     @SerializedName("taskPollIntervalSeconds") val taskPollIntervalSeconds: Int = 5,
++    @SerializedName("priorityStationScopes") val priorityStationScopes: Map<String, Int>? = null,
+ )
+ 
+ data class HeartbeatRequest(
+diff --git a/app/src/main/java/com/tigercode/evcollector/network/SyncManager.kt b/app/src/main/java/com/tigercode/evcollector/network/SyncManager.kt
+--- a/app/src/main/java/com/tigercode/evcollector/network/SyncManager.kt
++++ b/app/src/main/java/com/tigercode/evcollector/network/SyncManager.kt
+@@ -45,9 +45,8 @@
+         return withContext(Dispatchers.IO) {
+             val deviceCode = AppPreferences.deviceCode(context)
+             val activationCode = AppPreferences.activationCode(context)
+-            // The Baidu app always uses its assigned server queue, including
+-            // installations that still have a monitor preference from the fork.
+-            val collectionMode = "BAIDU"
++            // The server keeps this fixed 499-station loop separate from Amap.
++            val collectionMode = "MONITOR_BAIDU_MIN240_499"
+             var claimedTask: RemoteTaskDto? = null
+             var api: ServerApi? = null
+             var leaseRenewJob: Job? = null
+@@ -76,6 +75,9 @@
+                 if (registerResponse.deviceToken.isNotBlank()) {
+                     AppPreferences.saveDeviceToken(context, registerResponse.deviceToken)
+                 }
++                if (registerResponse.priorityStationScopes?.get("BAIDU_MIN240_499") != 499) {
++                    throw IllegalStateException("服务器尚未部署百度499站循环调度，请先更新服务器")
++                }
+                 activeApi.heartbeat(
+                     HeartbeatRequest(
+                         status = if (engine.isRunning()) "RUNNING" else "IDLE",
+@@ -90,7 +92,7 @@
+                     )
+                 )
+ 
+-                reportStatus("正在领取百度采集任务")
++                reportStatus("正在领取百度499站循环采集任务")
+                 val claim = activeApi.claimTask(ClaimTaskRequest(deviceCode, collectionMode))
+                 val task = claim.task
+                 claimedTask = task
+diff --git a/app/src/main/java/com/tigercode/evcollector/ui/MainActivity.kt b/app/src/main/java/com/tigercode/evcollector/ui/MainActivity.kt
+--- a/app/src/main/java/com/tigercode/evcollector/ui/MainActivity.kt
++++ b/app/src/main/java/com/tigercode/evcollector/ui/MainActivity.kt
+@@ -300,8 +300,8 @@
+         AppPreferences.setScanning(this, true)
+         CollectorKeepAliveService.start(this)
+         AppPreferences.setMonitorListMode(this, false)
+-        AppPreferences.setRemoteStatus(this, "百度专属队列采集已启动")
+-        AppPreferences.appendLog(this, "已启动百度服务端采集（mode=BAIDU）")
++        AppPreferences.setRemoteStatus(this, "百度499站循环采集已启动")
++        AppPreferences.appendLog(this, "已启动百度499站固定名单循环调度，每轮结束后开始下一轮")
+         ChargingAccessibilityService.current()?.launchAmap()
+         refreshUi()
+     }

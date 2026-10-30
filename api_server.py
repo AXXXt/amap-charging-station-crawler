@@ -22,6 +22,7 @@ from datetime import datetime, timezone, timedelta
 import urllib.parse
 import urllib.request
 import monitor_scheduler
+import priority_station_scopes
 from site_exploration_bridge import (
     SiteExplorationBridge,
     parse_mysql_database_url,
@@ -2005,6 +2006,7 @@ def mobile_register(request: MobileRegisterRequest):
         "deviceToken": token,
         "heartbeatIntervalSeconds": 15,
         "taskPollIntervalSeconds": 5,
+        "priorityStationScopes": priority_station_scopes.scope_counts(),
     }
 
 
@@ -2061,14 +2063,19 @@ def mobile_claim_task(
 ):
     device = _require_mobile_device(authorization)
     _validate_device_code(device, request.deviceCode)
-    if request.mode.strip().upper().startswith("MONITOR"):
-        task, reason = monitor_scheduler.claim(DB_CONFIG, device)
+    mode = request.mode.strip().upper()
+    if mode.startswith("MONITOR"):
+        scope_key = priority_station_scopes.SCOPE_MODES.get(mode, "")
+        if mode != "MONITOR" and not scope_key:
+            raise HTTPException(400, detail="UNKNOWN_MONITOR_SCOPE")
+        task, reason = monitor_scheduler.claim(DB_CONFIG, device, scope_key=scope_key)
         if task is not None:
             _update_monitor_device_task(device["id"], task["id"], "RUNNING")
         return {"task": task, "reason": reason}
+    collector = "BAIDU" if mode.startswith("BAIDU") else "AMAP"
     if HENAN_MYSQL_AUTHORITATIVE:
         _ensure_henan_task_table()
-        claimed, claim_reason = _henan_mysql_claim(device)
+        claimed, claim_reason = _henan_mysql_claim(device, collector)
         if claimed is not None:
             now = _mobile_utc()
             conn = mobile_conn()
@@ -2473,16 +2480,30 @@ def mobile_complete_task(
         if not _task_lease_is_active(henan_task, device["id"], request.leaseToken):
             raise HTTPException(409, detail="TASK_LEASE_STALE")
         now = _henan_mysql_utcnow()
+        next_status = "COMPLETED"
+        fail_increment = 0
+        if str(henan_task.get("collector") or "AMAP").upper() == "BAIDU":
+            if not _henan_result_has_pile(
+                henan_task.get("source_station_id") or "",
+                henan_task.get("keyword") or "",
+            ):
+                fail_increment = 1
+                next_attempt = int(henan_task.get("collector_fail_count") or 0) + 1
+                if next_attempt >= 2:
+                    next_status = "UNCOLLECTABLE"
         conn = _henan_mysql_conn()
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
                     "UPDATE henan_heavy_truck_charging_station_task "
-                    "SET status='COMPLETED', result_summary=%s, lease_device_id='', "
+                    "SET status=%s, collector_fail_count=collector_fail_count+%s, "
+                    "result_summary=%s, lease_device_id='', "
                     "lease_token='', lease_expires_at=NULL, finished_at=%s, updated_at=%s "
                     "WHERE local_task_id=%s AND lease_device_id=%s AND lease_token=%s "
                     "AND status IN ('LEASED','RUNNING')",
                     (
+                        next_status,
+                        fail_increment,
                         json.dumps(request.resultSummary or {}, ensure_ascii=False),
                         now,
                         now,
@@ -3593,7 +3614,34 @@ def _henan_mysql_row_to_task(row):
         "source_payload": source_payload,
         "source_site_id": "",
         "source_site_order": 0,
+        "collector": str(row.get("collector") or "AMAP"),
+        "collector_fail_count": int(row.get("collector_fail_count") or 0),
     }
+
+
+def _henan_result_has_pile(poi_id, station_name):
+    """BAIDU 任务完成时检查结果里是否有逐桩或桩数量汇总。"""
+    conn = _henan_mysql_conn()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT result_payload, fast_total, super_total, slow_total "
+                "FROM site_exploration_charging_station_result "
+                "WHERE source_station_id=%s OR matched_station_name=%s LIMIT 1",
+                (poi_id or "", station_name or ""),
+            )
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return False
+    try:
+        payload = json.loads(row.get("result_payload") or "{}")
+    except Exception:
+        payload = {}
+    if payload.get("chargingPiles"):
+        return True
+    return any(row.get(k) not in (None, "") for k in ("fast_total", "super_total", "slow_total"))
 
 
 def _henan_mysql_get_task(task_id):
@@ -3666,7 +3714,7 @@ def _henan_mysql_reap_expired():
     return reaped_ids
 
 
-def _henan_mysql_claim(device):
+def _henan_mysql_claim(device, collector="AMAP"):
     """Claim one authoritative Henan task directly from remote MySQL."""
     _henan_mysql_reap_expired()
     now = _henan_mysql_utcnow()
@@ -3678,8 +3726,8 @@ def _henan_mysql_claim(device):
         with conn.cursor() as cursor:
             cursor.execute(
                 "SELECT * FROM henan_heavy_truck_charging_station_task "
-                "WHERE local_task_id = %s LIMIT 1 FOR UPDATE",
-                (str(device["current_task_id"] or ""),),
+                "WHERE local_task_id = %s AND collector = %s LIMIT 1 FOR UPDATE",
+                (str(device["current_task_id"] or ""), collector),
             )
             current_row = cursor.fetchone()
             current = _henan_mysql_row_to_task(current_row) if current_row else None
@@ -3689,17 +3737,20 @@ def _henan_mysql_claim(device):
             for _ in range(MOBILE_CLAIM_MAX_RETRIES):
                 cursor.execute(
                     "SELECT 1 FROM henan_heavy_truck_charging_station_task "
-                    "WHERE status='PENDING' AND attempt < max_attempts LIMIT 1"
+                    "WHERE status='PENDING' AND attempt < max_attempts AND collector=%s LIMIT 1",
+                    (collector,)
                 )
                 henan_pending = cursor.fetchone() is not None
                 cursor.execute(
                     "SELECT 1 FROM henan_heavy_truck_charging_station_task "
-                    "WHERE status IN ('LEASED','RUNNING') AND recovery_attempt=0 LIMIT 1"
+                    "WHERE status IN ('LEASED','RUNNING') AND recovery_attempt=0 AND collector=%s LIMIT 1",
+                    (collector,)
                 )
                 henan_primary_active = cursor.fetchone() is not None
                 cursor.execute(
                     "SELECT 1 FROM henan_heavy_truck_charging_station_task "
-                    "WHERE status='FAILED' AND recovery_attempt < max_recovery_attempts LIMIT 1"
+                    "WHERE status='FAILED' AND recovery_attempt < max_recovery_attempts AND collector=%s LIMIT 1",
+                    (collector,)
                 )
                 henan_recovery_remaining = cursor.fetchone() is not None
 
@@ -3707,10 +3758,10 @@ def _henan_mysql_claim(device):
                 if henan_pending:
                     cursor.execute(
                         "SELECT * FROM henan_heavy_truck_charging_station_task "
-                        "WHERE status='PENDING' AND attempt < max_attempts "
+                        "WHERE status='PENDING' AND attempt < max_attempts AND collector=%s "
                         "AND (available_at IS NULL OR available_at <= %s) "
                         "ORDER BY station_sequence, created_at, id LIMIT 1 FOR UPDATE",
-                        (now,),
+                        (collector, now),
                     )
                 elif henan_primary_active:
                     cursor.fetchall()
@@ -3719,12 +3770,12 @@ def _henan_mysql_claim(device):
                     recovery_claim = True
                     cursor.execute(
                         "SELECT * FROM henan_heavy_truck_charging_station_task "
-                        "WHERE status='FAILED' "
+                        "WHERE status='FAILED' AND collector=%s "
                         "AND recovery_attempt < max_recovery_attempts "
                         "AND (available_at IS NULL OR available_at <= %s) "
                         "ORDER BY recovery_attempt, station_sequence, created_at, id "
                         "LIMIT 1 FOR UPDATE",
-                        (now,),
+                        (collector, now),
                     )
                 else:
                     return None, "QUEUE_EMPTY"
@@ -3742,9 +3793,9 @@ def _henan_mysql_claim(device):
                         "SET status='LEASED', lease_device_id=%s, lease_token=%s, "
                         "lease_expires_at=%s, recovery_attempt=recovery_attempt+1, "
                         "finished_at=NULL, last_error='', updated_at=%s "
-                        "WHERE id=%s AND status='FAILED' "
+                        "WHERE id=%s AND status='FAILED' AND collector=%s "
                         "AND recovery_attempt < max_recovery_attempts",
-                        (device["id"], lease_token, lease_expires_at, now, row["id"]),
+                        (device["id"], lease_token, lease_expires_at, now, row["id"], collector),
                     )
                 else:
                     cursor.execute(
@@ -3753,8 +3804,8 @@ def _henan_mysql_claim(device):
                         "lease_expires_at=%s, attempt=attempt+1, "
                         "started_at=COALESCE(started_at, %s), "
                         "last_error='', updated_at=%s "
-                        "WHERE id=%s AND status='PENDING' AND attempt < max_attempts",
-                        (device["id"], lease_token, lease_expires_at, now, now, row["id"]),
+                        "WHERE id=%s AND status='PENDING' AND attempt < max_attempts AND collector=%s",
+                        (device["id"], lease_token, lease_expires_at, now, now, row["id"], collector),
                     )
                 if cursor.rowcount != 1:
                     continue

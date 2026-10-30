@@ -1,0 +1,92 @@
+diff --git a/android/app/build.gradle.kts b/android/app/build.gradle.kts
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -12,8 +12,8 @@
+         applicationId = "com.tigercode.evcollector"
+         minSdk = 26
+         targetSdk = 35
+-        versionCode = 52
+-        versionName = "0.1.42.10"
++        versionCode = 53
++        versionName = "0.1.42.11"
+     }
+ 
+     buildTypes {
+@@ -32,6 +32,7 @@
+     }
+ 
+     buildFeatures {
++        buildConfig = true
+         viewBinding = true
+     }
+ }
+diff --git a/android/app/src/main/java/com/tigercode/evcollector/CollectorVersions.kt b/android/app/src/main/java/com/tigercode/evcollector/CollectorVersions.kt
+--- a/android/app/src/main/java/com/tigercode/evcollector/CollectorVersions.kt
++++ b/android/app/src/main/java/com/tigercode/evcollector/CollectorVersions.kt
+@@ -1,6 +1,6 @@
+ package com.tigercode.evcollector
+ 
+ object CollectorVersions {
+-    const val APP_VERSION = "0.1.28"
++    const val APP_VERSION = BuildConfig.VERSION_NAME
+     const val PARSER_VERSION = "1.0.0"
+ }
+diff --git a/android/app/src/main/java/com/tigercode/evcollector/network/ServerApi.kt b/android/app/src/main/java/com/tigercode/evcollector/network/ServerApi.kt
+--- a/android/app/src/main/java/com/tigercode/evcollector/network/ServerApi.kt
++++ b/android/app/src/main/java/com/tigercode/evcollector/network/ServerApi.kt
+@@ -23,6 +23,7 @@
+     @SerializedName("deviceToken") val deviceToken: String = "",
+     @SerializedName("heartbeatIntervalSeconds") val heartbeatIntervalSeconds: Int = 15,
+     @SerializedName("taskPollIntervalSeconds") val taskPollIntervalSeconds: Int = 5,
++    @SerializedName("priorityStationScopes") val priorityStationScopes: Map<String, Int>? = null,
+ )
+ 
+ data class HeartbeatRequest(
+diff --git a/android/app/src/main/java/com/tigercode/evcollector/network/SyncManager.kt b/android/app/src/main/java/com/tigercode/evcollector/network/SyncManager.kt
+--- a/android/app/src/main/java/com/tigercode/evcollector/network/SyncManager.kt
++++ b/android/app/src/main/java/com/tigercode/evcollector/network/SyncManager.kt
+@@ -43,11 +43,13 @@
+         return withContext(Dispatchers.IO) {
+             val deviceCode = AppPreferences.deviceCode(context)
+             val activationCode = AppPreferences.activationCode(context)
+-            // Keep the claim mode backward compatible with the deployed API
+-            // ("MONITOR" endpoints). The list-vs-detail choice stays local and
+-            // travels in the observation payload (collectionMode=LIST_SNAPSHOT)
+-            // so an older server can still accept and store the snapshot.
+-            val collectionMode = if (AppPreferences.isMonitorMode(context)) "MONITOR" else "NORMAL"
++            val priorityListMode = AppPreferences.isMonitorMode(context) &&
++                AppPreferences.isMonitorListMode(context)
++            val collectionMode = when {
++                priorityListMode -> "MONITOR_AMAP_MIN240_647"
++                AppPreferences.isMonitorMode(context) -> "MONITOR"
++                else -> "NORMAL"
++            }
+             var claimedTask: RemoteTaskDto? = null
+             var api: ServerApi? = null
+             var leaseRenewJob: Job? = null
+@@ -74,6 +76,11 @@
+                 )
+                 if (registerResponse.deviceToken.isNotBlank()) {
+                     AppPreferences.saveDeviceToken(context, registerResponse.deviceToken)
++                }
++                if (priorityListMode &&
++                    registerResponse.priorityStationScopes?.get("AMAP_MIN240_647") != 647
++                ) {
++                    throw IllegalStateException("服务器尚未部署高德647站循环调度，请先更新服务器")
+                 }
+                 activeApi.heartbeat(
+                     HeartbeatRequest(
+diff --git a/android/app/src/main/java/com/tigercode/evcollector/ui/MainActivity.kt b/android/app/src/main/java/com/tigercode/evcollector/ui/MainActivity.kt
+--- a/android/app/src/main/java/com/tigercode/evcollector/ui/MainActivity.kt
++++ b/android/app/src/main/java/com/tigercode/evcollector/ui/MainActivity.kt
+@@ -316,8 +316,8 @@
+         AppPreferences.setMonitorListMode(this, true)
+         AppPreferences.setScanning(this, true)
+         CollectorKeepAliveService.start(this)
+-        AppPreferences.setRemoteStatus(this, "重点站点列表快照采集已启动")
+-        AppPreferences.appendLog(this, "已启动重点站点列表快照滚动调度")
++        AppPreferences.setRemoteStatus(this, "高德647站列表快照循环采集已启动")
++        AppPreferences.appendLog(this, "已启动高德647站固定名单循环调度，每轮结束后开始下一轮")
+         ChargingAccessibilityService.current()?.launchAmap()
+         refreshUi()
+     }

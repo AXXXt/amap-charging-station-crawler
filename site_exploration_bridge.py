@@ -168,16 +168,23 @@ def _pile_snapshot_summary(payload: Dict[str, Any]) -> Tuple[Dict[str, Dict[str,
                 overall["unknown"] += 1
         return summary, overall
 
-    # 没有逐桩明细时退化为顶部汇总数量；忙碌数按总数减去可用数计算。
+    # 没有逐桩明细时退化为顶部汇总数量。只有汇总同时给出空闲数时才能推导
+    # 忙碌数；空闲数缺失时无法判断状态，计入 unknown，避免把误读出来的
+    # 总数（电话号码、道路编号、功率数字等）整批算成忙碌。
     for group, prefix in (("fast", "fast"), ("super", "super"), ("slow", "slow")):
         total = max(0, _as_int(payload.get(f"{prefix}Total"), 0))
-        idle = max(0, _as_int(payload.get(f"{prefix}Available"), 0))
+        raw_available = payload.get(f"{prefix}Available")
+        if raw_available is None or str(raw_available).strip() == "":
+            summary[group] = {"idle": 0, "busy": 0, "total": total}
+            overall["total"] += total
+            overall["unknown"] += total
+            continue
+        idle = min(max(0, _as_int(raw_available, 0)), total)
         busy = max(0, total - idle)
         summary[group] = {"idle": idle, "busy": busy, "total": total}
         overall["idle"] += idle
         overall["busy"] += busy
         overall["total"] += total
-    overall["unknown"] = max(0, overall["total"] - overall["idle"] - overall["busy"])
     return summary, overall
 
 
@@ -691,60 +698,76 @@ class SiteExplorationBridge:
                 tuple(values[column] for column in columns),
             )
 
-    def _merge_list_snapshot_payload(self, conn, source_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Keep detail-only fields when a search-list snapshot arrives.
+    def _merge_latest_result_payload(self, conn, source_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep last known prices and only fill missing per-pile details.
 
-        The list snapshot only carries the current price plus aggregated pile
-        counts.  Pile details and time-of-use ladders cannot be observed there,
-        so an empty value from a list round must not wipe the last full detail
-        collection stored on the latest-result row.
+        Apply the same policy to full details, visible details and list snapshots
+        from either collector. Lock the existing latest-result row until commit
+        so concurrent uploads cannot replace previously stored pile details.
+        Dynamic history still receives the unmodified observation payload.
         """
-        mode = str(payload.get("collectionMode") or "").upper()
-        source_page = str(payload.get("sourcePage") or "").upper()
-        # Visible detail pages intentionally do not open the historical-idle
-        # or time-of-use sub-pages. Preserve the old static details when the
-        # new payload leaves those fields empty.
-        if (
-            mode not in {"LIST_SNAPSHOT", "VISIBLE_DETAIL"}
-            and source_page not in {"SEARCH_LIST", "SUGGESTION_DETAIL"}
-        ):
-            return payload
-
-        static_fields = (
-            "chargingPiles", "fastPrices", "slowPrices", "priceTrendTitle",
-            "fastPower", "superPower", "slowPower",
-        )
-        missing = [field for field in static_fields if not payload.get(field)]
-        if not missing:
-            return payload
-
         table = quote_identifier(self.result_table, "result table")
         with conn.cursor() as cursor:
             cursor.execute(
-                f"SELECT result_payload FROM {table} WHERE source_key=%s LIMIT 1",
+                f"SELECT result_payload, current_price FROM {table} "
+                "WHERE source_key=%s LIMIT 1 FOR UPDATE",
                 (source_key,),
             )
             row = cursor.fetchone()
-        if not row:
-            return payload
-        raw = row.get("result_payload") if isinstance(row, dict) else row[0]
-        try:
-            previous = json.loads(raw) if isinstance(raw, str) else raw
-        except (TypeError, ValueError):
-            return payload
-        if not isinstance(previous, dict):
-            return payload
+
+        previous = {}
+        previous_price = ""
+        if row:
+            raw = row.get("result_payload") if isinstance(row, dict) else row[0]
+            previous_price = row.get("current_price") if isinstance(row, dict) else row[1]
+            parsed = _json_value(raw)
+            if isinstance(parsed, dict):
+                previous = parsed
+
+        def has_text(value: Any) -> bool:
+            return value is not None and bool(str(value).strip())
 
         merged = dict(payload)
-        for field in missing:
-            value = previous.get(field)
-            if value:
-                merged[field] = value
-        for field in ("fastTotal", "superTotal", "slowTotal", "chargingPileTotal", "chargingPileCount"):
-            if not merged.get(field) and previous.get(field):
+        # Older rows may have retained only the scalar price column. Use it to
+        # keep the JSON used by station details consistent with the list price.
+        if not has_text(merged.get("currentPrice")):
+            old_price = previous.get("currentPrice")
+            if not has_text(old_price):
+                old_price = previous_price
+            merged["currentPrice"] = old_price if has_text(old_price) else ""
+
+        has_new_periods = False
+        for field in ("fastPrices", "slowPrices"):
+            incoming = payload.get(field)
+            if isinstance(incoming, list) and incoming:
+                has_new_periods = True
+                continue
+            old_periods = previous.get(field)
+            merged[field] = old_periods if isinstance(old_periods, list) else []
+        if not has_new_periods or not has_text(merged.get("priceTrendTitle")):
+            if has_text(previous.get("priceTrendTitle")):
+                merged["priceTrendTitle"] = previous["priceTrendTitle"]
+
+        old_piles = previous.get("chargingPiles")
+        if isinstance(old_piles, list) and old_piles:
+            # Existing pile records are intentionally immutable, including their
+            # power/status fields. Later rounds only fill stations without them.
+            merged["chargingPiles"] = old_piles
+            if has_text(previous.get("chargingPileTotal")):
+                merged["chargingPileTotal"] = previous["chargingPileTotal"]
+        elif not isinstance(merged.get("chargingPiles"), list):
+            merged["chargingPiles"] = []
+        if merged.get("chargingPiles"):
+            merged["chargingPileCount"] = len(merged["chargingPiles"])
+
+        # List/partial rounds can also omit the aggregate counts and powers.
+        # Keep those values when absent, while allowing fresh aggregates through.
+        for field in (
+            "fastPower", "superPower", "slowPower",
+            "fastTotal", "superTotal", "slowTotal", "chargingPileTotal", "chargingPileCount",
+        ):
+            if not has_text(merged.get(field)) and has_text(previous.get(field)):
                 merged[field] = previous[field]
-        if not merged.get("chargingPileCount"):
-            merged["chargingPileCount"] = len(merged.get("chargingPiles") or [])
         return merged
 
     def upsert_result(
@@ -795,7 +818,7 @@ class SiteExplorationBridge:
                 if not uses_unix_time
                 else now_value
             )
-            merged_payload = self._merge_list_snapshot_payload(conn, source_key, payload)
+            merged_payload = self._merge_latest_result_payload(conn, source_key, payload)
             values = {
                 "source_key": source_key,
                 "observation_id": str(observation_id or ""),
@@ -815,7 +838,7 @@ class SiteExplorationBridge:
                 "source_longitude": source_longitude,
                 "operator": str(payload.get("operator") or ""),
                 "business_hours": str(payload.get("businessHours") or ""),
-                "current_price": str(payload.get("currentPrice") or ""),
+                "current_price": str(merged_payload["currentPrice"]),
                 "parking_fee": str(payload.get("parkingFee") or ""),
                 "fast_available": str(merged_payload.get("fastAvailable") or ""),
                 "fast_total": str(merged_payload.get("fastTotal") or ""),

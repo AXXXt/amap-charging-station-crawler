@@ -1,0 +1,513 @@
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -12,8 +12,8 @@
+         applicationId = "com.tigercode.bdcollector"
+         minSdk = 26
+         targetSdk = 35
+-        versionCode = 41
+-        versionName = "0.1.40"
++        versionCode = 42
++        versionName = "0.1.41"
+     }
+ 
+     buildTypes {
+--- a/app/src/main/java/com/tigercode/evcollector/CollectorKeepAliveService.kt
++++ b/app/src/main/java/com/tigercode/evcollector/CollectorKeepAliveService.kt
+@@ -15,11 +15,17 @@
+ import com.tigercode.evcollector.accessibility.ChargingAccessibilityService
+ import com.tigercode.evcollector.data.CollectorRepository
+ import com.tigercode.evcollector.engine.CollectionEngine
++import com.tigercode.evcollector.network.FleetControlClient
++import com.tigercode.evcollector.network.FleetGenerationRequest
++import com.tigercode.evcollector.network.FleetStoppedException
+ import com.tigercode.evcollector.network.SyncManager
+ import com.tigercode.evcollector.network.SyncOutcome
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.Job
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.cancelAndJoin
++import kotlinx.coroutines.cancel
+ import kotlinx.coroutines.SupervisorJob
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.isActive
+@@ -30,6 +36,7 @@
+     // 并由 PARTIAL_WAKE_LOCK 保证设备在长期插电采集时不会进入 CPU 深度休眠。
+     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+     private var loopJob: Job? = null
++    private var fleetWatchJob: Job? = null
+     private var engine: CollectionEngine? = null
+     private var wakeLock: PowerManager.WakeLock? = null
+ 
+@@ -68,6 +75,8 @@
+     override fun onDestroy() {
+         engine?.stop()
+         loopJob?.cancel()
++        fleetWatchJob?.cancel()
++        scope.cancel()
+         engine = null
+         releaseKeepAliveLock()
+         super.onDestroy()
+@@ -86,6 +95,7 @@
+         }
+         engineRef = engine
+         this.engine = engine
++        startFleetWatcher()
+         loopJob = scope.launch {
+             if (AppPreferences.isLocalQueueMode(this@CollectorKeepAliveService)) {
+                 updateNotification("本地任务采集启动")
+@@ -226,6 +236,33 @@
+             }
+             stopSelf()
+         }
++        loopJob?.invokeOnCompletion {
++            if (!AppPreferences.isScanning(this@CollectorKeepAliveService)) stopSelf()
++        }
++    }
++
++    private fun startFleetWatcher() {
++        if (fleetWatchJob?.isActive == true) return
++        fleetWatchJob = scope.launch {
++            val api = FleetControlClient.api(this@CollectorKeepAliveService)
++            while (isActive && AppPreferences.isScanning(this@CollectorKeepAliveService)) {
++                try {
++                    val control = FleetControlClient.control(this@CollectorKeepAliveService, api)
++                    if (control.stopRequired || !control.releaseComplete) {
++                        engine?.stop()
++                        FleetControlClient.stopAndAcknowledge(this@CollectorKeepAliveService, api, control.stopGeneration)
++                        loopJob?.cancelAndJoin()
++                        stopSelf()
++                        return@launch
++                    }
++                } catch (error: CancellationException) {
++                    throw error
++                } catch (_: Exception) {
++                    // Covers task gaps, cooldown and accessibility reconnection waits.
++                }
++                delay(3_000L)
++            }
++        }
+     }
+ 
+     private fun acquireKeepAliveLock() {
+--- /dev/null
++++ b/app/src/main/java/com/tigercode/evcollector/network/FleetControlClient.kt
+@@ -0,0 +1,97 @@
++package com.tigercode.evcollector.network
++
++import android.content.Context
++import android.os.Build
++import com.tigercode.evcollector.AppPreferences
++import com.tigercode.evcollector.CollectionStatusNotifier
++import com.tigercode.evcollector.CollectorVersions
++import com.tigercode.evcollector.CooldownAlarmScheduler
++import com.tigercode.evcollector.accessibility.ChargingAccessibilityService
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.NonCancellable
++import kotlinx.coroutines.withContext
++import kotlinx.coroutines.withTimeoutOrNull
++import retrofit2.HttpException
++
++class FleetStoppedException : CancellationException("收到全部停止指令")
++
++object FleetControlClient {
++    fun api(context: Context): ServerApi =
++        RetrofitClient.serverApi(AppPreferences.serverUrl(context), context, controlPlane = true)
++
++    private suspend fun register(context: Context, api: ServerApi) {
++        val response = api.register(DeviceRegisterRequest(
++            activationCode = AppPreferences.activationCode(context),
++            deviceCode = AppPreferences.deviceCode(context),
++            name = Build.MODEL,
++            appVersion = CollectorVersions.APP_VERSION,
++            parserVersion = CollectorVersions.PARSER_VERSION,
++            targetAppVersion = "",
++            capabilities = mapOf(
++                "accessibilityConnected" to ChargingAccessibilityService.isConnected(),
++                "targetPackage" to ChargingAccessibilityService.AMAP_PACKAGE,
++                "model" to Build.MODEL,
++                "fleetStopSupported" to true,
++            ),
++        ))
++        check(response.deviceToken.isNotBlank()) { "设备注册未返回令牌" }
++        AppPreferences.saveDeviceToken(context, response.deviceToken)
++    }
++
++    suspend fun control(context: Context, api: ServerApi, allowRegistration: Boolean = false): FleetControlDto {
++        if (AppPreferences.deviceToken(context).isBlank()) {
++            check(allowRegistration) { "等待设备注册" }
++            register(context, api)
++        }
++        val response = try {
++            api.deviceConfig()
++        } catch (error: HttpException) {
++            if (!allowRegistration || (error.code() != 401 && error.code() != 403)) throw error
++            register(context, api)
++            api.deviceConfig()
++        }
++        val control = response.fleetControl
++        check(control?.supported == true) { "服务器尚未部署全部停止功能，请先更新服务器" }
++        return control
++    }
++
++    // Called only from a user click, never from automatic recovery or polling.
++    suspend fun resumeManually(context: Context) {
++        val api = api(context)
++        val control = control(context, api, allowRegistration = true)
++        check(control.releaseComplete) { "全停任务仍在释放，请稍后再开始" }
++        api.resumeDevice(FleetGenerationRequest(control.stopGeneration))
++    }
++
++    fun markStopped(context: Context) {
++        AppPreferences.setScanning(context, false)
++        CooldownAlarmScheduler.cancel(context)
++        val message = "收到全部停止指令，本机已停止；任务由服务器释放，需手动开始"
++        AppPreferences.setRemoteStatus(context, message)
++        AppPreferences.appendLog(context, message)
++        CollectionStatusNotifier.show(context, message)
++    }
++
++    suspend fun stopAndAcknowledge(context: Context, api: ServerApi, generation: Long) {
++        markStopped(context)
++        withContext(NonCancellable) {
++            withTimeoutOrNull(2_500L) {
++                try {
++                    api.acknowledgeStop(FleetGenerationRequest(generation))
++                } catch (error: CancellationException) {
++                    throw error
++                } catch (_: Exception) {
++                    // Claim permission remains revoked even if the acknowledgement cannot arrive.
++                }
++            }
++        }
++    }
++
++    suspend fun requireAllowed(context: Context, api: ServerApi) {
++        val control = control(context, api)
++        if (control.stopRequired || !control.releaseComplete) {
++            stopAndAcknowledge(context, api, control.stopGeneration)
++            throw FleetStoppedException()
++        }
++    }
++}
+--- a/app/src/main/java/com/tigercode/evcollector/network/RetrofitClient.kt
++++ b/app/src/main/java/com/tigercode/evcollector/network/RetrofitClient.kt
+@@ -8,13 +8,13 @@
+ import java.util.concurrent.TimeUnit
+ 
+ object RetrofitClient {
+-    fun serverApi(baseUrl: String, context: Context): ServerApi {
++    fun serverApi(baseUrl: String, context: Context, controlPlane: Boolean = false): ServerApi {
+         val normalized = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
+         val client = OkHttpClient.Builder()
+             .connectTimeout(10, TimeUnit.SECONDS)
+-            .readTimeout(120, TimeUnit.SECONDS)
++            .readTimeout(if (controlPlane) 8 else 120, TimeUnit.SECONDS)
+             .writeTimeout(30, TimeUnit.SECONDS)
+-            .callTimeout(120, TimeUnit.SECONDS)
++            .callTimeout(if (controlPlane) 10 else 120, TimeUnit.SECONDS)
+             .addInterceptor { chain ->
+                 val token = AppPreferences.deviceToken(context)
+                 val request = if (token.isNotEmpty()) {
+--- a/app/src/main/java/com/tigercode/evcollector/network/ServerApi.kt
++++ b/app/src/main/java/com/tigercode/evcollector/network/ServerApi.kt
+@@ -132,7 +132,44 @@
+     @SerializedName("statusCounts") val statusCounts: Map<String, Int> = emptyMap(),
+ )
+ 
++data class FleetControlDto(
++    @SerializedName("supported") val supported: Boolean = false,
++    @SerializedName("stopGeneration") val stopGeneration: Long = 0,
++    @SerializedName("stopRequired") val stopRequired: Boolean = false,
++    @SerializedName("releaseComplete") val releaseComplete: Boolean = false,
++    @SerializedName("canStopAll") val canStopAll: Boolean = false,
++)
++
++data class DeviceConfigResponse(
++    @SerializedName("fleetControl") val fleetControl: FleetControlDto? = null,
++)
++
++data class FleetGenerationRequest(
++    @SerializedName("stopGeneration") val stopGeneration: Long,
++)
++
++data class FleetStopRequest(@SerializedName("requestId") val requestId: String)
++
++data class FleetStopResponse(
++    @SerializedName("status") val status: String = "",
++    @SerializedName("stopGeneration") val stopGeneration: Long = 0,
++    @SerializedName("releasedTaskCount") val releasedTaskCount: Int = 0,
++    @SerializedName("deviceCount") val deviceCount: Int = 0,
++)
++
+ interface ServerApi {
++    @GET("api/v1/devices/me/config")
++    suspend fun deviceConfig(): DeviceConfigResponse
++
++    @POST("api/v1/devices/me/resume")
++    suspend fun resumeDevice(@Body body: FleetGenerationRequest): DeviceConfigResponse
++
++    @POST("api/v1/devices/me/stopped")
++    suspend fun acknowledgeStop(@Body body: FleetGenerationRequest): DeviceConfigResponse
++
++    @POST("api/v1/devices/stop-all")
++    suspend fun stopAllDevices(@Body body: FleetStopRequest): FleetStopResponse
++
+     @POST("api/v1/devices/register")
+     suspend fun register(@Body body: DeviceRegisterRequest): DeviceRegisterResponse
+ 
+--- a/app/src/main/java/com/tigercode/evcollector/network/SyncManager.kt
++++ b/app/src/main/java/com/tigercode/evcollector/network/SyncManager.kt
+@@ -18,6 +18,8 @@
+ import kotlinx.coroutines.CancellationException
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.Job
++import kotlinx.coroutines.job
++import kotlinx.coroutines.cancel
+ import kotlinx.coroutines.cancelAndJoin
+ import kotlinx.coroutines.currentCoroutineContext
+ import kotlinx.coroutines.delay
+@@ -50,6 +52,7 @@
+             var claimedTask: RemoteTaskDto? = null
+             var api: ServerApi? = null
+             var leaseRenewJob: Job? = null
++            var fleetWatchJob: Job? = null
+             val leaseLost = AtomicBoolean(false)
+             try {
+                 reportStatus("正在连接百度采集服务器")
+@@ -66,6 +69,7 @@
+                         capabilities = mapOf(
+                             "accessibilityConnected" to ChargingAccessibilityService.isConnected(),
+                             "targetPackage" to ChargingAccessibilityService.AMAP_PACKAGE,
++                            "fleetStopSupported" to true,
+                             "sdkInt" to Build.VERSION.SDK_INT,
+                             "manufacturer" to Build.MANUFACTURER,
+                             "model" to Build.MODEL,
+@@ -88,12 +92,39 @@
+                         capabilities = mapOf(
+                             "accessibilityConnected" to ChargingAccessibilityService.isConnected(),
+                             "targetPackage" to ChargingAccessibilityService.AMAP_PACKAGE,
++                            "fleetStopSupported" to true,
+                         ),
+                     )
+                 )
+ 
+                 reportStatus("正在领取百度499站循环采集任务")
++                val controlApi = FleetControlClient.api(context)
++                FleetControlClient.requireAllowed(context, controlApi)
++                val taskJob = currentCoroutineContext().job
++                fleetWatchJob = kotlinx.coroutines.CoroutineScope(currentCoroutineContext()).launch {
++                    while (isActive) {
++                        delay(3_000L)
++                        try {
++                            val control = FleetControlClient.control(context, controlApi)
++                            if (control.stopRequired || !control.releaseComplete) {
++                                engine.stop()
++                                FleetControlClient.stopAndAcknowledge(context, controlApi, control.stopGeneration)
++                                taskJob.cancel(FleetStoppedException())
++                                return@launch
++                            }
++                        } catch (error: CancellationException) {
++                            throw error
++                        } catch (_: Exception) {
++                            // A transient control request failure is retried in three seconds.
++                        }
++                    }
++                }
+                 val claim = activeApi.claimTask(ClaimTaskRequest(deviceCode, collectionMode))
++                if (claim.reason == "FLEET_STOPPED") {
++                    engine.stop()
++                    FleetControlClient.markStopped(context)
++                    throw FleetStoppedException()
++                }
+                 val task = claim.task
+                 claimedTask = task
+                 if (task == null) {
+@@ -301,6 +332,7 @@
+                     message = "搜索结果中没有对应站点",
+                 )
+             } catch (error: CancellationException) {
++                engine.stop()
+                 throw error
+             } catch (error: Exception) {
+                 claimedTask?.let { task ->
+@@ -321,6 +353,8 @@
+                     }
+                 }
+                 SyncOutcome.Failed(friendlyNetworkError(error))
++            } finally {
++                fleetWatchJob?.cancel()
+             }
+         }
+     }
+@@ -442,6 +476,7 @@
+                 capabilities = mapOf(
+                     "accessibilityConnected" to ChargingAccessibilityService.isConnected(),
+                     "targetPackage" to ChargingAccessibilityService.AMAP_PACKAGE,
++                            "fleetStopSupported" to true,
+                     "sdkInt" to Build.VERSION.SDK_INT,
+                     "manufacturer" to Build.MANUFACTURER,
+                     "model" to Build.MODEL,
+--- a/app/src/main/java/com/tigercode/evcollector/ui/MainActivity.kt
++++ b/app/src/main/java/com/tigercode/evcollector/ui/MainActivity.kt
+@@ -26,8 +26,11 @@
+ import com.tigercode.evcollector.engine.CollectionEngine
+ import com.tigercode.evcollector.engine.CollectionListener
+ import com.tigercode.evcollector.engine.CollectionState
++import com.tigercode.evcollector.network.FleetControlClient
++import com.tigercode.evcollector.network.FleetStopRequest
+ import com.tigercode.evcollector.network.SyncManager
+ import com.tigercode.evcollector.network.SyncOutcome
++import kotlinx.coroutines.CancellationException
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+ 
+@@ -82,17 +85,18 @@
+         binding.saveConfigButton.setOnClickListener { saveConfig() }
+         binding.openAccessibilityButton.setOnClickListener { openAccessibilitySettings() }
+         binding.openAmapButton.setOnClickListener { openAmap() }
+-        binding.startCollectButton.setOnClickListener { startCollector() }
++        binding.startCollectButton.setOnClickListener { startWithFleetPermission { startCollector() } }
+         binding.stopCollectButton.setOnClickListener { stopCollector() }
+-        binding.syncNowButton.setOnClickListener { syncNow() }
++        binding.stopAllDevicesButton.setOnClickListener { stopAllDevices() }
++        binding.syncNowButton.setOnClickListener { startWithFleetPermission { syncNow() } }
+         binding.importHenanPoiButton.setOnClickListener { importHenanPois() }
+-        binding.startHenanCollectButton.setOnClickListener { startHenanCollect() }
+-        binding.startMonitorCollectButton.setOnClickListener { startMonitorCollect() }
+-        binding.startMonitorListButton.setOnClickListener { startMonitorListCollect() }
++        binding.startHenanCollectButton.setOnClickListener { startWithFleetPermission { startHenanCollect() } }
++        binding.startMonitorCollectButton.setOnClickListener { startWithFleetPermission { startMonitorCollect() } }
++        binding.startMonitorListButton.setOnClickListener { startWithFleetPermission { startMonitorListCollect() } }
+         binding.startMonitorCollectButton.visibility = android.view.View.GONE
+         binding.startMonitorListButton.visibility = android.view.View.GONE
+         binding.resetHenanTasksButton.setOnClickListener { confirmResetHenanTasks() }
+-        binding.localScanButton.setOnClickListener { startLocalScan() }
++        binding.localScanButton.setOnClickListener { startWithFleetPermission { startLocalScan() } }
+         binding.stopRunButton.setOnClickListener { stopRunning() }
+         binding.clearLogButton.setOnClickListener { clearLogs() }
+         binding.exportResultsButton.setOnClickListener { exportResults() }
+@@ -121,6 +125,7 @@
+     override fun onDestroy() {
+         refreshHandler.removeCallbacks(refreshRunnable)
+         engine.removeListener(engineListener)
++        engine.stop()
+         super.onDestroy()
+     }
+ 
+@@ -149,6 +154,73 @@
+         AppPreferences.appendLog(this, "配置已保存")
+         refreshUi()
+         return true
++    }
++
++    private var fleetStartInProgress = false
++
++    private fun startWithFleetPermission(action: () -> Unit) {
++        if (fleetStartInProgress) return
++        if (AppPreferences.isScanning(this) || engine.isRunning()) {
++            Toast.makeText(this, "本机正在采集，请先停止后再开始", Toast.LENGTH_SHORT).show()
++            return
++        }
++        if (!saveConfig()) return
++        fleetStartInProgress = true
++        lifecycleScope.launch {
++            try {
++                FleetControlClient.resumeManually(this@MainActivity)
++                action()
++            } catch (error: CancellationException) {
++                throw error
++            } catch (error: Exception) {
++                val message = "无法开始：${error.message ?: error.javaClass.simpleName}"
++                AppPreferences.setRemoteStatus(this@MainActivity, message)
++                AppPreferences.appendLog(this@MainActivity, message)
++                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
++            } finally {
++                fleetStartInProgress = false
++                refreshUi()
++            }
++        }
++    }
++
++    private fun stopAllDevices() {
++        if (!saveConfig()) return
++        binding.stopAllDevicesButton.isEnabled = false
++        lifecycleScope.launch {
++            val prefs = getSharedPreferences("fleet_control", MODE_PRIVATE)
++            // Keep the same ID after timeout/restart so a retry cannot issue a second stop.
++            val requestId = prefs.getString("pending_stop_request", null)
++                ?: java.util.UUID.randomUUID().toString().also {
++                    prefs.edit().putString("pending_stop_request", it).commit()
++                }
++            try {
++                val api = FleetControlClient.api(this@MainActivity)
++                val control = FleetControlClient.control(this@MainActivity, api, allowRegistration = true)
++                check(control.canStopAll) { "本机未获全部停止权限，请由K60百度采集端操作" }
++                AppPreferences.setRemoteStatus(this@MainActivity, "正在通知全部设备停止并释放任务")
++                refreshUi()
++                val response = api.stopAllDevices(FleetStopRequest(requestId))
++                check(response.status == "STOP_REQUESTED") { "服务器未确认全停指令" }
++                prefs.edit().remove("pending_stop_request").commit()
++                engine.stop()
++                stopCollector()
++                val message = "全停指令已发送，释放 ${response.releasedTaskCount} 条任务；其他设备联网后停止，需手动开始"
++                AppPreferences.setRemoteStatus(this@MainActivity, message)
++                AppPreferences.appendLog(this@MainActivity, message)
++                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
++            } catch (error: CancellationException) {
++                throw error
++            } catch (error: Exception) {
++                val message = "全停尚未确认，请重试：${error.message ?: error.javaClass.simpleName}"
++                AppPreferences.setRemoteStatus(this@MainActivity, message)
++                AppPreferences.appendLog(this@MainActivity, message)
++                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
++            } finally {
++                binding.stopAllDevicesButton.isEnabled = true
++                refreshUi()
++            }
++        }
+     }
+ 
+     private fun startCollector() {
+@@ -432,6 +504,23 @@
+         val district = binding.districtInput.text?.toString()?.trim().orEmpty()
+         val keyword = binding.keywordInput.text?.toString()?.trim().orEmpty()
+         engine.startLocal(city, district, keyword, engineListener)
++        lifecycleScope.launch {
++            val api = FleetControlClient.api(this@MainActivity)
++            do {
++                delay(3_000L)
++                try {
++                    FleetControlClient.requireAllowed(this@MainActivity, api)
++                } catch (error: com.tigercode.evcollector.network.FleetStoppedException) {
++                    engine.stop()
++                    refreshUi()
++                    return@launch
++                } catch (error: CancellationException) {
++                    throw error
++                } catch (_: Exception) {
++                    // Retry while the local collector is active.
++                }
++            } while (engine.isRunning())
++        }
+         refreshUi()
+     }
+ 
+--- a/app/src/main/res/layout/activity_main.xml
++++ b/app/src/main/res/layout/activity_main.xml
+@@ -119,6 +119,15 @@
+             android:layout_height="wrap_content"
+             android:layout_marginTop="8dp"
+             android:text="停止设备调度" />
++
++        <Button
++            android:id="@+id/stop_all_devices_button"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="8dp"
++            android:backgroundTint="#B3261E"
++            android:textColor="#FFFFFF"
++            android:text="一键全部停止（释放采集中任务）" />
+ 
+         <Button
+             android:id="@+id/sync_now_button"

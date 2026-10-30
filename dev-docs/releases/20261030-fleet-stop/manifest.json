@@ -1,0 +1,82 @@
+{
+  "server/api_server.py": {
+    "beforeSha256": "c7bec9ec668d9116daa96d3634ea8a0acc25e056a6002f42b84471f7ac39f41e",
+    "afterSha256": "ce3f8a0f51f39994c065d16cd14dcb918ad6cb2615588fad58970a0898b3fedd"
+  },
+  "server/fleet_control.py": {
+    "beforeSha256": null,
+    "afterSha256": "17e0311b3f12ad86a67f19005ca39ac9a7c2ed3b5126f06f486662fbeec14627"
+  },
+  "server/test_fleet_control.py": {
+    "beforeSha256": null,
+    "afterSha256": "3f436837eed75b96428bcdde1324f8f2e78371198a9393f626675a5b33d22cde"
+  },
+  "baidu/app/build.gradle.kts": {
+    "beforeSha256": "a5f5e04ae67843e0dc7ec8bfd76519387f16cffed07cba2ae4a6de8794572656",
+    "afterSha256": "2b1e708433610cc077874b8c49e9a5c134d3f5855b8597b7ce19bb0a08886a1f"
+  },
+  "baidu/app/src/main/java/com/tigercode/evcollector/CollectorKeepAliveService.kt": {
+    "beforeSha256": "1a756d3112c250c25b8f19273f64dd8be8325afff4ad1d822b31450354f44fc2",
+    "afterSha256": "6018f0eb883b28f65b620b23db62893c23944374d62e8ce6cede063e93787df9"
+  },
+  "baidu/app/src/main/java/com/tigercode/evcollector/network/FleetControlClient.kt": {
+    "beforeSha256": null,
+    "afterSha256": "e6cf0139c768394746435b50420dc52fa21361140796433810deab5eaebd0193"
+  },
+  "baidu/app/src/main/java/com/tigercode/evcollector/network/RetrofitClient.kt": {
+    "beforeSha256": "9bb44e5144fd8c3e5ff792546c6ffbee14bb78d4140c8c8eeb9943684f208e5b",
+    "afterSha256": "6a05a79abf2a9ef00ac7a988702a2901333e64f01e83ead36c35a7d17b5ea073"
+  },
+  "baidu/app/src/main/java/com/tigercode/evcollector/network/ServerApi.kt": {
+    "beforeSha256": "91b33e37e8f575a4e7e918bf0778ea4d581d5cdeca725c447b3d31a6b7cb2788",
+    "afterSha256": "3e77e8a339fe1e27375285d08ecddd63c9953d0dc0c55d2644c287b32692c834"
+  },
+  "baidu/app/src/main/java/com/tigercode/evcollector/network/SyncManager.kt": {
+    "beforeSha256": "15d5454ba79627efe0add0ec969deb3622bc980dc317afb2652af42e8faddf57",
+    "afterSha256": "b3988615f315f2a3832943ecd0409ff4b45a58052e03164356126058d8a3596e"
+  },
+  "baidu/app/src/main/java/com/tigercode/evcollector/ui/MainActivity.kt": {
+    "beforeSha256": "1a19e1589d69bbd81855801c66bbc5e9fe6f2f6ce17c6b15aff039f508c68956",
+    "afterSha256": "b2e46e44ed63c57e2588ff4b30b1fc068ebb08711262e4e490fc8ea8ddb597af"
+  },
+  "baidu/app/src/main/res/layout/activity_main.xml": {
+    "beforeSha256": "d2173338d8116c84a3c98f0afd2b45b1738cb3947a1945aad52629c7d510e9d0",
+    "afterSha256": "4795be24ecdc73fe63d577f41ec1f409519f325591fdf00b4b9bd8635d0a1f8f"
+  },
+  "amap/app/build.gradle.kts": {
+    "beforeSha256": "4dec834281cc41503197e616b4b3c8d3bfab30875f57e1a1fe45813275cd2d0b",
+    "afterSha256": "9f90b96c399bc02a928ad827486633d374843f2c4aa00d01cba0c3256af106f6"
+  },
+  "amap/app/src/main/java/com/tigercode/evcollector/CollectorKeepAliveService.kt": {
+    "beforeSha256": "f0b890ee5c0396e0af0e96ac28ac5dd78322ee17061cc6d51be07694d1cad72f",
+    "afterSha256": "ce9e6645ced9443fbc48b8c6ba609a418b2785768541489d2a785c8f3a0f8e56"
+  },
+  "amap/app/src/main/java/com/tigercode/evcollector/network/FleetControlClient.kt": {
+    "beforeSha256": null,
+    "afterSha256": "c71ed7a3411425343c3d66e756d7150097da5c342d14d79bffd974ba024c1b61"
+  },
+  "amap/app/src/main/java/com/tigercode/evcollector/network/RetrofitClient.kt": {
+    "beforeSha256": "fbab850cbfb4caa789aeb3dcc3bc295b573edbea600db046c26156c887910a07",
+    "afterSha256": "6a05a79abf2a9ef00ac7a988702a2901333e64f01e83ead36c35a7d17b5ea073"
+  },
+  "amap/app/src/main/java/com/tigercode/evcollector/network/ServerApi.kt": {
+    "beforeSha256": "91b33e37e8f575a4e7e918bf0778ea4d581d5cdeca725c447b3d31a6b7cb2788",
+    "afterSha256": "3e77e8a339fe1e27375285d08ecddd63c9953d0dc0c55d2644c287b32692c834"
+  },
+  "amap/app/src/main/java/com/tigercode/evcollector/network/SyncManager.kt": {
+    "beforeSha256": "cfebbda0dc36a40dadd2862e5b674d5cc783d64d74ad4c1af84de54b0a4c66e1",
+    "afterSha256": "fe05f471b4787b365dea146ee5d0a9e8b14ef49780371f5ca744117192882679"
+  },
+  "amap/app/src/main/java/com/tigercode/evcollector/ui/MainActivity.kt": {
+    "beforeSha256": "4db6c0f0c2f808f99536ab7155805aa3b6e7925b01aeb7ddedc59802a9a29f2b",
+    "afterSha256": "853a1bde3be9b5a4459d189b3e512623b22977bca178538f334996d5077e41ff"
+  },
+  "baidu-collector-0.1.41.apk": {
+    "sha256": "436120c619dbfce6e87eade753378d5ee5578af497ba829a5ebaf75504f1f862",
+    "bytes": 7143532
+  },
+  "amap-collector-0.1.42.12.apk": {
+    "sha256": "fba6cbc80d8f2cfc413550db621779e6a3fb8264325794d7dadb863a30ef73c8",
+    "bytes": 7016259
+  }
+}

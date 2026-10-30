@@ -23,6 +23,7 @@ import urllib.parse
 import urllib.request
 import monitor_scheduler
 import priority_station_scopes
+import fleet_control
 from site_exploration_bridge import (
     SiteExplorationBridge,
     parse_mysql_database_url,
@@ -1058,6 +1059,14 @@ class MobileHeartbeatRequest(BaseModel):
     capabilities: dict = {}
 
 
+class FleetStopRequest(BaseModel):
+    requestId: str
+
+
+class FleetGenerationRequest(BaseModel):
+    stopGeneration: int
+
+
 class MobileClaimRequest(BaseModel):
     deviceCode: str = ""
     mode: str = "NORMAL"
@@ -1255,6 +1264,8 @@ def init_mobile_db():
         "CREATE INDEX IF NOT EXISTS idx_obs_received "
         "ON station_observation(received_at)"
     )
+    conn.commit()
+    fleet_control.init_schema(conn)
     conn.commit()
     conn.close()
 
@@ -2044,16 +2055,83 @@ def mobile_heartbeat(
     return {"device": _mobile_device_payload(row)}
 
 
+def _fleet_snapshot(device):
+    conn = mobile_conn()
+    try:
+        return fleet_control.snapshot(conn, device)
+    finally:
+        conn.close()
+
+
 @app.get("/api/v1/devices/me/config")
 def mobile_config(authorization: Optional[str] = Header(None)):
     device = _require_mobile_device(authorization)
+    control = _fleet_snapshot(device)
     return {
-        "scanEnabled": True,
+        "scanEnabled": not control["stopRequired"] and control["releaseComplete"],
         "ruleVersion": "1.0.0",
         "pollIntervalSeconds": 5,
         "leaseSeconds": MOBILE_LEASE_SECONDS,
         "device": _mobile_device_payload(device),
+        "fleetControl": control,
     }
+
+
+@app.post("/api/v1/devices/stop-all")
+def mobile_stop_all(request: FleetStopRequest, authorization: Optional[str] = Header(None)):
+    device = _require_mobile_device(authorization)
+    if not fleet_control.can_control(device):
+        raise HTTPException(403, detail="FLEET_CONTROLLER_REQUIRED")
+    request_id = request.requestId.strip()
+    if not request_id or len(request_id) > 100:
+        raise HTTPException(400, detail="INVALID_STOP_REQUEST_ID")
+    try:
+        with fleet_control.dispatch_guard(MOBILE_DB_PATH):
+            conn = mobile_conn()
+            try:
+                cached = fleet_control.begin_stop(conn, request_id, device["id"], _mobile_utc())
+                if cached is not None:
+                    return cached
+                mysql_counts = {}
+                if _mysql_configured():
+                    mysql = _henan_mysql_conn()
+                    try:
+                        mysql_counts = fleet_control.release_mysql_leases(mysql, _henan_mysql_utcnow())
+                    finally:
+                        mysql.close()
+                return fleet_control.finish_stop(conn, request_id, mysql_counts, _mobile_utc())
+            finally:
+                conn.close()
+    except fleet_control.FleetControlError as error:
+        raise HTTPException(409, detail=str(error))
+
+
+@app.post("/api/v1/devices/me/resume")
+def mobile_resume_device(request: FleetGenerationRequest, authorization: Optional[str] = Header(None)):
+    device = _require_mobile_device(authorization)
+    try:
+        with fleet_control.dispatch_guard(MOBILE_DB_PATH):
+            conn = mobile_conn()
+            try:
+                return {"fleetControl": fleet_control.resume_device(conn, device, request.stopGeneration)}
+            finally:
+                conn.close()
+    except fleet_control.FleetControlError as error:
+        raise HTTPException(409, detail=str(error))
+
+
+@app.post("/api/v1/devices/me/stopped")
+def mobile_acknowledge_stop(request: FleetGenerationRequest, authorization: Optional[str] = Header(None)):
+    device = _require_mobile_device(authorization)
+    with fleet_control.dispatch_guard(MOBILE_DB_PATH):
+        conn = mobile_conn()
+        try:
+            try:
+                return {"fleetControl": fleet_control.acknowledge_stop(conn, device, request.stopGeneration, _mobile_utc())}
+            except fleet_control.FleetControlError as error:
+                raise HTTPException(409, detail=str(error))
+        finally:
+            conn.close()
 
 
 @app.post("/api/v1/device-tasks/claim")
@@ -2063,6 +2141,15 @@ def mobile_claim_task(
 ):
     device = _require_mobile_device(authorization)
     _validate_device_code(device, request.deviceCode)
+    # Serialize claims with stop/release across all API worker processes.
+    with fleet_control.dispatch_guard(MOBILE_DB_PATH):
+        control = _fleet_snapshot(device)
+        if control["stopRequired"] or not control["releaseComplete"]:
+            return {"task": None, "reason": "FLEET_STOPPED", "fleetControl": control}
+        return _mobile_claim_allowed(request, device)
+
+
+def _mobile_claim_allowed(request, device):
     mode = request.mode.strip().upper()
     if mode.startswith("MONITOR"):
         scope_key = priority_station_scopes.SCOPE_MODES.get(mode, "")

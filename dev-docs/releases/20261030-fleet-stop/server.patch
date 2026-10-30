@@ -1,0 +1,472 @@
+--- a/api_server.py
++++ b/api_server.py
+@@ -23,6 +23,7 @@
+ import urllib.request
+ import monitor_scheduler
+ import priority_station_scopes
++import fleet_control
+ from site_exploration_bridge import (
+     SiteExplorationBridge,
+     parse_mysql_database_url,
+@@ -1056,6 +1057,14 @@
+     parserVersion: str = ""
+     targetAppVersion: str = ""
+     capabilities: dict = {}
++
++
++class FleetStopRequest(BaseModel):
++    requestId: str
++
++
++class FleetGenerationRequest(BaseModel):
++    stopGeneration: int
+ 
+ 
+ class MobileClaimRequest(BaseModel):
+@@ -1256,6 +1265,8 @@
+         "ON station_observation(received_at)"
+     )
+     conn.commit()
++    fleet_control.init_schema(conn)
++    conn.commit()
+     conn.close()
+ 
+ 
+@@ -2044,16 +2055,83 @@
+     return {"device": _mobile_device_payload(row)}
+ 
+ 
++def _fleet_snapshot(device):
++    conn = mobile_conn()
++    try:
++        return fleet_control.snapshot(conn, device)
++    finally:
++        conn.close()
++
++
+ @app.get("/api/v1/devices/me/config")
+ def mobile_config(authorization: Optional[str] = Header(None)):
+     device = _require_mobile_device(authorization)
++    control = _fleet_snapshot(device)
+     return {
+-        "scanEnabled": True,
++        "scanEnabled": not control["stopRequired"] and control["releaseComplete"],
+         "ruleVersion": "1.0.0",
+         "pollIntervalSeconds": 5,
+         "leaseSeconds": MOBILE_LEASE_SECONDS,
+         "device": _mobile_device_payload(device),
++        "fleetControl": control,
+     }
++
++
++@app.post("/api/v1/devices/stop-all")
++def mobile_stop_all(request: FleetStopRequest, authorization: Optional[str] = Header(None)):
++    device = _require_mobile_device(authorization)
++    if not fleet_control.can_control(device):
++        raise HTTPException(403, detail="FLEET_CONTROLLER_REQUIRED")
++    request_id = request.requestId.strip()
++    if not request_id or len(request_id) > 100:
++        raise HTTPException(400, detail="INVALID_STOP_REQUEST_ID")
++    try:
++        with fleet_control.dispatch_guard(MOBILE_DB_PATH):
++            conn = mobile_conn()
++            try:
++                cached = fleet_control.begin_stop(conn, request_id, device["id"], _mobile_utc())
++                if cached is not None:
++                    return cached
++                mysql_counts = {}
++                if _mysql_configured():
++                    mysql = _henan_mysql_conn()
++                    try:
++                        mysql_counts = fleet_control.release_mysql_leases(mysql, _henan_mysql_utcnow())
++                    finally:
++                        mysql.close()
++                return fleet_control.finish_stop(conn, request_id, mysql_counts, _mobile_utc())
++            finally:
++                conn.close()
++    except fleet_control.FleetControlError as error:
++        raise HTTPException(409, detail=str(error))
++
++
++@app.post("/api/v1/devices/me/resume")
++def mobile_resume_device(request: FleetGenerationRequest, authorization: Optional[str] = Header(None)):
++    device = _require_mobile_device(authorization)
++    try:
++        with fleet_control.dispatch_guard(MOBILE_DB_PATH):
++            conn = mobile_conn()
++            try:
++                return {"fleetControl": fleet_control.resume_device(conn, device, request.stopGeneration)}
++            finally:
++                conn.close()
++    except fleet_control.FleetControlError as error:
++        raise HTTPException(409, detail=str(error))
++
++
++@app.post("/api/v1/devices/me/stopped")
++def mobile_acknowledge_stop(request: FleetGenerationRequest, authorization: Optional[str] = Header(None)):
++    device = _require_mobile_device(authorization)
++    with fleet_control.dispatch_guard(MOBILE_DB_PATH):
++        conn = mobile_conn()
++        try:
++            try:
++                return {"fleetControl": fleet_control.acknowledge_stop(conn, device, request.stopGeneration, _mobile_utc())}
++            except fleet_control.FleetControlError as error:
++                raise HTTPException(409, detail=str(error))
++        finally:
++            conn.close()
+ 
+ 
+ @app.post("/api/v1/device-tasks/claim")
+@@ -2063,6 +2141,15 @@
+ ):
+     device = _require_mobile_device(authorization)
+     _validate_device_code(device, request.deviceCode)
++    # Serialize claims with stop/release across all API worker processes.
++    with fleet_control.dispatch_guard(MOBILE_DB_PATH):
++        control = _fleet_snapshot(device)
++        if control["stopRequired"] or not control["releaseComplete"]:
++            return {"task": None, "reason": "FLEET_STOPPED", "fleetControl": control}
++        return _mobile_claim_allowed(request, device)
++
++
++def _mobile_claim_allowed(request, device):
+     mode = request.mode.strip().upper()
+     if mode.startswith("MONITOR"):
+         scope_key = priority_station_scopes.SCOPE_MODES.get(mode, "")
+--- /dev/null
++++ b/fleet_control.py
+@@ -0,0 +1,189 @@
++"""Persistent fleet stop commands and dispatch serialization for API workers.
++
++Stopping invalidates every device's permission to claim. Only an explicit
++manual resume for the current generation restores that device's permission.
++"""
++from contextlib import contextmanager
++from datetime import datetime, timezone
++import json
++import os
++import sqlite3
++
++
++class FleetControlError(Exception):
++    pass
++
++
++def init_schema(conn):
++    conn.executescript("""
++        CREATE TABLE IF NOT EXISTS fleet_control (
++            id INTEGER PRIMARY KEY CHECK (id = 1),
++            generation INTEGER NOT NULL DEFAULT 0,
++            request_id TEXT NOT NULL DEFAULT '',
++            requested_by TEXT NOT NULL DEFAULT '',
++            requested_at TEXT NOT NULL DEFAULT '',
++            release_complete INTEGER NOT NULL DEFAULT 1,
++            released_tasks TEXT NOT NULL DEFAULT '{}'
++        );
++        INSERT OR IGNORE INTO fleet_control(id) VALUES(1);
++        CREATE TABLE IF NOT EXISTS fleet_device_control (
++            device_id TEXT PRIMARY KEY,
++            allowed_generation INTEGER NOT NULL DEFAULT 0,
++            stopped_generation INTEGER NOT NULL DEFAULT 0
++        );
++        CREATE TABLE IF NOT EXISTS fleet_stop_request (
++            request_id TEXT PRIMARY KEY,
++            generation INTEGER NOT NULL,
++            response TEXT NOT NULL DEFAULT ''
++        );
++    """)
++
++
++@contextmanager
++def dispatch_guard(mobile_db_path):
++    # A separate file avoids deadlocking the normal mobile DB connections.
++    # SQLite locking covers every uvicorn worker on this deployment host.
++    guard = sqlite3.connect(str(mobile_db_path) + '.dispatch-lock', timeout=30)
++    try:
++        guard.execute('BEGIN IMMEDIATE')
++        yield
++    finally:
++        guard.rollback()
++        guard.close()
++
++
++def can_control(device):
++    codes = {s.strip() for s in os.getenv('MOBILE_FLEET_CONTROLLER_DEVICE_CODES', '').split(',') if s.strip()}
++    if codes:
++        return device['device_code'] in codes
++    # Default controller is the user's Baidu collector on Redmi K60.
++    return (device['device_code'].startswith('BD-')
++            and device['name'].strip().lower() in {'23013rk75c', 'redmi k60', 'k60'})
++
++
++def snapshot(conn, device):
++    state = conn.execute('SELECT * FROM fleet_control WHERE id=1').fetchone()
++    row = conn.execute('SELECT * FROM fleet_device_control WHERE device_id=?', (device['id'],)).fetchone()
++    allowed = row['allowed_generation'] if row else 0
++    stopped = row['stopped_generation'] if row else 0
++    return {
++        'supported': True,
++        'stopGeneration': state['generation'],
++        'stopRequired': allowed < state['generation'],
++        'stoppedGeneration': stopped,
++        'releaseComplete': bool(state['release_complete']),
++        'requestedAt': state['requested_at'],
++        'canStopAll': can_control(device),
++    }
++
++
++def begin_stop(conn, request_id, device_id, now):
++    """Called with dispatch_guard held. The durable barrier precedes release."""
++    existing = conn.execute('SELECT * FROM fleet_stop_request WHERE request_id=?', (request_id,)).fetchone()
++    if existing:
++        if existing['response']:
++            return json.loads(existing['response'])
++        state = conn.execute('SELECT * FROM fleet_control WHERE id=1').fetchone()
++        if state['request_id'] != request_id:
++            raise FleetControlError('STOP_REQUEST_SUPERSEDED')
++        return None
++    state = conn.execute('SELECT * FROM fleet_control WHERE id=1').fetchone()
++    if not state['release_complete']:
++        # Retry a partially completed stop rather than abandon its generation.
++        raise FleetControlError('STOP_RELEASE_INCOMPLETE_RETRY_PREVIOUS_REQUEST')
++    generation = state['generation'] + 1
++    with conn:
++        conn.execute("UPDATE fleet_control SET generation=?, request_id=?, requested_by=?, requested_at=?, release_complete=0, released_tasks='{}' WHERE id=1",
++                     (generation, request_id, device_id, now))
++        conn.execute('INSERT INTO fleet_stop_request(request_id,generation) VALUES(?,?)', (request_id,generation))
++    return None
++
++
++def release_mysql_leases(conn, now):
++    """Return active tasks to their queue without consuming a retry.
++
++    Table existence is checked for installations using only one queue type.
++    Existing observations/results and terminal tasks are untouched.
++    """
++    counts = {}
++    tables = ('station_monitor_task', 'henan_heavy_truck_charging_station_task')
++    try:
++        with conn.cursor() as cursor:
++            for table in tables:
++                cursor.execute('SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=%s', (table,))
++                if not cursor.fetchone():
++                    counts[table] = 0
++                    continue
++                # Recovery tasks must remain on their FAILED recovery queue.
++                if table == 'henan_heavy_truck_charging_station_task':
++                    cursor.execute(
++                        "UPDATE " + table + " SET status=CASE WHEN recovery_attempt>0 THEN 'FAILED' ELSE 'PENDING' END, "
++                        "attempt=CASE WHEN recovery_attempt=0 THEN GREATEST(attempt-1,0) ELSE attempt END, "
++                        "recovery_attempt=GREATEST(recovery_attempt-1,0), "
++                        "lease_device_id='',lease_token='',lease_expires_at=NULL,started_at=NULL,finished_at=NULL, "
++                        "available_at=%s,updated_at=%s,last_error='FLEET_STOP_RELEASED' "
++                        "WHERE status IN ('LEASED','RUNNING')", (now,now))
++                else:
++                    cursor.execute(
++                        "UPDATE " + table + " SET status='PENDING',attempt=GREATEST(attempt-1,0), "
++                        "lease_device_id='',lease_token='',lease_expires_at=NULL,started_at=NULL,finished_at=NULL, "
++                        "available_at=%s,updated_at=%s,last_error='FLEET_STOP_RELEASED' "
++                        "WHERE status IN ('LEASED','RUNNING')", (now,now))
++                counts[table] = cursor.rowcount
++        conn.commit()
++        return counts
++    except Exception:
++        conn.rollback()
++        raise
++
++
++def finish_stop(conn, request_id, mysql_counts, now):
++    state = conn.execute('SELECT * FROM fleet_control WHERE id=1').fetchone()
++    if state['request_id'] != request_id:
++        raise FleetControlError('STOP_REQUEST_SUPERSEDED')
++    # Persist the MySQL release receipt so retries after a crash do not lose it.
++    previous_counts = json.loads(state['released_tasks'] or '{}')
++    counts = {key: previous_counts.get(key,0) + value for key,value in mysql_counts.items()}
++    with conn:
++        conn.execute('UPDATE fleet_control SET released_tasks=? WHERE id=1', (json.dumps(counts),))
++        result = conn.execute(
++            "UPDATE scan_task SET status=CASE WHEN recovery_attempt>0 THEN 'FAILED' ELSE 'PENDING' END, "
++            "attempt=CASE WHEN recovery_attempt=0 THEN MAX(attempt-1,0) ELSE attempt END, "
++            "recovery_attempt=MAX(recovery_attempt-1,0),assigned_device_id=NULL,lease_token=NULL, "
++            "lease_expires_at=NULL,started_at=NULL,finished_at=NULL,available_at=?,updated_at=?, "
++            "last_error='FLEET_STOP_RELEASED' WHERE status IN ('LEASED','RUNNING')", (now,now))
++        counts['sqliteTasks'] = result.rowcount
++        conn.execute("UPDATE collector_device SET current_task_id=NULL,status='STOPPING',updated_at=?", (now,))
++        device_count = conn.execute('SELECT COUNT(*) FROM collector_device').fetchone()[0]
++        response = {'status':'STOP_REQUESTED','requestId':request_id,'stopGeneration':state['generation'],
++                    'deviceCount':device_count,'releasedTasks':counts,'releasedTaskCount':sum(counts.values())}
++        conn.execute('UPDATE fleet_control SET release_complete=1,released_tasks=? WHERE id=1', (json.dumps(counts),))
++        conn.execute('UPDATE fleet_stop_request SET response=? WHERE request_id=?', (json.dumps(response),request_id))
++    return response
++
++
++def resume_device(conn, device, generation):
++    control = snapshot(conn,device)
++    if generation != control['stopGeneration']:
++        raise FleetControlError('NEW_STOP_COMMAND_RECEIVED')
++    if not control['releaseComplete']:
++        raise FleetControlError('STOP_RELEASE_IN_PROGRESS')
++    with conn:
++        conn.execute('INSERT INTO fleet_device_control(device_id,allowed_generation) VALUES(?,?) '
++                     'ON CONFLICT(device_id) DO UPDATE SET allowed_generation=excluded.allowed_generation',
++                     (device['id'],generation))
++    return snapshot(conn,device)
++
++
++def acknowledge_stop(conn, device, generation, now):
++    control = snapshot(conn,device)
++    if generation != control['stopGeneration']:
++        raise FleetControlError('NEW_STOP_COMMAND_RECEIVED')
++    with conn:
++        conn.execute('INSERT INTO fleet_device_control(device_id,stopped_generation) VALUES(?,?) '
++                     'ON CONFLICT(device_id) DO UPDATE SET stopped_generation=MAX(stopped_generation,excluded.stopped_generation)',
++                     (device['id'],generation))
++        # An old acknowledgment must not undo an explicit manual resume.
++        if control['stopRequired']:
++            conn.execute("UPDATE collector_device SET status='STOPPED',current_task_id=NULL,updated_at=? WHERE id=?", (now,device['id']))
++    return snapshot(conn,device)
+--- /dev/null
++++ b/test_fleet_control.py
+@@ -0,0 +1,142 @@
++"""Offline tests: stop/release barrier, stale leases, and manual device resume."""
++import os
++import threading
++import time
++import unittest
++from concurrent.futures import ThreadPoolExecutor
++from unittest.mock import patch
++
++from fastapi import HTTPException
++import api_server
++import fleet_control
++from test_mobile_dispatch import MobileDispatchTests
++
++
++class FleetStopTests(unittest.TestCase):
++    register = MobileDispatchTests.register
++    add_tasks = MobileDispatchTests.add_tasks
++    claim = MobileDispatchTests.claim
++    complete = MobileDispatchTests.complete
++
++    def setUp(self):
++        MobileDispatchTests.setUp(self)
++        self.controller = patch.dict(os.environ, {"MOBILE_FLEET_CONTROLLER_DEVICE_CODES": "BD-controller"})
++        self.controller.start()
++        self.mysql = patch.object(api_server, "_mysql_configured", return_value=False)
++        self.mysql.start()
++        self.register("BD-controller")
++        self.register("AM-device")
++
++    def tearDown(self):
++        self.mysql.stop()
++        self.controller.stop()
++        MobileDispatchTests.tearDown(self)
++
++    def auth(self, code):
++        return "Bearer " + self.devices[code]
++
++    def stop(self, request_id="stop-one"):
++        return api_server.mobile_stop_all(api_server.FleetStopRequest(requestId=request_id), self.auth("BD-controller"))
++
++    def control(self, code):
++        return api_server.mobile_config(self.auth(code))["fleetControl"]
++
++    def resume(self, code, generation):
++        return api_server.mobile_resume_device(api_server.FleetGenerationRequest(stopGeneration=generation), self.auth(code))
++
++    def test_stop_releases_active_tasks_and_blocks_both_devices(self):
++        self.add_tasks(3)
++        old = self.claim("AM-device")
++        self.claim("BD-controller")
++        response = self.stop()
++        self.assertEqual(2, response["releasedTaskCount"])
++        self.assertIsNone(self.claim("AM-device"))
++        self.assertIsNone(self.claim("BD-controller"))
++        with self.assertRaises(HTTPException) as failure:
++            self.complete("AM-device", old)
++        self.assertEqual(409, failure.exception.status_code)
++        conn = api_server.mobile_conn()
++        rows = conn.execute("SELECT status, attempt, lease_token FROM scan_task").fetchall()
++        conn.close()
++        self.assertTrue(all(row["status"] == "PENDING" and row["attempt"] == 0 and not row["lease_token"] for row in rows))
++
++    def test_manual_resume_applies_only_to_one_device_and_survives_restart(self):
++        self.add_tasks(2)
++        generation = self.stop()["stopGeneration"]
++        api_server.init_mobile_db()
++        self.register("AM-device")
++        self.assertTrue(self.control("AM-device")["stopRequired"])
++        self.resume("AM-device", generation)
++        self.assertIsNotNone(self.claim("AM-device"))
++        self.assertIsNone(self.claim("BD-controller"))
++
++    def test_retry_same_request_is_idempotent_even_after_resume(self):
++        response = self.stop()
++        self.resume("AM-device", response["stopGeneration"])
++        self.assertEqual(response, self.stop())
++        self.assertFalse(self.control("AM-device")["stopRequired"])
++
++    def test_old_resume_and_ack_cannot_override_a_new_stop(self):
++        generation = self.stop()["stopGeneration"]
++        current = self.stop("stop-two")["stopGeneration"]
++        self.assertGreater(current, generation)
++        with self.assertRaises(HTTPException):
++            self.resume("AM-device", generation)
++        with self.assertRaises(HTTPException):
++            api_server.mobile_acknowledge_stop(api_server.FleetGenerationRequest(stopGeneration=generation), self.auth("AM-device"))
++        self.assertTrue(self.control("AM-device")["stopRequired"])
++        self.resume("AM-device", current)
++        api_server.mobile_acknowledge_stop(api_server.FleetGenerationRequest(stopGeneration=current), self.auth("AM-device"))
++        self.assertFalse(self.control("AM-device")["stopRequired"])
++
++    def test_release_failure_keeps_claims_blocked_until_same_request_retries(self):
++        self.add_tasks(1)
++        self.claim("AM-device")
++        conn = api_server.mobile_conn()
++        fleet_control.begin_stop(conn, "stop-one", "test", api_server._mobile_utc())
++        conn.close()
++        self.assertFalse(self.control("AM-device")["releaseComplete"])
++        self.assertIsNone(self.claim("AM-device"))
++        with self.assertRaises(HTTPException):
++            self.resume("AM-device", self.control("AM-device")["stopGeneration"])
++        self.assertEqual(1, self.stop()["releasedTaskCount"])
++        self.assertTrue(self.control("AM-device")["releaseComplete"])
++
++    def test_refunds_recovery_attempt_and_preserves_completed_results(self):
++        self.add_tasks(3)
++        conn = api_server.mobile_conn()
++        with conn:
++            conn.execute("UPDATE scan_task SET status='RUNNING',attempt=3,recovery_attempt=2,lease_token='old' WHERE id='task-000'")
++            conn.execute("UPDATE scan_task SET status='COMPLETED',attempt=1,result_summary='saved' WHERE id='task-001'")
++            conn.execute("UPDATE scan_task SET status='LEASED',attempt=1 WHERE id='task-002'")
++        conn.close()
++        self.stop()
++        conn = api_server.mobile_conn()
++        rows = {row['id']:dict(row) for row in conn.execute("SELECT * FROM scan_task")}
++        conn.close()
++        self.assertEqual(('FAILED',3,1), tuple(rows['task-000'][key] for key in ('status','attempt','recovery_attempt')))
++        self.assertEqual('saved', rows['task-001']['result_summary'])
++        self.assertEqual('COMPLETED', rows['task-001']['status'])
++        self.assertEqual(('PENDING',0), tuple(rows['task-002'][key] for key in ('status','attempt')))
++
++    def test_only_controller_can_stop_all(self):
++        with self.assertRaises(HTTPException) as failure:
++            api_server.mobile_stop_all(api_server.FleetStopRequest(requestId="denied"), self.auth("AM-device"))
++        self.assertEqual(403, failure.exception.status_code)
++        self.assertEqual(0, self.control("AM-device")["stopGeneration"])
++
++    def test_dispatch_guard_serializes_independent_connections(self):
++        entered = threading.Event()
++        def wait_for_guard():
++            with fleet_control.dispatch_guard(api_server.MOBILE_DB_PATH):
++                entered.set()
++        with ThreadPoolExecutor(max_workers=1) as executor:
++            with fleet_control.dispatch_guard(api_server.MOBILE_DB_PATH):
++                pending = executor.submit(wait_for_guard)
++                self.assertFalse(entered.wait(0.15))
++            pending.result(timeout=3)
++        self.assertTrue(entered.is_set())
++
++
++if __name__ == '__main__':
++    unittest.main()

@@ -9,7 +9,7 @@ SCOPE_MODES = {
 }
 EXPECTED_SCOPES = {
     "BAIDU_MIN240_499": ("BAIDU", "DETAIL", 499),
-    "AMAP_MIN240_647": ("AMAP", "LIST", 647),
+    "AMAP_MIN240_647": ("AMAP", "LIST", 644),
 }
 
 

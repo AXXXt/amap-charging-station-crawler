@@ -45,7 +45,8 @@ DEFAULT_TARGET_ROUNDS = _env_int("MONITOR_TARGET_ROUNDS", 0 if FULL_LIBRARY_MODE
 # interval=0 表示"上一轮跑完立即开始下一轮"。
 DEFAULT_INTERVAL_MINUTES = _env_int("MONITOR_INTERVAL_MINUTES", 0 if FULL_LIBRARY_MODE else 60, allow_zero=True)
 LEASE_SECONDS = 900
-MAX_ATTEMPTS = 3
+# First attempt plus at most one retry per station and round.
+MAX_ATTEMPTS = 2
 
 
 class MonitorTaskError(Exception):
@@ -171,7 +172,7 @@ def init_tables(db_config):
             type VARCHAR(32) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'HENAN_POI_DETAIL',
             status VARCHAR(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'PENDING',
             attempt SMALLINT UNSIGNED NOT NULL DEFAULT 0,
-            max_attempts SMALLINT UNSIGNED NOT NULL DEFAULT 3,
+            max_attempts SMALLINT UNSIGNED NOT NULL DEFAULT 2,
             lease_device_id VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
             lease_token VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT '',
             lease_expires_at DATETIME NULL,
@@ -200,9 +201,61 @@ def init_tables(db_config):
             _add_column_if_missing(cursor, "station_monitor_batch", "collection_mode", "VARCHAR(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'DETAIL'")
             _add_column_if_missing(cursor, "station_monitor_batch", "scope_key", "VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT ''")
             _add_column_if_missing(cursor, "station_monitor_task", "collection_mode", "VARCHAR(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'DETAIL'")
+            _apply_retry_limit(cursor, _now())
         conn.commit()
     finally:
         conn.close()
+
+
+def _apply_retry_limit(cursor, now, batch_ids=None):
+    """Cap unfinished legacy tasks without resetting attempts or interrupting leases."""
+    batch_filter = ""
+    params = []
+    if batch_ids is not None:
+        if not batch_ids:
+            return {"updated": 0, "failed": 0}
+        batch_filter = " AND id IN (" + ",".join(["%s"] * len(batch_ids)) + ")"
+        params.extend(batch_ids)
+    # Read batch metadata without locking it: only affected task rows need locks.
+    cursor.execute(
+        "SELECT id, current_round FROM station_monitor_batch WHERE status='ACTIVE'"
+        + batch_filter + " ORDER BY id",
+        tuple(params),
+    )
+    batches = cursor.fetchall()
+    rows = []
+    for batch in batches:
+        cursor.execute(
+            "SELECT id, round_id, status, attempt, max_attempts FROM station_monitor_task "
+            "WHERE batch_id=%s AND round_no=%s AND status IN ('PENDING','LEASED','RUNNING') "
+            "AND (max_attempts>%s OR (status='PENDING' AND attempt>=max_attempts)) "
+            "ORDER BY id FOR UPDATE",
+            (batch["id"], batch["current_round"], MAX_ATTEMPTS),
+        )
+        rows.extend(cursor.fetchall())
+    failed_by_round = {}
+    for row in rows:
+        limit = min(int(row["max_attempts"]), MAX_ATTEMPTS)
+        exhausted = row["status"] == "PENDING" and int(row["attempt"]) >= limit
+        if exhausted:
+            cursor.execute(
+                "UPDATE station_monitor_task SET max_attempts=%s, status='FAILED', "
+                "finished_at=%s, updated_at=%s WHERE id=%s",
+                (limit, now, now, row["id"]),
+            )
+            round_id = row["round_id"]
+            failed_by_round[round_id] = failed_by_round.get(round_id, 0) + 1
+        else:
+            cursor.execute(
+                "UPDATE station_monitor_task SET max_attempts=%s, updated_at=%s WHERE id=%s",
+                (limit, now, row["id"]),
+            )
+    for round_id, count in failed_by_round.items():
+        cursor.execute(
+            "UPDATE station_monitor_round SET failed_count=failed_count+%s, updated_at=%s WHERE id=%s",
+            (count, now, round_id),
+        )
+    return {"updated": len(rows), "failed": sum(failed_by_round.values())}
 
 
 def _json_object(value):
@@ -690,11 +743,11 @@ def _start_next_round(db_config, batch_id):
                 "bs.latitude, bs.longitude, bs.sequence_no, 80, "
                 "CASE WHEN b.collection_mode='LIST' THEN 'LIST' ELSE 'DETAIL' END, "
                 "CASE WHEN b.collection_mode='LIST' THEN 'HENAN_POI_LIST' ELSE 'HENAN_POI_DETAIL' END, "
-                "'PENDING', 0, 3, %s, %s, %s "
+                "'PENDING', 0, %s, %s, %s, %s "
                 "FROM station_monitor_batch_station bs "
                 "JOIN station_monitor_batch b ON b.id=bs.batch_id "
                 "WHERE bs.batch_id=%s",
-                (batch_id, next_round, round_id, next_round, next_available_at, now, now, batch_id),
+                (batch_id, next_round, round_id, next_round, MAX_ATTEMPTS, next_available_at, now, now, batch_id),
             )
             cursor.execute(
                 "UPDATE station_monitor_batch SET current_round=%s, started_at=COALESCE(started_at,%s), updated_at=%s WHERE id=%s",
@@ -900,10 +953,10 @@ def complete(db_config, task_id, device_id, lease_token, result_summary):
     if (
         skip_reason == "NO_MATCH"
         and not already_retried
+        and int(row.get("attempt") or 0) < int(row.get("max_attempts") or MAX_ATTEMPTS)
         and _has_historical_data(db_config, row.get("source_key"))
     ):
-        max_attempts = int(row.get("max_attempts") or MAX_ATTEMPTS)
-        retry_attempt = max(max_attempts - 1, 0)
+        retry_attempt = int(row.get("attempt") or 0)
         retry_at = (
             datetime.now(timezone.utc) + timedelta(seconds=10)
         ).strftime("%Y-%m-%d %H:%M:%S")

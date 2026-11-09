@@ -1,11 +1,11 @@
 {
-  "version": "20261104-min240-v2",
-  "description": "固定名单：全站最低枪功率 >=240kW，百度499、高德644；不随后续功率变动自动增删。",
+  "version": "20261109-baidu919-amap224-detail",
+  "description": "正式启用百度919站、高德224站循环采集：原百度510站加经百度验证有效入库409站，高德保留224站；共1143站，沿用原设备入口和scope_key。高德224站改为详情采集，读取电价、逐桩明细、分时电价及服务费。",
   "scopes": {
     "BAIDU_MIN240_499": {
       "collector": "BAIDU",
       "collection_mode": "DETAIL",
-      "count": 499,
+      "count": 919,
       "stations": [
         {
           "source_key": "007456115cf136b26563a9b0a6fa2e3d5f2c06dff08bd778c7cd82811b501da1",
@@ -3998,14 +3998,95 @@
           "task_name": "云快充超级充电站(禹州喜洋洋重卡充电站)",
           "city": "许昌市",
           "district": "禹州市"
-        }
-      ]
-    },
-    "AMAP_MIN240_647": {
-      "collector": "AMAP",
-      "collection_mode": "LIST",
-      "count": 644,
-      "stations": [
+        },
+        {
+          "source_key": "7fccc2f9b8323f5b0ab25086f2ad3e9049741d4e889dab40f5f4be32c8cb68af",
+          "source_station_id": "B0LAJZIITK",
+          "station_name": "星星充电汽车充电站(南湖重卡充电站)",
+          "task_name": "星星充电汽车充电站(南湖重卡充电站)",
+          "city": "驻马店市",
+          "district": "新蔡县"
+        },
+        {
+          "source_key": "593a91ac26f37ef690bd98a12e1698dc969646ed0ce8c569a9a6d1fa22a09c82",
+          "source_station_id": "B0L07P13LQ",
+          "station_name": "新电途汽车充电站(汝州盛发聚鑫重卡快充站)",
+          "task_name": "新电途汽车充电站(汝州盛发聚鑫重卡快充站)",
+          "city": "平顶山市",
+          "district": "汝州市"
+        },
+        {
+          "source_key": "cd515eab48ce61e8c848bbf2f8483814390d87e1031a9343397adc39cc40b093",
+          "source_station_id": "B0L6GCGKXL",
+          "station_name": "小象充电超级充电站(中召)",
+          "task_name": "小象充电超级充电站(中召)",
+          "city": "安阳市",
+          "district": "内黄县"
+        },
+        {
+          "source_key": "73b5eabdf53e258125b8a17665727ad7e8ef3fd5bd1419984d909be45b3f9271",
+          "source_station_id": "B0K2A6QV6V",
+          "station_name": "星星充电汽车充电站【重卡】(河南胜祥新能源汽车充电站一期)",
+          "task_name": "星星充电汽车充电站【重卡】(河南胜祥新能源汽车充电站一期)",
+          "city": "安阳市",
+          "district": "殷都区"
+        },
+        {
+          "source_key": "cfdd0e04a914cf43606a19a78ce25925501bb4a5b6323ec2414cbc1ceae487bd",
+          "source_station_id": "B0L23A51BA",
+          "station_name": "星星充电汽车充电站(浩虹快速充电站)",
+          "task_name": "星星充电汽车充电站(浩虹快速充电站)",
+          "city": "焦作市",
+          "district": "武陟县"
+        },
+        {
+          "source_key": "a0a776cea421a9065e43b081fd2653a0bb119d735f712b76b6036944e75f5bdd",
+          "source_station_id": "B0MA24P9AF",
+          "station_name": "通达云重卡超级充电站(聚腾仓储)",
+          "task_name": "通达云重卡超级充电站(聚腾仓储)",
+          "city": "焦作市",
+          "district": "孟州市"
+        },
+        {
+          "source_key": "9d473c489059adc94d4f6985ec3e5abc4f638e6cf69e5e54a9097fef71547c46",
+          "source_station_id": "B0K6YH1O9K",
+          "station_name": "云快充汽车充电站(国网新能源问十乡)",
+          "task_name": "云快充汽车充电站(国网新能源问十乡)",
+          "city": "漯河市",
+          "district": "源汇区"
+        },
+        {
+          "source_key": "d6271d424b8f7909dd2e2267b88a2a4a0bf94849386636410169f6a53dfd6c49",
+          "source_station_id": "B0MGXAX7O7",
+          "station_name": "云快充充电站(柘城县北环集中式快速充电站)",
+          "task_name": "云快充充电站(柘城县北环集中式快速充电站)",
+          "city": "商丘市",
+          "district": "柘城县"
+        },
+        {
+          "source_key": "c80d75e5179319b3fc0bd89c278e8458af99e74db953e6ce359e594ae4a5b3d2",
+          "source_station_id": "B0L2UHEOEC",
+          "station_name": "星星充电汽车充电站(夏邑县冉庄重卡光伏充电站)",
+          "task_name": "星星充电汽车充电站(夏邑县冉庄重卡光伏充电站)",
+          "city": "商丘市",
+          "district": "夏邑县"
+        },
+        {
+          "source_key": "ff39abd3702ebfcb83353cdead8a82bb3ee47b73fa75f9dbaf481ed1da75575d",
+          "source_station_id": "B0L0LK8AXC",
+          "station_name": "金冠智充汽车充电站(民权县星驰重卡充电站)",
+          "task_name": "金冠智充汽车充电站(民权县星驰重卡充电站)",
+          "city": "商丘市",
+          "district": "民权县"
+        },
+        {
+          "source_key": "627303ef75afca33975cf5cb3bb3a213c412b6d15deb6faf4136bcbc1343900d",
+          "source_station_id": "B0L3U4G2GY",
+          "station_name": "新电途汽车充电站(天裕新能源充电站)",
+          "task_name": "新电途汽车充电站(天裕新能源充电站)",
+          "city": "济源市",
+          "district": "济源市"
+        },
         {
           "source_key": "930749573962e9167c084565e11dbb27777fbc91f394d8fecdc7257a630ea87b",
           "source_station_id": "B0L2AK0C1C",
@@ -4021,14 +4102,6 @@
           "task_name": "特来电汽车充电站(特来电许昌梨园转盘南环路重卡充电站)",
           "city": "许昌市",
           "district": "建安区"
-        },
-        {
-          "source_key": "939132b833bc7231287d4eda9fc9131ffa11d4ddd96747b3184ca1c99b71b6a5",
-          "source_station_id": "B0MG2411UF",
-          "station_name": "通达云重卡超级充电站(通达牧华重卡充电站)",
-          "task_name": "通达云重卡超级充电站(通达牧华重卡充电站)",
-          "city": "郑州市",
-          "district": "新郑市"
         },
         {
           "source_key": "2a386208b358912454d7c54fea479517686a9665262f82f5fe6a6506974a455f",
@@ -4055,14 +4128,6 @@
           "district": "荥阳市"
         },
         {
-          "source_key": "7fee7c98fba2990d7210277fac9b6832f4063dc0ab5554bbe1c88d960baf93d5",
-          "source_station_id": "B0MB37FXJC",
-          "station_name": "通达云汽车充电站(巩义服务站重卡充电站)",
-          "task_name": "通达云汽车充电站(巩义服务站重卡充电站)",
-          "city": "郑州市",
-          "district": "巩义市"
-        },
-        {
           "source_key": "31e0e138ed9829475ec4f5c0cb51f48c1589daf7f0392824c67755665b79ba75",
           "source_station_id": "B0K33R4Z5B",
           "station_name": "云快充充电站(领陆重卡充电站)",
@@ -4087,52 +4152,12 @@
           "district": "新密市"
         },
         {
-          "source_key": "16c5ad107072c800f7069968a546158570e3b135b1f10338b4e6589dd0ffed67",
-          "source_station_id": "B0L6LCBZTF",
-          "station_name": "汽车充电站(氢电重卡超充陇海西站)",
-          "task_name": "汽车充电站(氢电重卡超充陇海西站)",
-          "city": "郑州市",
-          "district": "荥阳市"
-        },
-        {
-          "source_key": "22f06f770065218462d041d3887fe010e38b94a39f7e7521abdb2a4c923a80c2",
-          "source_station_id": "B0LDVXAIQU",
-          "station_name": "云快充汽车充电站(阳光重卡充电站)",
-          "task_name": "云快充汽车充电站(阳光重卡充电站)",
-          "city": "郑州市",
-          "district": "新郑市"
-        },
-        {
-          "source_key": "529df8c6e410ee85462c7b5fbcc510c3257bccc0a42bf31ff4af6965c7f67902",
-          "source_station_id": "B0MAO5JAQD",
-          "station_name": "云快充超级充电站(十三大街陆宏重卡充电站)",
-          "task_name": "云快充超级充电站(十三大街陆宏重卡充电站)",
-          "city": "开封市",
-          "district": "龙亭区"
-        },
-        {
           "source_key": "44ad8014afb281c1e2e85dbf0f3f266f2eaaf41450ef370dfff0e865548503ce",
           "source_station_id": "B0MBH4HFQC",
           "station_name": "云快充超级充电站(陈留雷泽重卡充电站)",
           "task_name": "云快充超级充电站(陈留雷泽重卡充电站)",
           "city": "开封市",
           "district": "祥符区"
-        },
-        {
-          "source_key": "c8896dbf816d62e2250c5893e7396d397e6a0fc8d856992c8567fd01aa26dd60",
-          "source_station_id": "B0K191NEHA",
-          "station_name": "蔚景云超级充电站(高村·氢电重卡超充站)",
-          "task_name": "蔚景云超级充电站(高村·氢电重卡超充站)",
-          "city": "郑州市",
-          "district": "荥阳市"
-        },
-        {
-          "source_key": "9b30034d6369e82b56fd44ee4ac4eb7b59c47510e537521713ad5588318f124e",
-          "source_station_id": "B0K6NKXKRM",
-          "station_name": "汽车充电站(汇能宏基王朝充电站)",
-          "task_name": "汽车充电站(汇能宏基王朝充电站)",
-          "city": "郑州市",
-          "district": "新郑市"
         },
         {
           "source_key": "cddbf94551fd708a1766246107106af79ecb937c3729ecdf5f1111a5050c691f",
@@ -4191,14 +4216,6 @@
           "district": "荥阳市"
         },
         {
-          "source_key": "b2779026f864cd8e6ffb0731b87452fd2450281b3e6c7b2810d1737160be1bf5",
-          "source_station_id": "B0MA24Q2IW",
-          "station_name": "云快充超级充电站(十三大街雷泽重卡充电站)",
-          "task_name": "云快充超级充电站(十三大街雷泽重卡充电站)",
-          "city": "开封市",
-          "district": "龙亭区"
-        },
-        {
           "source_key": "99a59e6437a7e91fe4840f9f446b074bc53ad29654b60fe50ca16f92a4cacf46",
           "source_station_id": "B0L1TX5M8S",
           "station_name": "新电途汽车充电站(泓光重卡充电站)",
@@ -4255,14 +4272,6 @@
           "district": "巩义市"
         },
         {
-          "source_key": "034b1d43200da87ba3baf6c82b73da38eb6c95305724dac469c065ab2bb56c45",
-          "source_station_id": "B0MBA68F1V",
-          "station_name": "金玉锋充电汽车充电站(金玉锋重卡充电站)",
-          "task_name": "金玉锋充电汽车充电站(金玉锋重卡充电站)",
-          "city": "驻马店市",
-          "district": "遂平县"
-        },
-        {
           "source_key": "acda62b8b05bb52ec4e2771dc6771ff5820e3d77ee175666b6a37d6ad9d99853",
           "source_station_id": "B0MGD5QRHI",
           "station_name": "惠利充超级充电站(速航重卡充电站)",
@@ -4279,14 +4288,6 @@
           "district": "项城市"
         },
         {
-          "source_key": "40feadba9bf34f33406df7c2fdd04d828e120ff05956efa9e5f9be42cb1cc4c6",
-          "source_station_id": "B0LGRLC2RG",
-          "station_name": "通达交通超级充电站(通达老庙重卡充电站)",
-          "task_name": "通达交通超级充电站(通达老庙重卡充电站)",
-          "city": "安阳市",
-          "district": "滑县"
-        },
-        {
           "source_key": "06d7d855fc571fad172da6cc4c817a51e53204e36bf7f308ec962dd23bd6b46d",
           "source_station_id": "B0MGX4WYNE",
           "station_name": "云快充充电站(芒山正兴重卡汽车超级充电站)",
@@ -4301,30 +4302,6 @@
           "task_name": "星星充电汽车充电站(超亮重卡超级充电站)",
           "city": "许昌市",
           "district": "长葛市"
-        },
-        {
-          "source_key": "7fccc2f9b8323f5b0ab25086f2ad3e9049741d4e889dab40f5f4be32c8cb68af",
-          "source_station_id": "B0LAJZIITK",
-          "station_name": "星星充电汽车充电站(南湖重卡充电站)",
-          "task_name": "星星充电汽车充电站(南湖重卡充电站)",
-          "city": "驻马店市",
-          "district": "新蔡县"
-        },
-        {
-          "source_key": "b1a7389bcfec5ad6ed4dd0bbbea937ac7abe11de7959984fdfbe313e82b44287",
-          "source_station_id": "B0FFKNIVW2",
-          "station_name": "国顺重卡充电站(启充云超级充电站)",
-          "task_name": "国顺重卡充电站(启充云超级充电站)",
-          "city": "开封市",
-          "district": "鼓楼区"
-        },
-        {
-          "source_key": "480cf389fd75bbe9fa504c58a057eab9260912e0cb0dbcb0256374b7c47aac21",
-          "source_station_id": "B0L0P4Z4NR",
-          "station_name": "云快充超级充电站(五路来财重卡充电站)",
-          "task_name": "云快充超级充电站(五路来财重卡充电站)",
-          "city": "安阳市",
-          "district": "殷都区"
         },
         {
           "source_key": "0f1d27aefb031b736495f075e1017d7cd7a5d3de3ced99991094b57989f01308",
@@ -4351,14 +4328,6 @@
           "district": "桐柏县"
         },
         {
-          "source_key": "3c338d1cfc843c58d1ab71d85a770099faf4b0ffd3e1c21f2393e1ec292fb725",
-          "source_station_id": "B0LKMC6V3K",
-          "station_name": "金冠智充汽车充电站(方城大风车重卡充电站)",
-          "task_name": "金冠智充汽车充电站(方城大风车重卡充电站)",
-          "city": "南阳市",
-          "district": "方城县"
-        },
-        {
           "source_key": "6f17180d15a8b26d4d9259d3c9bfd769d3ad9e77655eb5dae0eda13912827b04",
           "source_station_id": "B0LKOHG90J",
           "station_name": "金冠智充汽车充电站(扶沟玖天重卡充电站)",
@@ -4373,14 +4342,6 @@
           "task_name": "新电途汽车充电站(乐飞重卡充电站充立方)",
           "city": "洛阳市",
           "district": "洛龙区"
-        },
-        {
-          "source_key": "e3905825e22904a623f09d653e82da822cad747256334e8003ca34ae1dadf742",
-          "source_station_id": "B0M676V8HW",
-          "station_name": "云快充超级充电站(恒发重卡充电站)",
-          "task_name": "云快充超级充电站(恒发重卡充电站)",
-          "city": "鹤壁市",
-          "district": "淇县"
         },
         {
           "source_key": "e1230e19246bc4a0f844e1bcfb859b36cc986f9175c220ddd9c273852a6ec174",
@@ -4413,14 +4374,6 @@
           "task_name": "特来电汽车充电站(特来电郑州新密锦途重卡充电站)",
           "city": "郑州市",
           "district": "新密市"
-        },
-        {
-          "source_key": "590f7624754b629d5777307cc6d87570ed5a83264bfd014fb50b45699d4f3f86",
-          "source_station_id": "B0LR05MLMN",
-          "station_name": "旭电通汽车充电站(大金店泓焱重卡充电站)",
-          "task_name": "旭电通汽车充电站(盛祥重卡快充站)",
-          "city": "新乡市",
-          "district": "辉县市"
         },
         {
           "source_key": "f87eac001048bcd0d89673ddb19bd61f49b0f519a63fc1c2c4976b39f73ad46f",
@@ -4503,14 +4456,6 @@
           "district": "新郑市"
         },
         {
-          "source_key": "3702332c61136d8e1aeb9c7712bff7340a24895f1201afcc8ff0591462faa824",
-          "source_station_id": "B0MU4P8AM1",
-          "station_name": "特来电汽车充电站(特来电郑州超化豫浙时代广场充电站)",
-          "task_name": "特来电汽车充电站(特来电郑州超化豫浙时代广场充电站)",
-          "city": "郑州市",
-          "district": "新密市"
-        },
-        {
           "source_key": "4ddcbabd01df1f0c85277ebc8e6ba6177d2d1890bb31e3f9c739c7a5f8c1ebad",
           "source_station_id": "B0M6PPLBDG",
           "station_name": "特来电汽车充电站(特来电郑州登封S317航鑫重卡充电站)",
@@ -4525,22 +4470,6 @@
           "task_name": "叮叮超级充电站(方家门重卡充电站)",
           "city": "郑州市",
           "district": "巩义市"
-        },
-        {
-          "source_key": "52510ad1f0ce542a82fc8b365db63428963aba3e70bf7e9712858993bca85e51",
-          "source_station_id": "B0L1DHTD0V",
-          "station_name": "黑豹能源岛重卡超充电站(元宇宙充电站)(暂停营业)",
-          "task_name": "黑豹能源岛重卡超充电站(元宇宙充电站)(暂停营业)",
-          "city": "郑州市",
-          "district": "新郑市"
-        },
-        {
-          "source_key": "766d935b49901e62bbbcc9fe89938d3ef64a55f095307d98530f4cf04dd712e9",
-          "source_station_id": "B0L0V5HRF5",
-          "station_name": "旭电通汽车充电站(大金店泓焱重卡充电站)",
-          "task_name": "旭电通汽车充电站(大金店泓焱重卡充电站)",
-          "city": "郑州市",
-          "district": "登封市"
         },
         {
           "source_key": "3b163b35d0c722870b13d4d9a1b0a1ad27e05a8922084296c49f083b459bf617",
@@ -4583,42 +4512,10 @@
           "district": "新郑市"
         },
         {
-          "source_key": "20cd8f43ff731bea3e35953fa1c781a283a37e651b819126a2cacb43e2558375",
-          "source_station_id": "B0L0L5AAPB",
-          "station_name": "惠利充汽车充电站(云茂新能源重卡400超充站)",
-          "task_name": "惠利充汽车充电站(云茂新能源重卡400超充站)",
-          "city": "郑州市",
-          "district": "荥阳市"
-        },
-        {
-          "source_key": "2005322fe2f90b6c2882c205537808568df77d5e45da24aaa26bafb04f9f4223",
-          "source_station_id": "B0K1L7IW1Q",
-          "station_name": "玖行能源汽车充电站(郑州重链郑登快速路重卡充电站)",
-          "task_name": "玖行能源汽车充电站(郑州重链郑登快速路重卡充电站)",
-          "city": "郑州市",
-          "district": "新密市"
-        },
-        {
-          "source_key": "b5342d62d673eb9dbf97f1dd3063497aaaef3734a11e8d34cc6e18eaeb3fcc22",
-          "source_station_id": "B0LDRRI8Q7",
-          "station_name": "星星充电汽车充电站(通达云新密米村镇重卡站)",
-          "task_name": "星星充电汽车充电站(通达云新密米村镇重卡站)",
-          "city": "郑州市",
-          "district": "新密市"
-        },
-        {
           "source_key": "354cf3a17f23a3d7acd6e6b73455689cbabd51945ec695af56c04f17c243a8d5",
           "source_station_id": "B0L2PPPAGE",
           "station_name": "特来电汽车充电站(特来电郑州登封S237帅宏重卡充电站)",
           "task_name": "特来电汽车充电站(特来电郑州登封S237帅宏重卡充电站)",
-          "city": "郑州市",
-          "district": "登封市"
-        },
-        {
-          "source_key": "2adc784bd829f4a76c0beb8c6ee0833aa8e70ad7d8e8ca605209481ed0c2da6e",
-          "source_station_id": "B0L2MBXM2D",
-          "station_name": "闪象智充汽车充电站(昌昱达重卡超充)",
-          "task_name": "闪象智充汽车充电站(昌昱达重卡超充)",
           "city": "郑州市",
           "district": "登封市"
         },
@@ -4671,14 +4568,6 @@
           "district": "伊川县"
         },
         {
-          "source_key": "f22b30015ecdff604a71770bf08d3356b1408275dac14cb9b8659b7abd8c4b1e",
-          "source_station_id": "B0MA54N2JE",
-          "station_name": "嘉盛智充汽车充电站(宜来电重卡充电站)",
-          "task_name": "嘉盛智充汽车充电站(宜来电重卡充电站)",
-          "city": "洛阳市",
-          "district": "伊川县"
-        },
-        {
           "source_key": "8c6abbd96fce484fcfd6523ca4dd69851f603ecac5244ad9dd1607d7df419d26",
           "source_station_id": "B0JKJPJINQ",
           "station_name": "特来电超级充电站(特来电洛阳伊川银志新能源重卡充电站)",
@@ -4687,36 +4576,12 @@
           "district": "伊川县"
         },
         {
-          "source_key": "84d00bac7258098b8c34f9d155d577e4659054471bdecafbdfc91e39a1f7bb47",
-          "source_station_id": "B0L0B4TM2K",
-          "station_name": "阳光充电汽车充电站(洛阳龙羽重卡超充)",
-          "task_name": "阳光充电汽车充电站(洛阳龙羽重卡超充)",
-          "city": "洛阳市",
-          "district": "宜阳县"
-        },
-        {
           "source_key": "50e2edf779680b288d8a985e9850c856dfdf17ab8db64197ffa8c01716ca8e6e",
           "source_station_id": "B0MGSAMASA",
           "station_name": "中国铁塔汽车充电站(河南洛阳中建西部商砼充电站)",
           "task_name": "中国铁塔汽车充电站(河南洛阳中建西部商砼充电站)",
           "city": "洛阳市",
           "district": "洛龙区"
-        },
-        {
-          "source_key": "244d705925c34300f14876f309a38b764ded66961e95a0c3eb6294614c74d9ec",
-          "source_station_id": "B0L617N4V4",
-          "station_name": "嘉盛智充汽车充电站(汇途重卡站)",
-          "task_name": "嘉盛智充汽车充电站(汇途重卡站)",
-          "city": "洛阳市",
-          "district": "伊川县"
-        },
-        {
-          "source_key": "adeb45758093c0715bcd3d910ca6e2c1198173cfd14ca67f0d36457c6e630cdc",
-          "source_station_id": "B0MDX4Y5A5",
-          "station_name": "云快充超级充电站(任沟重卡充电站)",
-          "task_name": "云快充超级充电站(任沟重卡充电站)",
-          "city": "洛阳市",
-          "district": "伊川县"
         },
         {
           "source_key": "d3b9376875e7f0000cd0856170fdc5b71a6a371793bd2ae8254a483ef615356b",
@@ -4773,30 +4638,6 @@
           "task_name": "星星充电汽车充电站(星星充电-向阳重卡充电站)",
           "city": "洛阳市",
           "district": "伊川县"
-        },
-        {
-          "source_key": "3fb4ffe9624c3b1ff27adf478a45d0aa5f97f2a5b2744eecffed95c39087d35c",
-          "source_station_id": "B0L1NZVWUQ",
-          "station_name": "容新智充汽车充电站(下峪镇崇阳村重卡充电站)",
-          "task_name": "容新智充汽车充电站(下峪镇崇阳村重卡充电站)",
-          "city": "洛阳市",
-          "district": "洛宁县"
-        },
-        {
-          "source_key": "323c183cd3f36e830808eb909ccd953c5bd3657216e04d258f6c20941204dbd2",
-          "source_station_id": "B0LD3AHJMD",
-          "station_name": "科科魔方汽车充电站(隆越重卡充电站)",
-          "task_name": "科科魔方汽车充电站(隆越重卡充电站)",
-          "city": "洛阳市",
-          "district": "孟津区"
-        },
-        {
-          "source_key": "48263bc866cf17b866999694a69c8d97cd3fb02bd77c6ec88a24546655887c01",
-          "source_station_id": "B0LGOKOLX3",
-          "station_name": "蔚景云超级充电站(偃师·氢电重卡超充站)",
-          "task_name": "蔚景云超级充电站(偃师·氢电重卡超充站)",
-          "city": "洛阳市",
-          "district": "偃师区"
         },
         {
           "source_key": "1585371f041e4d84719f400f7b117e99dccb094bec7ad9af15004813d53f99ed",
@@ -4903,14 +4744,6 @@
           "district": "杞县"
         },
         {
-          "source_key": "c18b3b192a0364345f986f84c13f5ab5cf2418d9e702a562f76f733bb3ae09ab",
-          "source_station_id": "B0L1LREQV0",
-          "station_name": "微鹏充电汽车充电站(陶屯重卡充电站)",
-          "task_name": "微鹏充电汽车充电站(陶屯重卡充电站)",
-          "city": "开封市",
-          "district": "杞县"
-        },
-        {
           "source_key": "68517059465b8d11865b3ec60ae8a386414f4db6e1f1527ba58968483ef95891",
           "source_station_id": "B0MA34Y0T8",
           "station_name": "云快充超级充电站(蓝能汪屯充电站)",
@@ -4927,14 +4760,6 @@
           "district": "祥符区"
         },
         {
-          "source_key": "0856d849d2a52e3a37231511e36b8c0ba24af72de45ae374c6fa3c25c0507161",
-          "source_station_id": "B0MGF43SNE",
-          "station_name": "云快充充电站(九大街新能源汽车公用充电站)",
-          "task_name": "云快充充电站(九大街新能源汽车公用充电站)",
-          "city": "开封市",
-          "district": "龙亭区"
-        },
-        {
           "source_key": "edcba84243bb5fb9be813408aa77220763ab0f8617bca02e6f4c61432bb58c42",
           "source_station_id": "B0LRUKCINB",
           "station_name": "金冠智充汽车充电站(开封尉氏永兴通源重卡充电站)",
@@ -4949,38 +4774,6 @@
           "task_name": "星星充电汽车充电站(东基电力-光储充检示范站青年路2号充电站)",
           "city": "开封市",
           "district": "顺河回族区"
-        },
-        {
-          "source_key": "efb92cb5030ecc2b611dc57af1fefa7c8f054d8ddac31f787f10470e418a7b67",
-          "source_station_id": "B0M6BHHEYH",
-          "station_name": "力氪汽车充电站(兰科奇重卡超充)",
-          "task_name": "力氪汽车充电站(兰科奇重卡超充)",
-          "city": "开封市",
-          "district": "祥符区"
-        },
-        {
-          "source_key": "448428017c15f389bbcd7d7a05f5c00fa519a3a786969f280e55cded3e21f7b5",
-          "source_station_id": "B0M614EJ2U",
-          "station_name": "中国石化汽车充电站(中国石化杜良上路口重卡充电站)",
-          "task_name": "中国石化汽车充电站(中国石化杜良上路口重卡充电站)",
-          "city": "开封市",
-          "district": "祥符区"
-        },
-        {
-          "source_key": "70cd39414e4b4e7c601d3f8559d6d7ae412abf14fa89dea48d4c96ed70492d44",
-          "source_station_id": "B0FFL51J8O",
-          "station_name": "兰考服务区电动汽车充电站",
-          "task_name": "兰考服务区电动汽车充电站",
-          "city": "开封市",
-          "district": "兰考县"
-        },
-        {
-          "source_key": "184b458dc09023479ec3d94e09e28ea9ece78e168488523b2b9a6869c4363818",
-          "source_station_id": "B0M6SS2P7P",
-          "station_name": "力氪汽车充电站(怀虚重卡超充)",
-          "task_name": "力氪汽车充电站(怀虚重卡超充)",
-          "city": "开封市",
-          "district": "祥符区"
         },
         {
           "source_key": "22534029295d258a003b481e59998b9bf38b1be7497221c37668bf1004e7ba4d",
@@ -5013,14 +4806,6 @@
           "task_name": "星星充电汽车充电站(东基电力-光储充检示范站新曹路2号充电站)",
           "city": "开封市",
           "district": "顺河回族区"
-        },
-        {
-          "source_key": "197f8168a4a7863432519293efeb19eda2eed3409ad99adddf1479e8602f2a47",
-          "source_station_id": "B0MD7Z5OKH",
-          "station_name": "容新智充汽车充电站(锐锐充电站)",
-          "task_name": "容新智充汽车充电站(锐锐充电站)",
-          "city": "平顶山市",
-          "district": "叶县"
         },
         {
           "source_key": "9d429ed5d7bcc46763eb8c363635a9943fbeea1829fa46d07df2b35066ce9cf7",
@@ -5063,22 +4848,6 @@
           "district": "汝州市"
         },
         {
-          "source_key": "05e759ccd16e8c3fa6e993999a93aa59b925fc8f0c25f189db9b9b04f0b89f12",
-          "source_station_id": "B0LRHA7ZG0",
-          "station_name": "科科魔方汽车充电站(迎祥重卡快充站1站)",
-          "task_name": "科科魔方汽车充电站(迎祥重卡快充站1站)",
-          "city": "平顶山市",
-          "district": "汝州市"
-        },
-        {
-          "source_key": "b06b15a8bffec9619ce1fd515947cd1bfd061e4f4818f1d9e00deaf21885745a",
-          "source_station_id": "B0L1ZUMPFB",
-          "station_name": "锐创汽车充电站(风安重卡充电站)",
-          "task_name": "锐创汽车充电站(风安重卡充电站)",
-          "city": "平顶山市",
-          "district": "宝丰县"
-        },
-        {
           "source_key": "1223ef6040700f98dd216d5ed9e256760a306b86d817f7779edfdc48ec606b72",
           "source_station_id": "B0LUDK5G13",
           "station_name": "金冠智充汽车充电站(德平南门重卡充电站)",
@@ -5095,22 +4864,6 @@
           "district": "宝丰县"
         },
         {
-          "source_key": "593a91ac26f37ef690bd98a12e1698dc969646ed0ce8c569a9a6d1fa22a09c82",
-          "source_station_id": "B0L07P13LQ",
-          "station_name": "新电途汽车充电站(汝州盛发聚鑫重卡快充站)",
-          "task_name": "新电途汽车充电站(汝州盛发聚鑫重卡快充站)",
-          "city": "平顶山市",
-          "district": "汝州市"
-        },
-        {
-          "source_key": "d3c0a10409b5dd965cdf1cd459960b6f365edc9b801beedd72c974a7a6cf4d13",
-          "source_station_id": "B0K0TCXHIB",
-          "station_name": "力氪汽车充电站(河南顺永充电站)",
-          "task_name": "力氪汽车充电站(河南顺永充电站)",
-          "city": "平顶山市",
-          "district": "舞钢市"
-        },
-        {
           "source_key": "7cfd993e038e692bc34ae698e4144d530abf0aa75d0f2b765e21f01a5d729630",
           "source_station_id": "B0MBZ6B7QB",
           "station_name": "叮叮超级充电站(恒鑫重卡充电桩)",
@@ -5119,68 +4872,12 @@
           "district": "宝丰县"
         },
         {
-          "source_key": "4607862ede2f807fb8e51956805bac9b738c62eef7730f075099709434341c28",
-          "source_station_id": "B0LA7ROEUS",
-          "station_name": "新电途汽车充电站(宝丰杨庄新能源重卡站)",
-          "task_name": "新电途汽车充电站(宝丰杨庄新能源重卡站)",
-          "city": "平顶山市",
-          "district": "宝丰县"
-        },
-        {
-          "source_key": "2e3c3a425aab863a1574326fd2fd9f37180fd7d2ba1ed625c96499f8463e029f",
-          "source_station_id": "B0MDKDCU2C",
-          "station_name": "锐创汽车充电站(朝委石油新能源重卡超充站)",
-          "task_name": "锐创汽车充电站(朝委石油新能源重卡超充站)",
-          "city": "平顶山市",
-          "district": "宝丰县"
-        },
-        {
-          "source_key": "88666dba4492e453cfe60cb41760af2182f65e63836d7af42b0e26a37b542c5f",
-          "source_station_id": "B0LRB1P37I",
-          "station_name": "锐创汽车充电站(汝州养田环豫环保重卡充电站)",
-          "task_name": "锐创汽车充电站(汝州养田环豫环保重卡充电站)",
-          "city": "平顶山市",
-          "district": "汝州市"
-        },
-        {
           "source_key": "1d8fbec9a704531683a42dbf34d9f1afc2c0e1697864b692d46cfbb226e0ba32",
           "source_station_id": "B0LDXPCFL4",
           "station_name": "新电途汽车充电站(智力新能源充电站)",
           "task_name": "新电途汽车充电站(智力新能源充电站)",
           "city": "平顶山市",
           "district": "叶县"
-        },
-        {
-          "source_key": "0625732d4f1e076dd3fb65a6adbf9d2984b7cbc6c13b70c518dc1a2b22a03c21",
-          "source_station_id": "B0LKFRUQF2",
-          "station_name": "新电途汽车充电站(瑞昇新能源充电站)",
-          "task_name": "新电途汽车充电站(瑞昇新能源充电站)",
-          "city": "平顶山市",
-          "district": "鲁山县"
-        },
-        {
-          "source_key": "dbf74793e2b4219fb0ba23eb765ea2e5d6780c864b6953cf42383ade45b7fb72",
-          "source_station_id": "B0MG07I42M",
-          "station_name": "驿充电汽车充电站(鲁山县昭平湖重卡充电服务区)",
-          "task_name": "驿充电汽车充电站(鲁山县昭平湖重卡充电服务区)",
-          "city": "",
-          "district": ""
-        },
-        {
-          "source_key": "598612f22a1dcf1102a2eaec5ab9db190660736a30ca3248ea2a02606713248d",
-          "source_station_id": "B0L3MSJN8X",
-          "station_name": "星星充电汽车充电站(星星充电-叶县南360KW超快充电站)",
-          "task_name": "星星充电汽车充电站(星星充电-叶县南360KW超快充电站)",
-          "city": "平顶山市",
-          "district": "叶县"
-        },
-        {
-          "source_key": "5fd8fd6f76932303dfc2b7b58acc7f3b3ec2d006db9a180deee70e0854a4d56b",
-          "source_station_id": "B0M14R1TON",
-          "station_name": "特来电重卡充电站(平顶山平郏路惠锐特来电重卡充电站)",
-          "task_name": "特来电重卡充电站(平顶山平郏路惠锐特来电重卡充电站)",
-          "city": "平顶山市",
-          "district": "新华区"
         },
         {
           "source_key": "33e179b72ac22b267a12ecc0b73576d83792002bfbf8b732f3b6d06df2f3edd7",
@@ -5215,14 +4912,6 @@
           "district": "湛河区"
         },
         {
-          "source_key": "5ed10273936b5604736840c270c0f1d050397f2b9c5df9c171420f1f69932855",
-          "source_station_id": "B0K0TCX20Q",
-          "station_name": "力氪汽车充电站(平顶山永裕达超级)",
-          "task_name": "力氪汽车充电站(平顶山永裕达超级)",
-          "city": "平顶山市",
-          "district": "叶县"
-        },
-        {
           "source_key": "318d4a356f32bba3931fa48606b06ab1b670d8924c562e34302e4e51e01768c9",
           "source_station_id": "B0MRBUB19V",
           "station_name": "特来电汽车充电站(平顶山叶邑镇重卡兆瓦超充站)",
@@ -5239,36 +4928,12 @@
           "district": "卫东区"
         },
         {
-          "source_key": "260b2b0976cff5d71206e62d924eba95524294e72cf9b7f0d7766ee0f4e468c5",
-          "source_station_id": "B0L30AK2H1",
-          "station_name": "科科魔方汽车充电站(金森重卡快充站1)",
-          "task_name": "科科魔方汽车充电站(金森重卡快充站1)",
-          "city": "平顶山市",
-          "district": "郏县"
-        },
-        {
-          "source_key": "ebec7fd6c6080bce67f0cac60c1e0eff176e4df4fc114792b0c9fd8cbe664d62",
-          "source_station_id": "B0M6YDRCZA",
-          "station_name": "力氪汽车充电站(豫金源超级)",
-          "task_name": "力氪汽车充电站(豫金源超级)",
-          "city": "平顶山市",
-          "district": "叶县"
-        },
-        {
           "source_key": "9cf33696cc7b557d4ccca93b0aea5ddfb60e079c304574341130d14e06cb1c75",
           "source_station_id": "B0LKXUOPVM",
           "station_name": "金冠智充汽车充电站(昌昌新能源重卡充电站)",
           "task_name": "金冠智充汽车充电站(昌昌新能源重卡充电站)",
           "city": "平顶山市",
           "district": "宝丰县"
-        },
-        {
-          "source_key": "412da8c0e1d30fa9a6b09da605068cb8987169918175283209faf654910ec1f4",
-          "source_station_id": "B0MAKHO1LN",
-          "station_name": "驿充电汽车充电站(鲁山县昭平湖重卡充电服务区)",
-          "task_name": "鲁山县昭平湖重卡充电服务区",
-          "city": "平顶山市",
-          "district": "鲁山县"
         },
         {
           "source_key": "dbe6c5b5b0e7120577c77e65358471a9464875da5d5c6221817aa4f3f58add37",
@@ -5291,14 +4956,6 @@
           "source_station_id": "B0L2BLLEQK",
           "station_name": "内黄仲群超级充电站(重卡充电站)",
           "task_name": "内黄仲群超级充电站(重卡充电站)",
-          "city": "安阳市",
-          "district": "内黄县"
-        },
-        {
-          "source_key": "9ab0feb026fe0fb491b58068c245552a2d7c880768265758d269c1954f5c5c2a",
-          "source_station_id": "B0LDG49N88",
-          "station_name": "嘉盛智充汽车充电站(慧诚重卡站)",
-          "task_name": "嘉盛智充汽车充电站(慧诚重卡站)",
           "city": "安阳市",
           "district": "内黄县"
         },
@@ -5327,50 +4984,10 @@
           "district": "林州市"
         },
         {
-          "source_key": "c87393a6723d0f9e9448ea4cf301aa1c895f020cc356768803de2ef33659dd3b",
-          "source_station_id": "B0LRL5N26S",
-          "station_name": "通达交通超级充电站(通达老庙重卡充电站)",
-          "task_name": "重卡充电站",
-          "city": "安阳市",
-          "district": "殷都区"
-        },
-        {
           "source_key": "6ae2412c80dd3ea0238705d83152b3715867a6c4c120c3edaa37c892cab6529a",
           "source_station_id": "B0M6Y4QN18",
           "station_name": "云快充超级充电站(昌源电气厂外西北角光伏储能超充站)",
           "task_name": "云快充超级充电站(昌源电气厂外西北角光伏储能超充站)",
-          "city": "安阳市",
-          "district": "安阳县"
-        },
-        {
-          "source_key": "ab3d1d345dca65824a8ef58bc386140d12ecdd8190c64b84df233932af4901c5",
-          "source_station_id": "B0LBPC0E2M",
-          "station_name": "力氪汽车充电站(振鹏新能源(快速充电站)",
-          "task_name": "力氪汽车充电站(振鹏新能源(快速充电站)",
-          "city": "安阳市",
-          "district": "汤阴县"
-        },
-        {
-          "source_key": "3b73f88d30a0108124a7e8d18291fb233081fb025e6aae55bb4abd4a71e956c7",
-          "source_station_id": "B0K2MAUAFN",
-          "station_name": "力氪汽车充电站(安阳亿辉快速充电站)",
-          "task_name": "力氪汽车充电站(安阳亿辉快速充电站)",
-          "city": "安阳市",
-          "district": "安阳县"
-        },
-        {
-          "source_key": "019e05284aeeaee886b51295d2dd760298b567a663a8527ee517bcdbd6989515",
-          "source_station_id": "B0KK7RKAEE",
-          "station_name": "力氪汽车充电站(森虎商砼充电站)",
-          "task_name": "力氪汽车充电站(森虎商砼充电站)",
-          "city": "安阳市",
-          "district": "汤阴县"
-        },
-        {
-          "source_key": "e7aae9843210c151e901d3fbddde466288c847f1786a493e72b27d7ecabefd96",
-          "source_station_id": "B0LD9Z3V6T",
-          "station_name": "云快充超级充电站(邦远充电站)",
-          "task_name": "云快充超级充电站(邦远充电站)",
           "city": "安阳市",
           "district": "安阳县"
         },
@@ -5383,14 +5000,6 @@
           "district": "文峰区"
         },
         {
-          "source_key": "eb589b5693381b12dfd76522833d4b3eb2f3123db697e2eee2b6b1a30bddcb44",
-          "source_station_id": "B0LDD748HM",
-          "station_name": "特来电汽车充电站(安阳彰德路安兴大道欣兴重卡充电站)",
-          "task_name": "特来电汽车充电站(安阳彰德路安兴大道欣兴重卡充电站)",
-          "city": "安阳市",
-          "district": "文峰区"
-        },
-        {
           "source_key": "6dbf3d7f17451bc20fd387ee5ad4b254ed6b3cb7f4c5b46e0ae0bda6ec716f38",
           "source_station_id": "B0LB7LDJY5",
           "station_name": "内黄创能超级充电站(内黄创能充电站)",
@@ -5399,116 +5008,12 @@
           "district": "内黄县"
         },
         {
-          "source_key": "cd515eab48ce61e8c848bbf2f8483814390d87e1031a9343397adc39cc40b093",
-          "source_station_id": "B0L6GCGKXL",
-          "station_name": "小象充电超级充电站(中召)",
-          "task_name": "小象充电超级充电站(中召)",
-          "city": "安阳市",
-          "district": "内黄县"
-        },
-        {
-          "source_key": "5cfc55b27d2f3f55823622065a470abca0a230b664c70ece41155baab3b21473",
-          "source_station_id": "B0L6LCGPV6",
-          "station_name": "力氪汽车充电站(贝优特充电站)",
-          "task_name": "力氪汽车充电站(贝优特充电站)",
-          "city": "安阳市",
-          "district": "殷都区"
-        },
-        {
-          "source_key": "44e52958fa623e7bd7e12a729d78cd91f82e70fc766ebc25660f95edbb6f3055",
-          "source_station_id": "B0KG5B4S60",
-          "station_name": "中国石化汽车充电站(中国石化第二十九充电站)",
-          "task_name": "中国石化汽车充电站(中国石化第二十九充电站)",
-          "city": "安阳市",
-          "district": "殷都区"
-        },
-        {
-          "source_key": "2f7deeda4bb4da0f3384d8a5ca86a1d325a0fa344c19ed99337c0509b1e6cf19",
-          "source_station_id": "B0LGFPJE1E",
-          "station_name": "京能汽车充电站(京能安阳瑞盛昌充电站殷都区)",
-          "task_name": "京能汽车充电站(京能安阳瑞盛昌充电站殷都区)",
-          "city": "安阳市",
-          "district": "安阳县"
-        },
-        {
-          "source_key": "dfe39d137579a2ef86d59f6607f27d352c94245fcb5cbe95327cdc37176005e4",
-          "source_station_id": "B0LGFPLT68",
-          "station_name": "京能汽车充电站(京能瑞盛昌李家岗充电站)",
-          "task_name": "京能汽车充电站(京能瑞盛昌李家岗充电站)",
-          "city": "安阳市",
-          "district": "安阳县"
-        },
-        {
-          "source_key": "73b5eabdf53e258125b8a17665727ad7e8ef3fd5bd1419984d909be45b3f9271",
-          "source_station_id": "B0K2A6QV6V",
-          "station_name": "星星充电汽车充电站【重卡】(河南胜祥新能源汽车充电站一期)",
-          "task_name": "星星充电汽车充电站【重卡】(河南胜祥新能源汽车充电站一期)",
-          "city": "安阳市",
-          "district": "殷都区"
-        },
-        {
-          "source_key": "16114edad7f5cbb8310f7c08b830cccf162793920acdc1c00bdad142a214c087",
-          "source_station_id": "B0L36LAYCW",
-          "station_name": "通达新能源超级充电站(滑县通达道口西环路重卡充电站)",
-          "task_name": "通达新能源超级充电站(滑县通达道口西环路重卡充电站)",
-          "city": "安阳市",
-          "district": "滑县"
-        },
-        {
-          "source_key": "d94379f6efb98500c91d8995d0738783ff6f337f5b47b54916bd9b2a0d1cc38a",
-          "source_station_id": "B0LUO7KHW6",
-          "station_name": "特来电鹤壁淇滨区大河涧乡星晨充电站",
-          "task_name": "特来电鹤壁淇滨区大河涧乡星晨充电站",
-          "city": "鹤壁市",
-          "district": "淇滨区"
-        },
-        {
           "source_key": "75fba7691ed05580bacac4ed3637a069e2824c639f3eabf49854b8b0f8f4d77d",
           "source_station_id": "B0K0JD47EJ",
           "station_name": "腾付充汽车充电站(安顺重卡快充站)",
           "task_name": "腾付充汽车充电站(安顺重卡快充站)",
           "city": "鹤壁市",
           "district": "浚县"
-        },
-        {
-          "source_key": "cfce7254e74deb652a46e6828d8c80a9e0fe2c65ba2dca5f4fc9b9f22c54c077",
-          "source_station_id": "B0K0C4C08I",
-          "station_name": "嘉盛智充汽车充电站(信安重卡充电站)",
-          "task_name": "嘉盛智充汽车充电站(信安重卡充电站)",
-          "city": "鹤壁市",
-          "district": "鹤山区"
-        },
-        {
-          "source_key": "59f69b39b87849be7f2f6a3800058194851131d10416c4ab3d82edc09ab45be8",
-          "source_station_id": "B0LDPPTBOQ",
-          "station_name": "京能汽车充电站(续发重卡庙口站)",
-          "task_name": "京能汽车充电站(续发重卡庙口站)",
-          "city": "鹤壁市",
-          "district": "淇县"
-        },
-        {
-          "source_key": "acfebaf5a299fb5890944833dbd5d2173b7b43571ee57bcd8d133f7c35765e8e",
-          "source_station_id": "B0LRJ4GMGY",
-          "station_name": "京能汽车充电站(光能重卡充电站)",
-          "task_name": "京能汽车充电站(光能重卡充电站)",
-          "city": "鹤壁市",
-          "district": "淇县"
-        },
-        {
-          "source_key": "8d437b4cec88f7908e2fd15cb2d8588d0c60b033c3185c1445bd569078b1ebc7",
-          "source_station_id": "B0L6H7HUGL",
-          "station_name": "力氪汽车充电站(天润快速充电站)",
-          "task_name": "力氪汽车充电站(天润快速充电站)",
-          "city": "鹤壁市",
-          "district": "淇滨区"
-        },
-        {
-          "source_key": "9c4ba6bd9eaa57e7ba89451f53c410733fa1ef1cea161def32023488a9ab7658",
-          "source_station_id": "B0LGH7TP6J",
-          "station_name": "力氪汽车充电站(正鑫快速充电站)",
-          "task_name": "力氪汽车充电站(正鑫快速充电站)",
-          "city": "鹤壁市",
-          "district": "淇滨区"
         },
         {
           "source_key": "85812c2b1b5e0a35a8f1a0886693bebfb7b23d3a04e0597e9bce4d254725a270",
@@ -5535,36 +5040,12 @@
           "district": "浚县"
         },
         {
-          "source_key": "8454aa1c3c0bd4989798b81e4ed9f3574fdae32a387415666e6d2b8d1f80199c",
-          "source_station_id": "B0MG76G78N",
-          "station_name": "腾付充汽车充电站(顺源重卡充电站)",
-          "task_name": "腾付充汽车充电站(顺源重卡充电站)",
-          "city": "",
-          "district": ""
-        },
-        {
-          "source_key": "75fcecb92ad4a75df167e64913c0cb4fe9b21f3f0bd3ee6abf24155cb7c382f1",
-          "source_station_id": "B0LU6AMAQN",
-          "station_name": "腾付充汽车充电站(顺源重卡充电站)",
-          "task_name": "腾付充汽车充电站(顺源重卡充电站)",
-          "city": "",
-          "district": ""
-        },
-        {
           "source_key": "dc4c3069d42d882eea371ba54f1ca432bf0933d8cea861a5011b32c94d4ce522",
           "source_station_id": "B0LKL675DM",
           "station_name": "云快充超级充电站(航元超充站)",
           "task_name": "云快充超级充电站(航元超充站)",
           "city": "鹤壁市",
           "district": "山城区"
-        },
-        {
-          "source_key": "b2d2bc9ae9b156511af643dbd1ffb7863e073aab0b45e16985110206a16070fc",
-          "source_station_id": "B0LGVPSF1K",
-          "station_name": "京能汽车充电站(续发重卡淇县107高村站)",
-          "task_name": "京能汽车充电站(续发重卡淇县107高村站)",
-          "city": "鹤壁市",
-          "district": "淇县"
         },
         {
           "source_key": "4ba2300ebe1d563b2368e5bc5a8bac850f6cc3447cfbbd4cf3450d5c4f522099",
@@ -5581,38 +5062,6 @@
           "task_name": "充王重卡汽车充电站(禧宴华庭酒店站)",
           "city": "鹤壁市",
           "district": "浚县"
-        },
-        {
-          "source_key": "4a5909d4ef1e0f6495e61d016413e1c28f6098f0303c9fe480fbdb7a79897f91",
-          "source_station_id": "B0L6U4IY0I",
-          "station_name": "嘉盛智充汽车充电站(辉翰重卡充电站)",
-          "task_name": "嘉盛智充汽车充电站(辉翰重卡充电站)",
-          "city": "鹤壁市",
-          "district": "鹤山区"
-        },
-        {
-          "source_key": "ba3d6dd427b11abd71a4511db1b2a1c8a348161b054741aae8328ba4d8e515a7",
-          "source_station_id": "B0LRTS9E1P",
-          "station_name": "腾付充汽车充电站(中天重卡充电站)",
-          "task_name": "腾付充汽车充电站(中天重卡充电站)",
-          "city": "鹤壁市",
-          "district": "淇县"
-        },
-        {
-          "source_key": "f574be88b943a28f6dc1fe72c90b1494a7921ab8a26dc2937a664d145f1a9d55",
-          "source_station_id": "B0LUXAMRXL",
-          "station_name": "中国铁塔超级充电站(河南鹤壁鹤山充璟重卡充电站)",
-          "task_name": "中国铁塔超级充电站(河南鹤壁鹤山充璟重卡充电站)",
-          "city": "鹤壁市",
-          "district": "鹤山区"
-        },
-        {
-          "source_key": "850618c12c0e7f4b4e5d29559d5d851e8386848a068029de76d7507ed8e8cb15",
-          "source_station_id": "B0LU6AH1F8",
-          "station_name": "腾付充汽车充电站(顺源重卡充电站)",
-          "task_name": "腾付充汽车充电站(顺源重卡充电站)",
-          "city": "鹤壁市",
-          "district": "山城区"
         },
         {
           "source_key": "d80279b3f338a9462020ece6149eb189408774fb005273fd6c3deef5072ba99f",
@@ -5661,14 +5110,6 @@
           "task_name": "星星充电汽车充电站(乾坤充电站)",
           "city": "新乡市",
           "district": "封丘县"
-        },
-        {
-          "source_key": "42dc13078072bd5ac16c8b249bb86d13002e2f8eb5000468992e1cb9f6b750b5",
-          "source_station_id": "B0MUKZXJ6G",
-          "station_name": "容新智充汽车充电站(亿阳充电)",
-          "task_name": "容新智充汽车充电站(亿阳充电)",
-          "city": "新乡市",
-          "district": "辉县市"
         },
         {
           "source_key": "946694c31d1f6b4b88b7297c2b59e359962400a714a5cfe3b3002e85d2548871",
@@ -5727,38 +5168,6 @@
           "district": "凤泉区"
         },
         {
-          "source_key": "3a2b942891f612554965ff716cb9c7ad22248c6f721e050c96630499e0a9167a",
-          "source_station_id": "B0MBPL23PP",
-          "station_name": "惠利充汽车充电站(永利石化重卡充电站)",
-          "task_name": "惠利充汽车充电站(永利石化重卡充电站)",
-          "city": "新乡市",
-          "district": "延津县"
-        },
-        {
-          "source_key": "2ffd7832a182bd196001cdaebec55f2acb00d2901addf13c9ef17b91cb8f65e2",
-          "source_station_id": "B0LAJXXWA8",
-          "station_name": "云快充超级充电站(升辉重卡充电站)",
-          "task_name": "云快充超级充电站(升辉重卡充电站)",
-          "city": "新乡市",
-          "district": "辉县市"
-        },
-        {
-          "source_key": "d1111cdd3196567656b9313367f1fc908545f5f914d72bba9884b90fb86b0c6d",
-          "source_station_id": "B0MD54VJSA",
-          "station_name": "云快充超级充电站(正道重卡站)",
-          "task_name": "云快充超级充电站(正道重卡站)",
-          "city": "新乡市",
-          "district": "封丘县"
-        },
-        {
-          "source_key": "2094ff3eff6b03a55c994b367ffbe5993dd451c6b0e611a55963815f92d77429",
-          "source_station_id": "B0L03ZC7JO",
-          "station_name": "力氪汽车充电站(金鑫兴安重卡)",
-          "task_name": "力氪汽车充电站(金鑫兴安重卡)",
-          "city": "新乡市",
-          "district": "长垣市"
-        },
-        {
           "source_key": "c777ae5866445e4dab8a9e3c9cca6f9ae984ce734359d9c07f2ccbfc273daf0a",
           "source_station_id": "B0MAVC74U6",
           "station_name": "特来电汽车充电站(特来电新乡人为峰混凝土重卡充电站)",
@@ -5815,14 +5224,6 @@
           "district": "新乡县"
         },
         {
-          "source_key": "96e1e0610e00e0a419e37e404c1571324734862b992d2f67648a9e3d8ad22683",
-          "source_station_id": "B0LRK5IVP0",
-          "station_name": "腾付充汽车充电站(河南陆铁港重卡充电站)",
-          "task_name": "腾付充汽车充电站(河南陆铁港重卡充电站)",
-          "city": "新乡市",
-          "district": "红旗区"
-        },
-        {
           "source_key": "2bd89bfb10cc427d6d5ba829ff0785c824e49b0a9691b363e05e8d5c71909876",
           "source_station_id": "B0LD6XC3E9",
           "station_name": "云快充超级充电站(匠德充电华洋大道站)",
@@ -5847,28 +5248,12 @@
           "district": "辉县市"
         },
         {
-          "source_key": "18c39d8d22a9b9eacdc1b5c5faefcc9d1da7d89d49001ecbc93781833ef97e92",
-          "source_station_id": "B0LDJ5WH4M",
-          "station_name": "星星充电汽车充电站(朱元寨充电站)",
-          "task_name": "星星充电汽车充电站(朱元寨充电站)",
-          "city": "新乡市",
-          "district": "封丘县"
-        },
-        {
           "source_key": "3c1e6a1ba9b756930c710071a8c4491bc3556f6ffc0e4d94e14b9ebf98479c32",
           "source_station_id": "B0L3DR61WA",
           "station_name": "特来电汽车充电站(特来电新乡延津华亿鑫重卡充电站)",
           "task_name": "特来电汽车充电站(特来电新乡延津华亿鑫重卡充电站)",
           "city": "新乡市",
           "district": "延津县"
-        },
-        {
-          "source_key": "4cee8e40e4d32f5554723bd63c506144ca8c8a6693b518310bbc91b6cf13b677",
-          "source_station_id": "B0LKL58ONH",
-          "station_name": "微鹏汽车充电站(河南科顺重卡超充站)",
-          "task_name": "微鹏汽车充电站(河南科顺重卡超充站)",
-          "city": "新乡市",
-          "district": "凤泉区"
         },
         {
           "source_key": "c5e328c10973c3456f15cf284540f936a2bf2785864eb9cd00db9d6224c3070f",
@@ -5885,14 +5270,6 @@
           "task_name": "星星充电汽车充电站(星星充电-常春新能源充电站二期)",
           "city": "新乡市",
           "district": "辉县市"
-        },
-        {
-          "source_key": "e3f0498d71cbc80a5bd86f17e4391af3ab620ae24aeea418ee1731bd87175658",
-          "source_station_id": "B0M6T54JZJ",
-          "station_name": "力氪汽车充电站(中岳重卡综合充电)",
-          "task_name": "力氪汽车充电站(中岳重卡综合充电)",
-          "city": "新乡市",
-          "district": "获嘉县"
         },
         {
           "source_key": "5b24a35b38c482392910087277eeec9014dd4d5833e8057c499da61e1e262a7b",
@@ -5935,60 +5312,12 @@
           "district": "孟州市"
         },
         {
-          "source_key": "a014ae7ff7b6ee4746ccda3c38a6932eec8edc3e8c22428248fdcc7b56745aa3",
-          "source_station_id": "B0L14BZJJ4",
-          "station_name": "云快充超级充电站(207国道温县服务区重卡充电站)",
-          "task_name": "云快充超级充电站(207国道温县服务区重卡充电站)",
-          "city": "",
-          "district": ""
-        },
-        {
-          "source_key": "cd3872a593fcfd26508a2bbf1f4a76eb48da2296fd6c52a799af23d36f5d6b7d",
-          "source_station_id": "B0LBU7BL3O",
-          "station_name": "合小智充电超级充电站(伟铭新能源重卡)",
-          "task_name": "合小智充电超级充电站(伟铭新能源重卡)",
-          "city": "焦作市",
-          "district": "博爱县"
-        },
-        {
           "source_key": "4f4761f5b3dd7b784d57a9bcab91501ed7553843a39d5b62f5a5ab557f47010b",
           "source_station_id": "B0LRNPKTRE",
           "station_name": "新电途汽车充电站(精通超充站)",
           "task_name": "新电途汽车充电站(精通超充站)",
           "city": "焦作市",
           "district": "马村区"
-        },
-        {
-          "source_key": "da44a9db4c7e0d6032c04772cf675819cabb06dff2bad7e4287bf9a8b062cd83",
-          "source_station_id": "B0MAHCM4ZC",
-          "station_name": "力氪汽车充电站(KTV重卡超级)",
-          "task_name": "力氪汽车充电站(KTV重卡超级)",
-          "city": "焦作市",
-          "district": "沁阳市"
-        },
-        {
-          "source_key": "cfdd0e04a914cf43606a19a78ce25925501bb4a5b6323ec2414cbc1ceae487bd",
-          "source_station_id": "B0L23A51BA",
-          "station_name": "星星充电汽车充电站(浩虹快速充电站)",
-          "task_name": "星星充电汽车充电站(浩虹快速充电站)",
-          "city": "焦作市",
-          "district": "武陟县"
-        },
-        {
-          "source_key": "f8ae3e31cc703eddaa92ebdebb3543f9fd761a0dd2c6d828d2530adb91cf4c4b",
-          "source_station_id": "B0L2PMPV8Y",
-          "station_name": "云快充超级充电站(207国道温县服务区重卡充电站)",
-          "task_name": "云快充汽车充电站(207国道温县服务区重卡充电站)",
-          "city": "焦作市",
-          "district": "温县"
-        },
-        {
-          "source_key": "613612fff9db545b5cea615756625d74e09b1cf9ac8263461c1dd5119b0641da",
-          "source_station_id": "B0LAGUAFGN",
-          "station_name": "力氪汽车充电站(沁阳市驰航集中式快速充电站)",
-          "task_name": "力氪汽车充电站(沁阳市驰航集中式快速充电站)",
-          "city": "焦作市",
-          "district": "沁阳市"
         },
         {
           "source_key": "d11b4fb47697402c79426d62f633515fb1bea1d2e6f6900811fcf89d3be32be1",
@@ -6015,14 +5344,6 @@
           "district": "武陟县"
         },
         {
-          "source_key": "ce0793d1bd87d2bf79132e56d5b0b3c100e2dd9501402a3cdd4de757b0eb4925",
-          "source_station_id": "B0L1B5YGVQ",
-          "station_name": "力氪汽车充电站(广源)",
-          "task_name": "力氪汽车充电站(广源)",
-          "city": "焦作市",
-          "district": "博爱县"
-        },
-        {
           "source_key": "06120e299da0a16d5d5ebea7d2eba026c7417a0aadd28db542d58a1ba85f397e",
           "source_station_id": "B0MBKSQDHI",
           "station_name": "新电途充电站(武陟华丰建材充电站)",
@@ -6037,22 +5358,6 @@
           "task_name": "特来电汽车充电站(特来电焦作武陟G327小风筝重卡超充站)",
           "city": "焦作市",
           "district": "武陟县"
-        },
-        {
-          "source_key": "dcc061aed80f750c4f1466b99e641374cbe32d97cff398fa5f4fb7d7e4def083",
-          "source_station_id": "B0LKP4Z06S",
-          "station_name": "京能汽车充电站(京能日昇新能源充电站)",
-          "task_name": "京能汽车充电站(京能日昇新能源充电站)",
-          "city": "焦作市",
-          "district": "沁阳市"
-        },
-        {
-          "source_key": "6ab09f7efd98a0e75c88cc744d5813b6a5559f422db6d988159a798125864bae",
-          "source_station_id": "B0L2RZLPB7",
-          "station_name": "力氪汽车充电站(鑫涛超级)",
-          "task_name": "力氪汽车充电站(鑫涛超级)",
-          "city": "焦作市",
-          "district": "沁阳市"
         },
         {
           "source_key": "818a82a798fde6d6cc937438d05c3a39da0290ed4f526c6424288cb0b5a56742",
@@ -6079,30 +5384,6 @@
           "district": "山阳区"
         },
         {
-          "source_key": "a0a776cea421a9065e43b081fd2653a0bb119d735f712b76b6036944e75f5bdd",
-          "source_station_id": "B0MA24P9AF",
-          "station_name": "通达云重卡超级充电站(聚腾仓储)",
-          "task_name": "通达云重卡超级充电站(聚腾仓储)",
-          "city": "焦作市",
-          "district": "孟州市"
-        },
-        {
-          "source_key": "520acc11f19927c8a90e77661c6cba267539275eed13225696e5cc0f08de85bd",
-          "source_station_id": "B0K0TMYXWU",
-          "station_name": "新电途汽车充电站(畅亨熙国道327充电站)",
-          "task_name": "新电途汽车充电站(畅亨熙国道327充电站)",
-          "city": "焦作市",
-          "district": "武陟县"
-        },
-        {
-          "source_key": "5d425d81f487b550e06f9b2cccb33545b54e106e55c3e6768d1f2efc31f5f2f3",
-          "source_station_id": "B0LUVXF2MR",
-          "station_name": "云快充超级充电站(修武县七贤西下庄重卡1号充电站)",
-          "task_name": "云快充超级充电站(修武县七贤西下庄重卡1号充电站)",
-          "city": "焦作市",
-          "district": "修武县"
-        },
-        {
           "source_key": "413b154238ad035db0bc6641ec31db8f36c3b07286bef046df0d8feccaf90c55",
           "source_station_id": "B0L3V5IHOZ",
           "station_name": "新电途汽车充电站(孟州市关沟道班重卡充电站208国道)",
@@ -6117,30 +5398,6 @@
           "task_name": "新电途汽车充电站(厚源重卡超充站)",
           "city": "焦作市",
           "district": "孟州市"
-        },
-        {
-          "source_key": "a3f2da5163ebb9e59d5ac880608ac195fed730556c223abd0e3432b01018bce8",
-          "source_station_id": "B0K0YZFVFH",
-          "station_name": "力氪汽车充电站(沁阳捷程快速)",
-          "task_name": "力氪汽车充电站(沁阳捷程快速)",
-          "city": "焦作市",
-          "district": "沁阳市"
-        },
-        {
-          "source_key": "454161d358a644b98b14f70793db4fef39774441e3d7e80aca7d403dd976ca48",
-          "source_station_id": "B0LUDA51HZ",
-          "station_name": "力氪汽车充电站(沁阳卓铖充电站)",
-          "task_name": "力氪汽车充电站(沁阳卓铖充电站)",
-          "city": "焦作市",
-          "district": "沁阳市"
-        },
-        {
-          "source_key": "649e9194dde4e6c4fd6440a401dd584a3b923027e6e0bff708e2cbf1cd48d97c",
-          "source_station_id": "B0MDV4MQB5",
-          "station_name": "云快充超级充电站(博爱百企千联1003号重卡充电站)",
-          "task_name": "云快充超级充电站(博爱百企千联1003号重卡充电站)",
-          "city": "焦作市",
-          "district": "博爱县"
         },
         {
           "source_key": "ac0be25e50e361df7e2943bfca5070fcedf52746f586d7d3d78a0d391f7dba1a",
@@ -6167,14 +5424,6 @@
           "district": "沁阳市"
         },
         {
-          "source_key": "c48f605f3b597bc2305680d5fd856ab5cabcd591c381f27ec2a7e6edbf5a957f",
-          "source_station_id": "B0K0V4E067",
-          "station_name": "汽车充电站(力氪松文新能源重卡站)",
-          "task_name": "汽车充电站(力氪松文新能源重卡站)",
-          "city": "焦作市",
-          "district": "沁阳市"
-        },
-        {
           "source_key": "a79fa522be20464a385b654348b223546339325c7cd0abf38640e3344cfc0532",
           "source_station_id": "B0MGM59BYG",
           "station_name": "新电途汽车充电站(奇凡重卡超充站)",
@@ -6191,14 +5440,6 @@
           "district": "山阳区"
         },
         {
-          "source_key": "153e6f82e0af5f7499d2efb940fafc8be6ec126881fcf38349e9d1087b538983",
-          "source_station_id": "B0LKR76003",
-          "station_name": "新电途汽车充电站(温县谦讯重卡充电站)",
-          "task_name": "新电途汽车充电站(温县谦讯重卡充电站)",
-          "city": "焦作市",
-          "district": "温县"
-        },
-        {
           "source_key": "28e5d7bb04ba15b546880f5d9c7ff163a22b0c60338d99ff46f5572f7bb22b50",
           "source_station_id": "B0L6PRDDBB",
           "station_name": "云快充汽车充电站(河南盛世佰利物流充电站)",
@@ -6207,36 +5448,12 @@
           "district": "中站区"
         },
         {
-          "source_key": "321e02fdb4b75bea567573dcec0c21a6e73eab5684cf292ab2c833c79bea0e1d",
-          "source_station_id": "B0LBPC0E2N",
-          "station_name": "力氪汽车充电站(沁阳航顺超充站)",
-          "task_name": "力氪汽车充电站(沁阳航顺超充站)",
-          "city": "焦作市",
-          "district": "沁阳市"
-        },
-        {
-          "source_key": "f0f4e334be7900dedd160189b25567866ec689bde1045d40173fbfd844636ae0",
-          "source_station_id": "B0M6649DF1",
-          "station_name": "新电途汽车充电站(速电平价重卡站)",
-          "task_name": "新电途汽车充电站(速电平价重卡站)",
-          "city": "焦作市",
-          "district": "博爱县"
-        },
-        {
           "source_key": "27e1b2ab738b9ffafee168b3ceca92af1ce10ff53b7365822f52dadcb027094e",
           "source_station_id": "B0MD648471",
           "station_name": "云快充超级充电站(焦作启越重卡超充站)",
           "task_name": "云快充超级充电站(焦作启越重卡超充站)",
           "city": "焦作市",
           "district": "修武县"
-        },
-        {
-          "source_key": "a99e36b255902fe5a38479830ac9d717ae4e65e1acdae6b7a45177dae75122f8",
-          "source_station_id": "B0LUDAAANJ",
-          "station_name": "力氪汽车充电站(沁阳中盛超级充电站)",
-          "task_name": "力氪汽车充电站(沁阳中盛超级充电站)",
-          "city": "焦作市",
-          "district": "沁阳市"
         },
         {
           "source_key": "c40fe0ceb24031d8b8b945696de26cea413e39c9c93f11b6820e03c97f83bd01",
@@ -6271,36 +5488,12 @@
           "district": "中站区"
         },
         {
-          "source_key": "2885a978287505c8cc1ca280ff65f80bddd402f0f7725641f9c0bd1bc13f5fc3",
-          "source_station_id": "B0LDJ7WBHI",
-          "station_name": "力氪汽车充电站(沁阳虎斌超速充电站)",
-          "task_name": "力氪汽车充电站(沁阳虎斌超速充电站)",
-          "city": "焦作市",
-          "district": "沁阳市"
-        },
-        {
           "source_key": "57f4b253a4ecd5a1fb197ebb66a11ed6ee00488f57b9daaae0f02943aca3217c",
           "source_station_id": "B0LKF7TQ02",
           "station_name": "新电途汽车充电站(汉永重卡超充站)",
           "task_name": "新电途汽车充电站(汉永重卡超充站)",
           "city": "焦作市",
           "district": "孟州市"
-        },
-        {
-          "source_key": "6666d75db4365ea1d7c0ad43f0a48d5137c7d99db5790012861ef1d267c3e992",
-          "source_station_id": "B0K2TZRGBK",
-          "station_name": "力氪汽车充电站(沁阳禾庆充电站)",
-          "task_name": "力氪汽车充电站(沁阳禾庆充电站)",
-          "city": "焦作市",
-          "district": "沁阳市"
-        },
-        {
-          "source_key": "4d21339d29e4f7472782d06cf301f340d49696278d379ad8a11905cd567cda4c",
-          "source_station_id": "B0LB3S6N70",
-          "station_name": "力氪汽车充电站(驰骋新能源充电站)",
-          "task_name": "力氪汽车充电站(驰骋新能源充电站)",
-          "city": "焦作市",
-          "district": "沁阳市"
         },
         {
           "source_key": "49c1aada3343d38e7b7aaa894286f7628aaabe762cc6c4bb3e3ad8be0a892fc1",
@@ -6327,22 +5520,6 @@
           "district": "濮阳县"
         },
         {
-          "source_key": "1ff84ee729128bdd0c667872dc9e2ed93c8683d10932e6d53e4ca0e5093a8b84",
-          "source_station_id": "B0MABLSX73",
-          "station_name": "濮阳国能重卡超级充电站(濮阳国能新能源科技有限公司)",
-          "task_name": "濮阳国能重卡超级充电站(濮阳国能新能源科技有限公司)",
-          "city": "濮阳市",
-          "district": "濮阳县"
-        },
-        {
-          "source_key": "ada0b1ec4efc532285538b24eb20124e73739e5f87fc383d62ab36de9f5e29dd",
-          "source_station_id": "B0LB4HG7VR",
-          "station_name": "新电途汽车充电站(南乐县G341服务区重卡超充站)",
-          "task_name": "新电途汽车充电站(南乐县G341服务区重卡超充站)",
-          "city": "濮阳市",
-          "district": "南乐县"
-        },
-        {
           "source_key": "266392a7de2fb631c81b190521a71d6ec6083c772a8c68e726e01a84a6b3122e",
           "source_station_id": "B0MBXUZFPF",
           "station_name": "云快充汽车充电站(河南贺康新能源鑫鑫充电站)",
@@ -6359,28 +5536,12 @@
           "district": "清丰县"
         },
         {
-          "source_key": "d3a792a19553c54b08e86d71915259029aa5ed3fadd0a3d89adef777f8976337",
-          "source_station_id": "B0MGP513LA",
-          "station_name": "惠利充超级充电站(濮阳驿车超充重卡充电站)",
-          "task_name": "惠利充超级充电站(濮阳驿车超充重卡充电站)",
-          "city": "濮阳市",
-          "district": "清丰县"
-        },
-        {
           "source_key": "22e6fe7794aa154f8ed474978d3d355a3f5a7c0ea67a6051d18209c3cf067518",
           "source_station_id": "B0MAV45OJU",
           "station_name": "云快充超级充电站(闪能重卡超级充电站)",
           "task_name": "云快充超级充电站(宏宇超级充电站含重卡桩)",
           "city": "濮阳市",
           "district": "台前县"
-        },
-        {
-          "source_key": "924cddd86b2dd488634acc4c56fb9e52e2fc695616de05fb058389e56a02c5cd",
-          "source_station_id": "B0K2O57B5S",
-          "station_name": "运达科技超级充电站(运达科技液冷超充站·华为超充技术支持)",
-          "task_name": "运达科技超级充电站(运达科技液冷超充站·华为超充技术支持)",
-          "city": "濮阳市",
-          "district": "华龙区"
         },
         {
           "source_key": "d1078fbdd16f294d9d1b76174e7572fb1eeb49c9714a018c9b7ffc2d307906de",
@@ -6411,22 +5572,6 @@
           "source_station_id": "B0LUNH56E5",
           "station_name": "旭涛新能源超级充电站(禹州市旭涛新能源有限公司场站)",
           "task_name": "旭涛新能源超级充电站(禹州市旭涛新能源有限公司场站)",
-          "city": "许昌市",
-          "district": "禹州市"
-        },
-        {
-          "source_key": "cab09a776ae4abb7ee997d5db6bf510588aeb283c7cf41f06c99d8d0675fcf8b",
-          "source_station_id": "B0MB39GKRR",
-          "station_name": "元电超级充电站(禹州光伏重卡站)",
-          "task_name": "元电超级充电站(禹州光伏重卡站)",
-          "city": "许昌市",
-          "district": "禹州市"
-        },
-        {
-          "source_key": "7406c108c2df75fd0a1abe83a590c427b840a494eb28842f5a559f34fc4d9ae9",
-          "source_station_id": "B0L6AKSCPX",
-          "station_name": "金冠电气汽车充电站(瑞豫重卡充电站)",
-          "task_name": "金冠电气汽车充电站(瑞豫重卡充电站)",
           "city": "许昌市",
           "district": "禹州市"
         },
@@ -6477,14 +5622,6 @@
           "task_name": "启充云超级充电站(营坊超充站1号桩)",
           "city": "许昌市",
           "district": "长葛市"
-        },
-        {
-          "source_key": "940a98809a0914783f7ac05aba0470ce55579e037fe0174becf083fd174d9479",
-          "source_station_id": "B0LR4HP9P9",
-          "station_name": "宇隆超级充电站(禹州建峰重卡充电站)",
-          "task_name": "宇隆超级充电站(禹州建峰重卡充电站)",
-          "city": "许昌市",
-          "district": "禹州市"
         },
         {
           "source_key": "ba620b01b44d4f5b630dbb3fa5c161627ccca920e51117d2b22bb2d05a06c732",
@@ -6543,22 +5680,6 @@
           "district": "建安区"
         },
         {
-          "source_key": "6991bc4f45ee3b2d5c86009d842d56e70e5c1d1d64a83839c3640ccfffdf7bcd",
-          "source_station_id": "B0L024N6XX",
-          "station_name": "京能汽车充电站(重卡充电站可开合法专票)",
-          "task_name": "京能汽车充电站(重卡充电站可开合法专票)",
-          "city": "许昌市",
-          "district": "禹州市"
-        },
-        {
-          "source_key": "43eafd2d9f7521ac23dd7e89291df70356b4a9e58fefff1bb8a3a310bb8f370d",
-          "source_station_id": "B0MBDZG107",
-          "station_name": "容新智充汽车充电站(洧川大桥重卡充电站)",
-          "task_name": "容新智充汽车充电站(洧川大桥重卡充电站)",
-          "city": "许昌市",
-          "district": "长葛市"
-        },
-        {
           "source_key": "b174031af6091307c7d391ff4599502bd64a9bbd94f04cd3a8b70259976efaea",
           "source_station_id": "B0LDVKYKFJ",
           "station_name": "金冠智充汽车充电站(蔚莱重卡超充站)",
@@ -6583,14 +5704,6 @@
           "district": "禹州市"
         },
         {
-          "source_key": "7fd0c3da30a351dab68d39fc7f0423c69c48de1b39d69308c2beecef08905772",
-          "source_station_id": "B0M6J5DNSM",
-          "station_name": "启充云充卡超充站(长葛京港澳高速重卡超充站)",
-          "task_name": "启充云充卡超充站(长葛京港澳高速重卡超充站)",
-          "city": "许昌市",
-          "district": "长葛市"
-        },
-        {
           "source_key": "9bd0b44fd622b4a3987942dff737665bb6c78601e4c5bdac5a6c80e6e178d615",
           "source_station_id": "B0MAZCDA4V",
           "station_name": "新电途汽车充电站(润尔仓光伏充电站)",
@@ -6605,22 +5718,6 @@
           "task_name": "启充云超级充电站(营坊超充站2/3号桩)",
           "city": "许昌市",
           "district": "长葛市"
-        },
-        {
-          "source_key": "77535716a21ebf298fc6bf03d7ef70d3e6472bcfa1e371603be4e339e5e2a03d",
-          "source_station_id": "B0LKA59IJG",
-          "station_name": "腾付充汽车充电站(跃升重卡超充电站)",
-          "task_name": "腾付充汽车充电站(跃升重卡超充电站)",
-          "city": "许昌市",
-          "district": "禹州市"
-        },
-        {
-          "source_key": "77e208698efda439de355e4899f068bd70ce3b7d1f8a580d5379b85688f57c1f",
-          "source_station_id": "B0LAYBWD7P",
-          "station_name": "驿充电汽车充电站(昶源快速充电站360KW)",
-          "task_name": "驿充电汽车充电站(昶源快速充电站360KW)",
-          "city": "许昌市",
-          "district": "禹州市"
         },
         {
           "source_key": "ff982a6027867b2052e54b561c4ed5348bc035b2201642e99a2ffac14c3dda5e",
@@ -6669,14 +5766,6 @@
           "task_name": "云快充超级充电站(逸能重卡超充)",
           "city": "漯河市",
           "district": "临颍县"
-        },
-        {
-          "source_key": "55e10520a874fd199a85b1978940bde9c380ac902df2ae02b140b6ba04f97cfd",
-          "source_station_id": "B0LDT4Z06M",
-          "station_name": "京能汽车充电站(京能闪达兔重卡超充站)",
-          "task_name": "京能汽车充电站(京能闪达兔重卡超充站)",
-          "city": "漯河市",
-          "district": "源汇区"
         },
         {
           "source_key": "6532c6ca86d20660e5466d1dfd77dfbd4dcd1eeea3c77457a9cda4207d169c44",
@@ -6743,14 +5832,6 @@
           "district": "临颍县"
         },
         {
-          "source_key": "1d9b9ae9b5487c7b8893168c1876566f26ccddff9a23f9130605882f7f5aea52",
-          "source_station_id": "B0L241PDVT",
-          "station_name": "新电途汽车充电站(舞阳县安顺重卡充电站)",
-          "task_name": "新电途汽车充电站(舞阳县安顺重卡充电站)",
-          "city": "漯河市",
-          "district": "舞阳县"
-        },
-        {
           "source_key": "43972d1781082978083551df4fbea7fb99955f9046ebf16506e0e9df9d6dc783",
           "source_station_id": "B0LR2Z55CD",
           "station_name": "星星充电汽车充电站(日金售电许信高速口重卡站)",
@@ -6783,22 +5864,6 @@
           "district": "召陵区"
         },
         {
-          "source_key": "9d473c489059adc94d4f6985ec3e5abc4f638e6cf69e5e54a9097fef71547c46",
-          "source_station_id": "B0K6YH1O9K",
-          "station_name": "云快充汽车充电站(国网新能源问十乡)",
-          "task_name": "云快充汽车充电站(国网新能源问十乡)",
-          "city": "漯河市",
-          "district": "源汇区"
-        },
-        {
-          "source_key": "678e2753e6c58d026dcb96fe780646d1dd170e9830e638d2dae4fa0b9795a2ec",
-          "source_station_id": "B0L09UCFCG",
-          "station_name": "特来电汽车充电站(漯河市政集团桂景园重卡公共充电站)",
-          "task_name": "特来电汽车充电站(漯河市政集团桂景园重卡公共充电站)",
-          "city": "漯河市",
-          "district": "召陵区"
-        },
-        {
           "source_key": "21d2171200c29940d1c0315ba92a1565724535b4aad7d2f08bc13770d8245524",
           "source_station_id": "B0L3OMYK26",
           "station_name": "新电途汽车充电站(顺捷重卡兆瓦超充站)",
@@ -6815,36 +5880,12 @@
           "district": "渑池县"
         },
         {
-          "source_key": "d50fa06a66437a50bfa19f0aa1684901bac154d8ef1f4505af69b560e76ebaaf",
-          "source_station_id": "B0MAAH95DU",
-          "station_name": "力氪汽车充电站(佳德重卡)",
-          "task_name": "力氪汽车充电站(佳德重卡)",
-          "city": "三门峡市",
-          "district": "渑池县"
-        },
-        {
-          "source_key": "d9e3e903d15d24c4964f878d4467030d9b43a7885916d0374747369c861531ec",
-          "source_station_id": "B0K24HEXTE",
-          "station_name": "特来电汽车充电站(三门峡市诚美商贸物流中心重卡充电站)",
-          "task_name": "特来电汽车充电站(三门峡市诚美商贸物流中心重卡充电站)",
-          "city": "三门峡市",
-          "district": "湖滨区"
-        },
-        {
           "source_key": "50a044fcafa4bd117fc5a728b7e76cd521218511dc6fdc8671685ae3737944fd",
           "source_station_id": "B0L0F765ZR",
           "station_name": "惠利充汽车充电站(新航重卡充电站)",
           "task_name": "惠利充汽车充电站(新航重卡充电站)",
           "city": "三门峡市",
           "district": "渑池县"
-        },
-        {
-          "source_key": "c7ff5df7f0af5737a41f22c486148f4e1a631cc8360d2f2cbfe3ce97dfbf1682",
-          "source_station_id": "B0M136N099",
-          "station_name": "特来电汽车充电站(三门峡中铁物流园重卡充电站)",
-          "task_name": "特来电汽车充电站(三门峡中铁物流园重卡充电站)",
-          "city": "三门峡市",
-          "district": "陕州区"
         },
         {
           "source_key": "acd120d060e4b49a1fd02366ede9a788b73cc491c94b4943387360908edd527b",
@@ -6879,36 +5920,12 @@
           "district": "义马市"
         },
         {
-          "source_key": "0c2d6d29f129b9a313e415d92f11d2a896f11f539f7c4c29e298cc8df2fe6dc2",
-          "source_station_id": "B0KR01EQWI",
-          "station_name": "蔚景云超级充电站(锦荣·氢电重卡超充站)",
-          "task_name": "蔚景云超级充电站(锦荣·氢电重卡超充站)",
-          "city": "三门峡市",
-          "district": "陕州区"
-        },
-        {
-          "source_key": "904c5cf52456d116c4bad8e6927f18b11294e5e0c5c03027f870056f69a72030",
-          "source_station_id": "B0L1YUEFFO",
-          "station_name": "玖行能源汽车充电站(三门峡大货车重卡充电站)",
-          "task_name": "玖行能源汽车充电站(三门峡大货车重卡充电站)",
-          "city": "三门峡市",
-          "district": "陕州区"
-        },
-        {
           "source_key": "f19b37f62abc15712d8247610c14f44c0163dfe432c80bae2d52433d47be9ba3",
           "source_station_id": "B0M6PLO1VJ",
           "station_name": "汇洋能源重卡超级充电站(义马汇洋能源重卡充电站)",
           "task_name": "汇洋能源重卡超级充电站(义马汇洋能源重卡充电站)",
           "city": "三门峡市",
           "district": "义马市"
-        },
-        {
-          "source_key": "83d81a2dd672a59be6352381ef093d87086d976d6e5f9ad482a2512b3f59cba5",
-          "source_station_id": "B0MDUBYHT7",
-          "station_name": "腾付充汽车充电站(问道街集中式快充充电站)",
-          "task_name": "腾付充汽车充电站(问道街集中式快充充电站)",
-          "city": "南阳市",
-          "district": "新野县"
         },
         {
           "source_key": "09b85413974b0789e319693b9dd9d42d7c30920b7304a36049877198d2707423",
@@ -6933,14 +5950,6 @@
           "task_name": "金冠智充汽车充电站(骏腾新能源重卡充电站)",
           "city": "南阳市",
           "district": "桐柏县"
-        },
-        {
-          "source_key": "5d452baa1a8a0fdc6aeb53ac330fd3dc62d99c39577bd2825b64af0f976dd98e",
-          "source_station_id": "B0K0DKG2TR",
-          "station_name": "云快充超级充电站(中澳-312耀诚重卡超充站)",
-          "task_name": "云快充超级充电站(中澳-312耀诚重卡超充站)",
-          "city": "南阳市",
-          "district": "卧龙区"
         },
         {
           "source_key": "1951022e81abc023e66c251da43d41e18684b4dd141146213d397736e26532c8",
@@ -6989,14 +5998,6 @@
           "task_name": "金冠智充汽车充电站(速充港重卡充电站)",
           "city": "南阳市",
           "district": "邓州市"
-        },
-        {
-          "source_key": "f3177bd00eb6e796d691243be88c2a411da991e8065eb74ca06f7db3bce19a7c",
-          "source_station_id": "B0L6HKS9YJ",
-          "station_name": "金冠智充汽车充电站(南阳市博晟重卡充电站)",
-          "task_name": "金冠智充汽车充电站(南阳市博晟重卡充电站)",
-          "city": "南阳市",
-          "district": "卧龙区"
         },
         {
           "source_key": "a599db74c98e7573b291bbc4b8d8a8099535db8e45e67c1c51c71887d5e08589",
@@ -7103,28 +6104,12 @@
           "district": "西峡县"
         },
         {
-          "source_key": "b30d3dd91b5af414e84d28b87c74c763d47ab15167942b6c2d42e0a239415dc7",
-          "source_station_id": "B0MDHRSOSW",
-          "station_name": "嘉盛智充汽车充电站(西峡亨欣重卡超充站)",
-          "task_name": "嘉盛智充汽车充电站(西峡亨欣重卡超充站)",
-          "city": "郑州市",
-          "district": "西峡县"
-        },
-        {
           "source_key": "596b6a4f054c1a74485dbdd1598c9f1bae31261d624fa12a6665a45531f9bfd6",
           "source_station_id": "B0M6VAIVF0",
           "station_name": "金冠智充汽车充电站(玉缘重卡快充站)",
           "task_name": "金冠智充汽车充电站(玉缘重卡快充站)",
           "city": "南阳市",
           "district": "镇平县"
-        },
-        {
-          "source_key": "c0641abe9cc407422305264eee57f88f98baf4b0581195a5c379d69c7d059cee",
-          "source_station_id": "B0MG7ZGVQM",
-          "station_name": "金冠智充汽车充电站(南召长兴重卡充电站)",
-          "task_name": "金冠智充汽车充电站(南召长兴重卡充电站)",
-          "city": "南阳市",
-          "district": "南召县"
         },
         {
           "source_key": "69329022e4a9a99d55c91308879775f8740160cb0ff7f6f31d66631049c800da",
@@ -7135,58 +6120,10 @@
           "district": ""
         },
         {
-          "source_key": "75f6be9ddc54ba0069b37afec70bd7f5cb53b4a0d8bcf961fc9ec1dd13157c51",
-          "source_station_id": "B0MDD4KI30",
-          "station_name": "云快充超级充电站(鑫城重卡充电站)",
-          "task_name": "云快充超级充电站(鑫城重卡充电站)",
-          "city": "商丘市",
-          "district": "永城市"
-        },
-        {
-          "source_key": "983f9f1fe9f18af0976e53876049eab67e946cd766ea797c585a3f8ea9616c2f",
-          "source_station_id": "B0LRD45QL0",
-          "station_name": "惠利充汽车充电站(景博重卡超级充电站)",
-          "task_name": "惠利充汽车充电站(景博重卡超级充电站)",
-          "city": "商丘市",
-          "district": "永城市"
-        },
-        {
           "source_key": "a099d5b13f789a1ded660db825eadce3a799858059c5fd70b8029d4d301e5d70",
           "source_station_id": "B0MD6K899N",
           "station_name": "亚鑫兆瓦液冷重卡超级充电站(重卡超充站)",
           "task_name": "亚鑫兆瓦液冷重卡超级充电站(重卡超充站)",
-          "city": "商丘市",
-          "district": "永城市"
-        },
-        {
-          "source_key": "d6271d424b8f7909dd2e2267b88a2a4a0bf94849386636410169f6a53dfd6c49",
-          "source_station_id": "B0MGXAX7O7",
-          "station_name": "云快充充电站(柘城县北环集中式快速充电站)",
-          "task_name": "云快充充电站(柘城县北环集中式快速充电站)",
-          "city": "商丘市",
-          "district": "柘城县"
-        },
-        {
-          "source_key": "f834dc7cc42e6fe6401f413dbcd2a927eda2e03cc5ab2a6cbee19169c4d245e4",
-          "source_station_id": "B0JK3LHT35",
-          "station_name": "智链充超级充电站(北环加油站小车及重卡超充站)",
-          "task_name": "智链充超级充电站(北环加油站小车及重卡超充站)",
-          "city": "商丘市",
-          "district": "柘城县"
-        },
-        {
-          "source_key": "075df3627c771d3206cd3fe1c48c396eb318947ca52cfcd460426e9e200e9bfa",
-          "source_station_id": "B0MDK4BM7U",
-          "station_name": "云快充超级充电站(卓旭新能源重卡小卡轿车快速充电站)",
-          "task_name": "云快充超级充电站(卓旭新能源重卡小卡轿车快速充电站)",
-          "city": "商丘市",
-          "district": "永城市"
-        },
-        {
-          "source_key": "c5a940c3977c9608728fd0265b11061da55896543a1821370f5589b2bc281df7",
-          "source_station_id": "B0L2M4WJZF",
-          "station_name": "京能汽车充电站(祥辉永夏路口重卡超充站)",
-          "task_name": "京能汽车充电站(祥辉永夏路口重卡超充站)",
           "city": "商丘市",
           "district": "永城市"
         },
@@ -7199,28 +6136,12 @@
           "district": "夏邑县"
         },
         {
-          "source_key": "af68e8582f41c906e4db0298e84465bbfed013529a75bfd6a8133be40fc1b5b1",
-          "source_station_id": "B0L2M4XXVC",
-          "station_name": "京能汽车充电站(祥辉陈集钢厂重卡超充站)",
-          "task_name": "京能汽车充电站(祥辉陈集钢厂重卡超充站)",
-          "city": "商丘市",
-          "district": "永城市"
-        },
-        {
           "source_key": "f300db6e8419e5c4a56df66cf7b8b1e4ee7696bfdc26d32c62821195c7662001",
           "source_station_id": "B0KR1XKXM6",
           "station_name": "云快充汽车充电站(柘城县维也纳国际酒店超级快充站)",
           "task_name": "云快充汽车充电站(柘城县维也纳国际酒店超级快充站)",
           "city": "商丘市",
           "district": "柘城县"
-        },
-        {
-          "source_key": "c80d75e5179319b3fc0bd89c278e8458af99e74db953e6ce359e594ae4a5b3d2",
-          "source_station_id": "B0L2UHEOEC",
-          "station_name": "星星充电汽车充电站(夏邑县冉庄重卡光伏充电站)",
-          "task_name": "星星充电汽车充电站(夏邑县冉庄重卡光伏充电站)",
-          "city": "商丘市",
-          "district": "夏邑县"
         },
         {
           "source_key": "17985af0ed1f94e29416ecea43eee271aa0bee7c42addf6b8b5cd0e912fd11fd",
@@ -7231,28 +6152,12 @@
           "district": "梁园区"
         },
         {
-          "source_key": "5843d12f93426fba03b736be7e692bb80e19d04678ce72408cd91adbd325ea0a",
-          "source_station_id": "B0MDJ1LA9G",
-          "station_name": "京能汽车充电站(永城市恒程仓储充电站)",
-          "task_name": "京能汽车充电站(永城市恒程仓储充电站)",
-          "city": "商丘市",
-          "district": "永城市"
-        },
-        {
           "source_key": "f8d77dedaf1f1de8dd9dfc31a16d457f128cac17b49497f1f48b9b43db867b4b",
           "source_station_id": "B0L33M9ZDO",
           "station_name": "新电途汽车充电站(耀能重卡超充站)",
           "task_name": "新电途汽车充电站(耀能重卡超充站)",
           "city": "商丘市",
           "district": "睢阳区"
-        },
-        {
-          "source_key": "54334b78ba55b603333b5e3f7e7ece839260df27f75f103810d1e1e4780d643a",
-          "source_station_id": "B0LKVH49SK",
-          "station_name": "力氪汽车充电站(峰盛重卡充电桩)",
-          "task_name": "力氪汽车充电站(峰盛重卡充电桩)",
-          "city": "商丘市",
-          "district": "永城市"
         },
         {
           "source_key": "ef251f268ed5a521293ff87ea5586ccae646d2ea435c4c3f200a649ef25feab5",
@@ -7279,34 +6184,10 @@
           "district": "梁园区"
         },
         {
-          "source_key": "e30ee3599e8344e0be2a49b1b77634be1ea0b0270d1196e191e19adea30b6e6d",
-          "source_station_id": "B0JG9H7ZRM",
-          "station_name": "民权运昌超级充电站(民权运昌新能源科技站)",
-          "task_name": "民权运昌超级充电站(民权运昌新能源科技站)",
-          "city": "商丘市",
-          "district": "民权县"
-        },
-        {
-          "source_key": "314a0d02c047ded9238f467f8b2444591c1ec8176ec01dd8ecdca9e5fb182460",
-          "source_station_id": "B0M6GSORKK",
-          "station_name": "力氪汽车充电站(金力重卡)",
-          "task_name": "力氪汽车充电站(金力重卡)",
-          "city": "商丘市",
-          "district": "柘城县"
-        },
-        {
           "source_key": "7f63792830c5aa797ed047f7ac3b29bfc04347d340e5091f0951f9b268eb01f7",
           "source_station_id": "B0L3USGP4C",
           "station_name": "云快充汽车充电站(永安快速充电站)",
           "task_name": "力氪汽车充电站(河南盈东砼业充电桩)",
-          "city": "商丘市",
-          "district": "永城市"
-        },
-        {
-          "source_key": "49543410ac224de5efc90b2588f470106e01cf5b152724b7413b7d44730094e5",
-          "source_station_id": "B0M6FZXKYT",
-          "station_name": "惠利充超级充电站(永城市鑫辉重卡超充站)",
-          "task_name": "惠利充超级充电站(永城市鑫辉重卡超充站)",
           "city": "商丘市",
           "district": "永城市"
         },
@@ -7343,14 +6224,6 @@
           "district": "虞城县"
         },
         {
-          "source_key": "ae848b82ce1ae73736fc5eea8a42e9042c16eb260caacb77a4f7eb61df551b66",
-          "source_station_id": "B0MAZCDO67",
-          "station_name": "惠利充超级充电站(鑫达重卡充电站)",
-          "task_name": "惠利充汽车充电站(鑫达重卡充电站)",
-          "city": "商丘市",
-          "district": "永城市"
-        },
-        {
           "source_key": "8d70a11dea246ab5875bb5248382480510c970ace3150f25292d3432285646b6",
           "source_station_id": "B0MD255RJR",
           "station_name": "启充云汽车充电站(金邸充电站)",
@@ -7383,14 +6256,6 @@
           "district": "柘城县"
         },
         {
-          "source_key": "a3b6b5144a9abae3ced49d670a6c8a75023ed886b7a16e19228482fd171d8e92",
-          "source_station_id": "B0LK4HWVXA",
-          "station_name": "永城市国投重卡超级充电站(潘庄物流港超充站)",
-          "task_name": "永城市国投重卡超级充电站(潘庄物流港超充站)",
-          "city": "商丘市",
-          "district": "永城市"
-        },
-        {
           "source_key": "f579c4150ca5bdb5a2ad434710fb17e2ff7afee05c883328251894cb01084cbd",
           "source_station_id": "B0MDDBK2MM",
           "station_name": "腾付充汽车充电站(开发区重卡快充站)",
@@ -7413,30 +6278,6 @@
           "task_name": "金冠智充汽车充电站(志诚新能源重卡充电站)",
           "city": "商丘市",
           "district": "永城市"
-        },
-        {
-          "source_key": "a68b5260e59847220f433bf1be2cd34c0ea2284deda49a8a6690d0295bcc726c",
-          "source_station_id": "B0L2N4HLMH",
-          "station_name": "京能汽车充电站(鑫辉重卡超充电站)",
-          "task_name": "京能汽车充电站(鑫辉重卡超充电站)",
-          "city": "商丘市",
-          "district": "永城市"
-        },
-        {
-          "source_key": "c840a05b6bd0dd1d39808312aa5f76e88051886c7524d8afab1502e6da760ea0",
-          "source_station_id": "B0LU7M006T",
-          "station_name": "新电途汽车充电站(商丘中福石油超级充电站可充半挂车辆)",
-          "task_name": "新电途汽车充电站(商丘中福石油超级充电站可充半挂车辆)",
-          "city": "商丘市",
-          "district": "梁园区"
-        },
-        {
-          "source_key": "ff39abd3702ebfcb83353cdead8a82bb3ee47b73fa75f9dbaf481ed1da75575d",
-          "source_station_id": "B0L0LK8AXC",
-          "station_name": "金冠智充汽车充电站(民权县星驰重卡充电站)",
-          "task_name": "金冠智充汽车充电站(民权县星驰重卡充电站)",
-          "city": "商丘市",
-          "district": "民权县"
         },
         {
           "source_key": "ab7dd45770dc245b62c82de5fcc6b306165af40a9d2107b518d31df7574d4bc7",
@@ -7463,14 +6304,6 @@
           "district": "睢阳区"
         },
         {
-          "source_key": "7017e5a277842874dc74122f7360acaaa37630f0875e917b9fab19dc95efd10b",
-          "source_station_id": "B0MAZUDEQT",
-          "station_name": "保丰重卡超充充电站",
-          "task_name": "保丰重卡超充充电站",
-          "city": "商丘市",
-          "district": "永城市"
-        },
-        {
           "source_key": "62ecd19478e338606c93d6f7105433964ef5f4939c1ae8080eaa3865c1b2c70c",
           "source_station_id": "B0MBYP3UNU",
           "station_name": "广汽能源汽车充电站(重卡充电站广汽能源大广高速槐店服务区广州方向)",
@@ -7487,36 +6320,12 @@
           "district": "潢川县"
         },
         {
-          "source_key": "7bb05d3d6133c0eefd47e14f73cfbd4319ab9b33fd759c8f44b3c4681af32fe4",
-          "source_station_id": "B0MBG433FN",
-          "station_name": "广汽能源汽车充电站(重卡充电站广汽能源大广高速泼河服务区大庆方向)",
-          "task_name": "广汽能源汽车充电站(重卡充电站广汽能源大广高速泼河服务区大庆方向)",
-          "city": "信阳市",
-          "district": "光山县"
-        },
-        {
-          "source_key": "737702beb985a2cf7115737686343ae00e73288c8fa27fc9e66d1834d2dee659",
-          "source_station_id": "B0M6P5LYNH",
-          "station_name": "力氪汽车充电站(尹台村重卡超快)",
-          "task_name": "力氪汽车充电站(尹台村重卡超快)(暂停营业)",
-          "city": "信阳市",
-          "district": "浉河区"
-        },
-        {
           "source_key": "868ccfd6ef3522d669d9be2e71a675831505d7bc2fb8e37686a71091ddb806e8",
           "source_station_id": "B0LR2A42H6",
           "station_name": "星星充电汽车充电站(星星充电-胡族鑫金能效重卡站)",
           "task_name": "星星充电汽车充电站(星星充电-胡族鑫金能效重卡站)",
           "city": "信阳市",
           "district": "固始县"
-        },
-        {
-          "source_key": "19142b69f68c47182bff58773a8dcb0a81fe8ab4566b561b2cfc742832c626e2",
-          "source_station_id": "B0MDTBBENH",
-          "station_name": "中国石化超级充电站(魏岗重卡充电站)",
-          "task_name": "中国石化超级充电站(魏岗重卡充电站)",
-          "city": "信阳市",
-          "district": "潢川县"
         },
         {
           "source_key": "29350fbcaff09a34714d4433cb3ba555e98c1ec82110b57e111d1c1ffbbb5615",
@@ -7541,14 +6350,6 @@
           "task_name": "云快充超级充电站(润信超充站)",
           "city": "信阳市",
           "district": "平桥区"
-        },
-        {
-          "source_key": "81c535fefa42552885f72fd3941564dd450dddf2beb9a9a546fe08c1498ab91c",
-          "source_station_id": "B0MABRTJSB",
-          "station_name": "惠利充超级充电站(锐能重卡超级充电站)",
-          "task_name": "惠利充超级充电站(锐能重卡超级充电站)",
-          "city": "信阳市",
-          "district": "固始县"
         },
         {
           "source_key": "0aaeecf745bb5d0965f2c42a0a55aa9a0e62540aa4c217557faef7002d2b8975",
@@ -7615,22 +6416,6 @@
           "district": "平桥区"
         },
         {
-          "source_key": "b713978c592b355e30a568eb67f93514218d4c77c1dd195d633bedef6763a8fa",
-          "source_station_id": "B0MDUHZQKP",
-          "station_name": "众宏重卡超级充电站(众宏新能源兆瓦超充站)",
-          "task_name": "众宏重卡超级充电站(众宏新能源兆瓦超充站)",
-          "city": "周口市",
-          "district": "项城市"
-        },
-        {
-          "source_key": "3cee871d2dfc1720922f32822010a01ad560cee7a031b2cc5146f2d7c8459cf9",
-          "source_station_id": "B0MAZ4BX2H",
-          "station_name": "通达云重卡超级充电站(扶沟县腾充新能源有限公司)",
-          "task_name": "通达云重卡超级充电站(扶沟县腾充新能源有限公司)",
-          "city": "周口市",
-          "district": "扶沟县"
-        },
-        {
           "source_key": "8af8009fd42d2d02281706989eb9d83037a4a6381f15d1490a1ec51a77de0bfb",
           "source_station_id": "B0FFKBUPVC",
           "station_name": "鼎力超级充电站(鼎力重卡充电站)",
@@ -7695,14 +6480,6 @@
           "district": "西华县"
         },
         {
-          "source_key": "f5ed5dbd84495b59f3bf6ffbb1fea224c539f4687a56fb9ccc30d2dc8b8fd621",
-          "source_station_id": "B0MG5Z0GL4",
-          "station_name": "容新智充汽车充电站(豫鑫重卡充电站)",
-          "task_name": "容新智充汽车充电站(豫鑫重卡充电站)",
-          "city": "周口市",
-          "district": "鹿邑县"
-        },
-        {
           "source_key": "709520ad2c31b8e5129944f8422145cd78267d4e5e5386c38d8ffd375c63ed79",
           "source_station_id": "B0MG74GQ33",
           "station_name": "云快充超级充电站(范集乡领充超充站)",
@@ -7719,26 +6496,10 @@
           "district": "扶沟县"
         },
         {
-          "source_key": "7df3b5c62ef1876d19dc39a3104f3c11339158eba754f0509426e6aa1e7a7efb",
-          "source_station_id": "B0MU1D18I6",
-          "station_name": "特来电(特来电周口兴源建材龙源路重卡充电站)",
-          "task_name": "特来电(特来电周口兴源建材龙源路重卡充电站)",
-          "city": "周口市",
-          "district": "川汇区"
-        },
-        {
           "source_key": "0fe1b41e946e93037611a7644e4f4d34c0750f1caa6e47a7901289e19c0fd33d",
           "source_station_id": "B0L2XKWXT9",
           "station_name": "金冠智充汽车充电站(合鑫重卡充电站)",
           "task_name": "金冠智充汽车充电站(合鑫重卡充电站)",
-          "city": "周口市",
-          "district": "淮阳区"
-        },
-        {
-          "source_key": "7185f413d99b28feddc55fd37ee82dc87b66cc6cc1a0f53969f8a8c3bd95bfc8",
-          "source_station_id": "B0MUAH0XOL",
-          "station_name": "小桔充电汽车充电站(周口驿能重卡超充电站)",
-          "task_name": "小桔充电汽车充电站(周口驿能重卡超充电站)",
           "city": "周口市",
           "district": "淮阳区"
         },
@@ -7863,14 +6624,6 @@
           "district": "淮阳区"
         },
         {
-          "source_key": "dc2750cf4ade72f43fa61014f4137143917a1211301e26c1a289feaf4b381e96",
-          "source_station_id": "B0LK3KXJVP",
-          "station_name": "云快充超级充电站(贝壳新能源超快充充电站)",
-          "task_name": "云快充超级充电站(贝壳新能源超快充充电站)",
-          "city": "周口市",
-          "district": "川汇区"
-        },
-        {
           "source_key": "3a910620b38881d72a74d87082344318aae2f14ddc4072365b6e2b65bfb9cdef",
           "source_station_id": "B0M6Z609MZ",
           "station_name": "云快充超级充电站(嘉河新能源超充站)",
@@ -7909,14 +6662,6 @@
           "task_name": "蔚景云超级充电站(确山胤祥重卡充电站)",
           "city": "驻马店市",
           "district": "确山县"
-        },
-        {
-          "source_key": "294973c65cdc5386a12f6442781264278b0aeed244b74e1cd6f25afa769ea0dc",
-          "source_station_id": "B0LAJ4IGZS",
-          "station_name": "广汽能源汽车充电站(重卡充电站广汽能源大广高速新蔡服务区广州方向)",
-          "task_name": "广汽能源汽车充电站(重卡充电站广汽能源大广高速新蔡服务区广州方向)",
-          "city": "驻马店市",
-          "district": "新蔡县"
         },
         {
           "source_key": "b1276520ad786d006d7204938812d88d4d17b0e60c5d80d499258dae75d25629",
@@ -7967,14 +6712,6 @@
           "district": "西平县"
         },
         {
-          "source_key": "343a77b487a5ea3a2f7213b33cde9a8ef886a31260bebf706f487d3539549b25",
-          "source_station_id": "B0M6LC6MJY",
-          "station_name": "新电途汽车充电站(智充充电站崇礼乡360kw充电堆超级快充站)",
-          "task_name": "新电途汽车充电站(智充充电站崇礼乡360kw充电堆超级快充站)",
-          "city": "驻马店市",
-          "district": "上蔡县"
-        },
-        {
           "source_key": "318d9edc684ce2621aa812350e4751f5bd31919d83787df23f43a88abae27071",
           "source_station_id": "B0L0T69165",
           "station_name": "云快充超级充电站(睿行动力重卡超充电站)",
@@ -7999,14 +6736,6 @@
           "district": "确山县"
         },
         {
-          "source_key": "48a0cb2f69bcd6dc8febc0e1792dc111fd1744ca9ee63af7250a75c48c248457",
-          "source_station_id": "B0MDT5BJH6",
-          "station_name": "力氪汽车充电站(民和重卡超充站)",
-          "task_name": "力氪汽车充电站(民和重卡超充站)",
-          "city": "驻马店市",
-          "district": "确山县"
-        },
-        {
           "source_key": "0fda8dcbe058479da32ade0d017d6db31a4b9a8355b2db533fa9f9a6b771adc4",
           "source_station_id": "B0L0HNP3R6",
           "station_name": "云快充超级充电站(驻马店市中原大道双龙汽贸充电站)",
@@ -8021,30 +6750,6 @@
           "task_name": "广汽能源汽车充电站(重卡充电站广汽能源大广高速新蔡服务区大庆方向)",
           "city": "驻马店市",
           "district": "新蔡县"
-        },
-        {
-          "source_key": "620c345fc05d543bee78edc498653fa745170352e2ad12855cb1aebe56b9ecdf",
-          "source_station_id": "B0LUAPJBBA",
-          "station_name": "新电途汽车充电站(确山重链重卡超充站)",
-          "task_name": "新电途汽车充电站(确山重链重卡超充站)",
-          "city": "驻马店市",
-          "district": "确山县"
-        },
-        {
-          "source_key": "c6fde665675e5fdf162edcff49687a9dc1f9934b572f6b92fa8fc5002cf7b5b6",
-          "source_station_id": "B0M6APYGQK",
-          "station_name": "特来电汽车充电站(特来电驻马店城投特来电平舆重卡充电站)",
-          "task_name": "特来电汽车充电站(特来电驻马店城投特来电平舆重卡充电站)",
-          "city": "驻马店市",
-          "district": "平舆县"
-        },
-        {
-          "source_key": "b885d90157e146454cb299245d1310947159b344d153cbdfb88d05303515fb22",
-          "source_station_id": "B0LUBHAEJV",
-          "station_name": "腾付充汽车充电站(南库重卡超充站)",
-          "task_name": "腾付充汽车充电站(南库重卡超充站)",
-          "city": "驻马店市",
-          "district": "确山县"
         },
         {
           "source_key": "f45eaa498ad46b355f98e84efea70fc39c6b1a2db330872bea9fccbd954ef4b1",
@@ -8069,22 +6774,6 @@
           "task_name": "云快充超级充电站(建能科技遂平县华龙上河城新能源充电站)",
           "city": "驻马店市",
           "district": "遂平县"
-        },
-        {
-          "source_key": "926f0e7aaaa848987965f2cca6f449a12a5e22965069718528b383fd49174450",
-          "source_station_id": "B0MD649QYM",
-          "station_name": "京能汽车充电站(济源市金瑞充电站)",
-          "task_name": "京能汽车充电站(济源市金瑞充电站)",
-          "city": "济源市",
-          "district": "济源市"
-        },
-        {
-          "source_key": "e53ca8bafb03b994706bbc2cd97ae08f8b6f2cb81e6eb9f66418bc68b733ae7e",
-          "source_station_id": "B0MGCKDHEX",
-          "station_name": "合小智充电超级充电站(济西重卡超充站)",
-          "task_name": "合小智充电超级充电站(济西重卡超充站)",
-          "city": "济源市",
-          "district": "济源市"
         },
         {
           "source_key": "c13faca6580ff773c542d3cb6c0c11bc516f59ee6e58a37c5f59356b4313fa26",
@@ -8119,44 +6808,12 @@
           "district": "济源市"
         },
         {
-          "source_key": "1d0f0a68d228c221431d433dad67a0096ceb2edcffdf73a97e3f1c493bd62596",
-          "source_station_id": "B0MUM9X6QT",
-          "station_name": "云快充汽车充电站(蓝鑫重卡充电站)",
-          "task_name": "云快充汽车充电站(蓝鑫重卡充电站)",
-          "city": "南阳市",
-          "district": "方城县"
-        },
-        {
-          "source_key": "f649e8dc40a62b96538a5d672e1c5803a30f01bea787a183450058eb26514663",
-          "source_station_id": "B0L6ZBYRH0",
-          "station_name": "许禹路充电站",
-          "task_name": "许禹路充电站",
-          "city": "许昌市",
-          "district": "建安区"
-        },
-        {
-          "source_key": "f63e9efcb503b9921495f8d5e0c59e1e63794dbaa613bebbc31f67c943c05a5b",
-          "source_station_id": "B0MUG4H127",
-          "station_name": "通达云充汽车充电站(产投梨河重卡充电站)",
-          "task_name": "通达云充汽车充电站(产投梨河重卡充电站)",
-          "city": "郑州市",
-          "district": "新郑市"
-        },
-        {
           "source_key": "b923e28a1c0de8d354e1c3ae88c00b04f8c827c434946958ae3ff57be2b29098",
           "source_station_id": "B0M2MZDQOR",
           "station_name": "特来电超级充电站(洛阳老城钢材批发中心快来充重卡充电站)",
           "task_name": "特来电超级充电站(洛阳老城钢材批发中心快来充重卡充电站)",
           "city": "洛阳市",
           "district": "老城区"
-        },
-        {
-          "source_key": "86e6f9342e38f6068d0fe707decfaaaff13b24e23eb61812849040a8c62e9612",
-          "source_station_id": "B0MUS48ZMW",
-          "station_name": "嘉盛智充汽车充电站(阔路重卡超充站)",
-          "task_name": "嘉盛智充汽车充电站(阔路重卡超充站)",
-          "city": "洛阳市",
-          "district": "伊川县"
         },
         {
           "source_key": "8639e14128fe3b5925616205a8c929426c6a19da056f6a483db65b5b1d844323",
@@ -8167,44 +6824,12 @@
           "district": "偃师区"
         },
         {
-          "source_key": "f6673f93c3fd7ffbaad3df37cfa441cf65d692b4c9d7b696e670cc908dafb5c1",
-          "source_station_id": "B0MUD4GOE1",
-          "station_name": "互联充电汽车充电站(洛阳星合电气重卡)",
-          "task_name": "互联充电汽车充电站(洛阳星合电气重卡)",
-          "city": "洛阳市",
-          "district": "宜阳县"
-        },
-        {
-          "source_key": "828bf86f83ccab75fcc35506633fc0a9a048df244b04a9e4021068fbec094057",
-          "source_station_id": "B0MUZ641N7",
-          "station_name": "云快充超级充电站(小电匠重卡充电站)",
-          "task_name": "云快充超级充电站(小电匠重卡充电站)",
-          "city": "焦作市",
-          "district": "博爱县"
-        },
-        {
-          "source_key": "5332a810410c2ee5e8108038ec73e3f0d7b87154c8c7fcee3239f49247ab5272",
-          "source_station_id": "B0MUA72LYE",
-          "station_name": "新电途汽车充电站(速电光储充示范重卡站)",
-          "task_name": "新电途汽车充电站(速电光储充示范重卡站)",
-          "city": "焦作市",
-          "district": "博爱县"
-        },
-        {
           "source_key": "79cde930e3defc2d2d33abd64d7427160a142785e1b103de4fe3d7201437b153",
           "source_station_id": "B0M2YC84QS",
           "station_name": "特来电汽车充电站(驻马店城投G328重卡充电站)",
           "task_name": "特来电汽车充电站(驻马店城投G328重卡充电站)",
           "city": "驻马店市",
           "district": "汝南县"
-        },
-        {
-          "source_key": "796350864d947b0cef11ba0a0537d4725d1ef3907c0dd20790f7e3d5be15dd5b",
-          "source_station_id": "B0LUTC6A3B",
-          "station_name": "云快充超级充电站(源远重卡充电站)",
-          "task_name": "云快充超级充电站(源远重卡充电站)",
-          "city": "鹤壁市",
-          "district": "浚县"
         },
         {
           "source_key": "ebd40d7b05f5952ed3ab952abcf9d5a4b0b2d9d00c5897ba97f7523c456e33ab",
@@ -8221,14 +6846,6 @@
           "task_name": "特来电汽车充电站(漯河市政集团新店镇金顺重卡公共充电站)",
           "city": "漯河市",
           "district": "郾城区"
-        },
-        {
-          "source_key": "f0186fe217b0df9231b6b1776f3238fe83e49f4235eadaa8864d4c7b4722a2af",
-          "source_station_id": "B0LBFUTGYO",
-          "station_name": "力氪汽车充电站(泓博快速充电站)",
-          "task_name": "力氪汽车充电站(泓博快速充电站)",
-          "city": "焦作市",
-          "district": "沁阳市"
         },
         {
           "source_key": "339dd42f05fcf09327dac107f133cd582178c7c47f433eb7ecc9d985564a6b0d",
@@ -8251,14 +6868,6 @@
           "source_station_id": "B0LDD7HDHY",
           "station_name": "特来电汽车充电站(特来电安阳林州星程光储充重卡超级充电站)",
           "task_name": "特来电汽车充电站(特来电安阳林州星程光储充重卡超级充电站)",
-          "city": "安阳市",
-          "district": "林州市"
-        },
-        {
-          "source_key": "ba75732d9a6fff84e558266a8d1c417e06a12877dca5683d37d957c854372033",
-          "source_station_id": "B0MBBGVLPI",
-          "station_name": "惠利充汽车充电站(恒风重卡1号站)",
-          "task_name": "惠利充汽车充电站(恒风重卡1号站)",
           "city": "安阳市",
           "district": "林州市"
         },
@@ -8287,30 +6896,6 @@
           "district": "殷都区"
         },
         {
-          "source_key": "c2a2bff5152b580346c4e56fb82d6e32368ee235f5f38187905ec07c8b8a208c",
-          "source_station_id": "B0IDMCXR4T",
-          "station_name": "中国铁塔电动汽车充电站(恒飞站)",
-          "task_name": "中国铁塔电动汽车充电站(恒飞站)",
-          "city": "安阳市",
-          "district": "殷都区"
-        },
-        {
-          "source_key": "9a8b2c698d7a895e5333d50c094d0e9e4d0ad0ce6d0e67947df3ec9c4b1e5672",
-          "source_station_id": "B0L2MBX6KB",
-          "station_name": "闪象智充汽车充电站(跃瑞重卡)",
-          "task_name": "闪象智充汽车充电站(跃瑞重卡)",
-          "city": "郑州市",
-          "district": "登封市"
-        },
-        {
-          "source_key": "7a01cddc4466b3c87f20ad24232dde439a81a6cd04b64255a788e3f8da484f58",
-          "source_station_id": "B0KKDU5STY",
-          "station_name": "力氪汽车充电站(万泓丰鹤充电站)",
-          "task_name": "力氪汽车充电站(万泓丰鹤充电站)",
-          "city": "鹤壁市",
-          "district": "山城区"
-        },
-        {
           "source_key": "f35a89cd066123eef8bc66eae7aa34cfa34501ed69ef2d81a85d1a5ade9a523c",
           "source_station_id": "B0LACKDI6H",
           "station_name": "金冠智充汽车充电站(鹤壁煌冠重卡充电站)",
@@ -8327,14 +6912,6 @@
           "district": "安阳县"
         },
         {
-          "source_key": "1342eea06edd679949bb6523bad1fa18aa83b1fcbcd31813364d20d3f18c4510",
-          "source_station_id": "B0L6LCGPV5",
-          "station_name": "力氪汽车充电站(景源充电站)",
-          "task_name": "力氪汽车充电站(景源充电站)",
-          "city": "安阳市",
-          "district": "安阳县"
-        },
-        {
           "source_key": "bb24d66dc58b7af019de2aa7f72e176a941bb2cd43fc6490e99571ce2f6a85f3",
           "source_station_id": "B0L24PN3BR",
           "station_name": "特来电汽车充电站(特来电郑州登封东华镇工业园重卡充电站)",
@@ -8347,14 +6924,6 @@
           "source_station_id": "B0LUTU489H",
           "station_name": "新电途汽车充电站(攀盛重卡超充站)",
           "task_name": "新电途汽车充电站(攀盛重卡超充站)",
-          "city": "郑州市",
-          "district": "登封市"
-        },
-        {
-          "source_key": "34ba830c3bf6bd51da560430c12054066defbb90b225a6e998d1150c1a9127a5",
-          "source_station_id": "B0LGKCPPSQ",
-          "station_name": "闪象智充汽车充电站(智鑫重卡充电站)",
-          "task_name": "闪象智充汽车充电站(智鑫重卡充电站)",
           "city": "郑州市",
           "district": "登封市"
         },
@@ -8383,14 +6952,6 @@
           "district": "伊川县"
         },
         {
-          "source_key": "0309ae3eb5c5396947244474248d3629818f11b1b319394e156f48a99d2659b0",
-          "source_station_id": "B0MDM5Y4FS",
-          "station_name": "云快充超级充电站(鹿邑县唐集高速宾馆楼下充电站)",
-          "task_name": "云快充超级充电站(鹿邑县唐集高速宾馆楼下充电站)",
-          "city": "周口市",
-          "district": "鹿邑县"
-        },
-        {
           "source_key": "a6033e43f354b7cdfc5c1cff3685a69e37b24777dd6195ba1a40755b6e9349ac",
           "source_station_id": "B0LGJPN5UG",
           "station_name": "京能汽车充电站(续发重卡淇县玖洲国际站)",
@@ -8399,42 +6960,10 @@
           "district": "淇县"
         },
         {
-          "source_key": "c61ddc474a5a4cfcd2428c571506b57dfe60fbdd4a24757f0aeb1522d71b7548",
-          "source_station_id": "B0K1S79YOF",
-          "station_name": "力氪汽车充电站(淇县窦氏重卡站)",
-          "task_name": "淇县窦氏重卡站",
-          "city": "鹤壁市",
-          "district": "淇县"
-        },
-        {
-          "source_key": "7ba9d01852e57c6ac37dc2fd6c082de09b0216655e24b19c21a7a44c5c29cd51",
-          "source_station_id": "B0K16CUOSE",
-          "station_name": "力氪汽车充电站(淇县窦氏重卡站)",
-          "task_name": "力氪汽车充电站(淇县窦氏重卡站)",
-          "city": "",
-          "district": ""
-        },
-        {
-          "source_key": "2cc18401b7296e7175f6b9c1443f5b7f800416c214d07ba8ef03e0da4ff82daf",
-          "source_station_id": "B0M6UXT7IE",
-          "station_name": "平高智联超级充电站(小庄重卡充电站)",
-          "task_name": "平高智联超级充电站(小庄重卡充电站)",
-          "city": "济源市",
-          "district": "济源市"
-        },
-        {
           "source_key": "a5d5caa3521bcfbf7220135cc4f633594c30a22e319d8cf6db64d18e5a1f93a0",
           "source_station_id": "B0LK01950L",
           "station_name": "云快充超级充电站(杰跃重卡超充站)",
           "task_name": "云快充超级充电站(杰跃重卡超充站)",
-          "city": "济源市",
-          "district": "济源市"
-        },
-        {
-          "source_key": "7bdf4eb607a8605414b17302ad81ad9a6f46d1846f5e164a94b9ddf9b5d49963",
-          "source_station_id": "B0JKY7CIID",
-          "station_name": "中国石化汽车充电站(中国石化第二十充电站)",
-          "task_name": "中国石化汽车充电站(中国石化第二十充电站)",
           "city": "济源市",
           "district": "济源市"
         },
@@ -8455,14 +6984,6 @@
           "district": ""
         },
         {
-          "source_key": "627303ef75afca33975cf5cb3bb3a213c412b6d15deb6faf4136bcbc1343900d",
-          "source_station_id": "B0L3U4G2GY",
-          "station_name": "新电途汽车充电站(天裕新能源充电站)",
-          "task_name": "新电途汽车充电站(天裕新能源充电站)",
-          "city": "济源市",
-          "district": "济源市"
-        },
-        {
           "source_key": "75cd5b67c2ad6e16974523e48ba869b491ab71ff60d4a6f215243ebd9403caef",
           "source_station_id": "B0LK2XS01K",
           "station_name": "新电途汽车充电站(长葛撸铁新能源充电站)",
@@ -8477,14 +6998,6 @@
           "task_name": "新电途充电站(速能新能源重卡超充站)",
           "city": "许昌市",
           "district": ""
-        },
-        {
-          "source_key": "5617471d94ff26c41d030ed8e0e841f33bd25c77c49022a550041dc117a78f72",
-          "source_station_id": "B0L3ZC0Y9W",
-          "station_name": "新电途汽车充电站(洛界重卡充电站)",
-          "task_name": "新电途汽车充电站(洛界重卡充电站)",
-          "city": "许昌市",
-          "district": "襄城县"
         },
         {
           "source_key": "4669ddd992f1647b5459ec20e385abd5f92385f01b659a836efaeeb1130bf10f",
@@ -8511,6 +7024,1789 @@
           "district": "禹州市"
         },
         {
+          "source_key": "d0842e840387da0418a6b8c35445f24d874eae76bf3634d6c68b73ac5dd254d5",
+          "source_station_id": "B0MUA6YKIM",
+          "station_name": "比亚迪闪充汽车充电站(洛阳吉利南陈小区)",
+          "task_name": "比亚迪闪充汽车充电站(洛阳吉利南陈小区)",
+          "city": "洛阳市",
+          "district": "孟津区"
+        },
+        {
+          "source_key": "f105d12baccb4a4f4f6fd77d91588855156c90239c14279ed74dea4d3e9e6b09",
+          "source_station_id": "B0MRA7ZQSO",
+          "station_name": "启充云超级充电站(潢川县光储充一体重卡小车充电站)",
+          "task_name": "启充云超级充电站(潢川县光储充一体重卡小车充电站)",
+          "city": "信阳市",
+          "district": "潢川县"
+        },
+        {
+          "source_key": "6d6e81741eb165375b379539792164b8a86f785f18d66f4eeb96a32a1f57f213",
+          "source_station_id": "B0MUVAVOS4",
+          "station_name": "星星充电汽车充电站(中联重卡400KW超充站)",
+          "task_name": "星星充电汽车充电站(中联重卡400KW超充站)",
+          "city": "信阳市",
+          "district": "平桥区"
+        },
+        {
+          "source_key": "5dcc2c28c1714bf10b5c72431f49a9a707065fe35f886025e2fff0030fe263f5",
+          "source_station_id": "B0MR6BY1WI",
+          "station_name": "腾付充汽车充电站(河南建元建材重卡充电站)",
+          "task_name": "腾付充汽车充电站(河南建元建材重卡充电站)",
+          "city": "濮阳市",
+          "district": "清丰县"
+        },
+        {
+          "source_key": "d5caf9582fd1256e742dcb72c42a6894ba22a184a3d0a2e55ee56e6b1657ce5b",
+          "source_station_id": "B0MRKA2R9E",
+          "station_name": "特来电汽车充电站(灵宝函谷关重卡充电示范站)",
+          "task_name": "特来电汽车充电站(灵宝函谷关重卡充电示范站)",
+          "city": "三门峡市",
+          "district": "灵宝市"
+        },
+        {
+          "source_key": "c98a2d9fc4bfb80a13c1954ffc04b725a7febc3d4674c5a1d80c13eb25661d14",
+          "source_station_id": "B0MR6KY0VB",
+          "station_name": "云快充超级充电站(胡寨液冷超充站宏达路)",
+          "task_name": "云快充超级充电站(胡寨液冷超充站宏达路)",
+          "city": "许昌市",
+          "district": "建安区"
+        },
+        {
+          "source_key": "c5e89f34c808e07fc26d88db8cc20861b936e2e1931a57863f18eb4f5a7d827c",
+          "source_station_id": "B0MRD59QH4",
+          "station_name": "启充云超级充电站(长葛曙信光储充重卡充电站)",
+          "task_name": "启充云超级充电站(长葛曙信光储充重卡充电站)",
+          "city": "许昌市",
+          "district": "长葛市"
+        },
+        {
+          "source_key": "83e4e68506eee6bf8ce3e02e533548032c429ebb2842d4a7de47cc350be4027c",
+          "source_station_id": "B0M2OA05PO",
+          "station_name": "特来电汽车充电站(许昌长葛G107弘润2期重卡充电站)",
+          "task_name": "特来电汽车充电站(许昌长葛G107弘润2期重卡充电站)",
+          "city": "",
+          "district": ""
+        },
+        {
+          "source_key": "b3816daefa766f978e4880c3813f30d0d3e759c39b41da34fc49d0d48aaefcbe",
+          "source_station_id": "B0MRND75Q7",
+          "station_name": "惠利充超级充电站(鄢陵南高速路口重卡站)",
+          "task_name": "惠利充超级充电站(鄢陵南高速路口重卡站)",
+          "city": "许昌市",
+          "district": "鄢陵县"
+        },
+        {
+          "source_key": "8fb938cfb9f87de7a54292ff1bdb659bf0cf763fb4fe076d2932180dc48f81cc",
+          "source_station_id": "B0MAKOPDCN",
+          "station_name": "新电途汽车充电站(鸿蒙智行授权用户中心·焦作丰收路超充站)",
+          "task_name": "新电途汽车充电站(鸿蒙智行授权用户中心·焦作丰收路超充站)",
+          "city": "焦作市",
+          "district": "解放区"
+        },
+        {
+          "source_key": "f6e041666d289b674d4ff3296385ea2b59a70f4e6576f19491074f5a64e033d1",
+          "source_station_id": "B0MGGN2UCO",
+          "station_name": "比亚迪闪充汽车充电站(比亚迪焦作欣博源4S店)",
+          "task_name": "比亚迪闪充汽车充电站(比亚迪焦作欣博源4S店)",
+          "city": "焦作市",
+          "district": "解放区"
+        },
+        {
+          "source_key": "3cbc2b9159b83a89e0f3e31a3f6a941cef63606f1e00959cb5ea2ba2b959e4d1",
+          "source_station_id": "B0MU66TMC5",
+          "station_name": "比亚迪闪充汽车充电站(焦作新店花园)",
+          "task_name": "比亚迪闪充汽车充电站(焦作新店花园)",
+          "city": "焦作市",
+          "district": "解放区"
+        },
+        {
+          "source_key": "7e9c08828c69b56c755207ae2301685f2a87a092a875e46b5130148e38c91a5f",
+          "source_station_id": "B0MDYGTQLM",
+          "station_name": "昆仑网电汽车充电站(昆仑网电焦作人民路充电站)",
+          "task_name": "昆仑网电汽车充电站(昆仑网电焦作人民路充电站)",
+          "city": "焦作市",
+          "district": "解放区"
+        },
+        {
+          "source_key": "6406efeb20e59b4d62d92af42cb4874f09f8b0faf747a6b2dffee5029778aa43",
+          "source_station_id": "B0MU96WSI5",
+          "station_name": "比亚迪闪充汽车充电站(焦作绿都叠翠园)",
+          "task_name": "比亚迪闪充汽车充电站(焦作绿都叠翠园)",
+          "city": "焦作市",
+          "district": "解放区"
+        },
+        {
+          "source_key": "6ed66604a940b50acfd29f5f02eb0cad453fcc7402898e6e9ed0d7b6b353ecee",
+          "source_station_id": "B0KKDP426L",
+          "station_name": "新电途汽车充电站(飞翔运输重卡充电站)",
+          "task_name": "新电途汽车充电站(飞翔运输重卡充电站)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "b5d25fb69828af58f43c42ca3a5a2139b39c2ca872556f7da489d36038b6cc9b",
+          "source_station_id": "B0MD9KN811",
+          "station_name": "滴滴充电汽车充电站(确山德高重卡液冷超级充电站)",
+          "task_name": "滴滴充电汽车充电站(确山德高重卡液冷超级充电站)",
+          "city": "驻马店市",
+          "district": "确山县"
+        },
+        {
+          "source_key": "c3ecde42bdcca9a7c1a32b81039d50794bda7398da6a6e8ae30571fcd1e60787",
+          "source_station_id": "B0MRAL0QKT",
+          "station_name": "益冠超级充电站(上蔡县站)",
+          "task_name": "益冠超级充电站(上蔡县站)",
+          "city": "驻马店市",
+          "district": "上蔡县"
+        },
+        {
+          "source_key": "0e47a4dddfff7d7a0dc30f42864cf671345d60bf8f31a03f187e7abb9bcb78ce",
+          "source_station_id": "B0MUUCXJV6",
+          "station_name": "云快充超级充电站(林州河顺光储超充站)",
+          "task_name": "云快充超级充电站(林州河顺光储超充站)",
+          "city": "安阳市",
+          "district": "林州市"
+        },
+        {
+          "source_key": "a9b734c6ef1532a412327c71c9bd4b03b85cde71093106d7dbc4f6dd43ac6280",
+          "source_station_id": "B0MGSAM3M4",
+          "station_name": "中国铁塔超级充电站(河南安阳泳骏石料厂重卡充电站)",
+          "task_name": "中国铁塔超级充电站(河南安阳泳骏石料厂重卡充电站)",
+          "city": "安阳市",
+          "district": "安阳县"
+        },
+        {
+          "source_key": "b01e7822731c45865d36a89177e6a523ccd04471cbec741ad2470407d9efb5d1",
+          "source_station_id": "B0MU34NJ0A",
+          "station_name": "云快充超级充电站(封丘留光北侯重卡超充站二期北)",
+          "task_name": "云快充超级充电站(封丘留光北侯重卡超充站二期北)",
+          "city": "新乡市",
+          "district": "封丘县"
+        },
+        {
+          "source_key": "ffaa19cb3046197e4c0fceefbdeced6c7613ec6acf1750eb78c8ad42a65b70ac",
+          "source_station_id": "B0MRB68YIG",
+          "station_name": "云快充超级充电站(旭能重卡充电站)",
+          "task_name": "云快充超级充电站(旭能重卡充电站)",
+          "city": "新乡市",
+          "district": "延津县"
+        },
+        {
+          "source_key": "7993d1a57cabbeda4b5e6200403f219e9fd96fdf3cb27ee900daf92516f91349",
+          "source_station_id": "B0MGT57DHE",
+          "station_name": "旭电通汽车充电站(大金店丙晟重卡超充站)",
+          "task_name": "旭电通汽车充电站(大金店丙晟重卡超充站)",
+          "city": "郑州市",
+          "district": "登封市"
+        },
+        {
+          "source_key": "a5e20a2899e1f661f9a535c68055ac6edb291b31c9f7eccb70487dacd50c3384",
+          "source_station_id": "B0MAN5PYRX",
+          "station_name": "新电途汽车充电站(程诚唐庄重卡超充站)",
+          "task_name": "新电途汽车充电站(程诚唐庄重卡超充站)",
+          "city": "郑州市",
+          "district": "登封市"
+        },
+        {
+          "source_key": "93badb84bd384cb1bd20e83cce07eb771174833d94a79e9531f0ded37d04ec52",
+          "source_station_id": "B0L24KMZ4G",
+          "station_name": "新电途汽车充电站(郑州小龙重卡充电站)",
+          "task_name": "新电途汽车充电站(郑州小龙重卡充电站)",
+          "city": "郑州市",
+          "district": "新密市"
+        },
+        {
+          "source_key": "73c014e90e0ae3e54a7d2ab1069669e0e0f86e8af4898e730c8e8919fccafd6a",
+          "source_station_id": "B0L3UBGQ61",
+          "station_name": "新电途汽车充电站(东讯快速充电站)",
+          "task_name": "新电途汽车充电站(东讯快速充电站)",
+          "city": "郑州市",
+          "district": "新密市"
+        },
+        {
+          "source_key": "ecd42b363423a5ef94efc40b223ed8c78c0d07409087ee661278a47eedbba743",
+          "source_station_id": "B0LRRGK094",
+          "station_name": "特来电汽车充电站(特来电郑州新密平陌镇兴阳线重卡充电站)",
+          "task_name": "特来电汽车充电站(特来电郑州新密平陌镇兴阳线重卡充电站)",
+          "city": "郑州市",
+          "district": "新密市"
+        },
+        {
+          "source_key": "f587deda6decdecb66a0f752b9180c218fcfd27c355ad187d820d9190c10ac56",
+          "source_station_id": "B0L2T6306O",
+          "station_name": "启充云超级充电站(鼎盛鸿重卡充电站)",
+          "task_name": "启充云超级充电站(鼎盛鸿重卡充电站)",
+          "city": "郑州市",
+          "district": "新郑市"
+        },
+        {
+          "source_key": "0242d6dc59501ace36907ea392c3ea8405405d3a215d6b518f75b52de3e39ba9",
+          "source_station_id": "B0LGBZ0J83",
+          "station_name": "新电途汽车充电站(经宏新能源重卡站)",
+          "task_name": "新电途汽车充电站(经宏新能源重卡站)",
+          "city": "郑州市",
+          "district": "新郑市"
+        },
+        {
+          "source_key": "925d3dbe721a32396e29fd9fe1dfeecae26f2551d63a95c27ded4623e9122794",
+          "source_station_id": "B0LDCUUVP2",
+          "station_name": "旭电通汽车充电站(文鑫超级充电站)(暂停营业)",
+          "task_name": "旭电通汽车充电站(文鑫超级充电站)(暂停营业)",
+          "city": "郑州市",
+          "district": "新郑市"
+        },
+        {
+          "source_key": "689a55f5ffbb6e41bf17169750ec26c935b3f35d0810a03680ce4362d03e3b52",
+          "source_station_id": "B0MBM77ZJO",
+          "station_name": "国家电网汽车充电站(河南省郑州市巩义市310国道宜航汽车销售公...",
+          "task_name": "国家电网汽车充电站(河南省郑州市巩义市310国道宜航汽车销售公司重卡充电站)",
+          "city": "郑州市",
+          "district": "巩义市"
+        },
+        {
+          "source_key": "f109f3a129193d1dc06c3bef039077f592b918a7ce8b3eaef985628ace0c263d",
+          "source_station_id": "B0KB15A5AY",
+          "station_name": "星星充电汽车充电站(迅能来郑州陇海路绕城高速口充电站)",
+          "task_name": "星星充电汽车充电站(迅能来郑州陇海路绕城高速口充电站)",
+          "city": "郑州市",
+          "district": "中原区"
+        },
+        {
+          "source_key": "9427f62507b8d7fa07cec5e9f69a9fc42768ff3c78417d3324cdb862c064a4b2",
+          "source_station_id": "B0MRMKSBOD",
+          "station_name": "金冠智充汽车充电站(瑞光重卡充电站)",
+          "task_name": "金冠智充汽车充电站(瑞光重卡充电站)",
+          "city": "周口市",
+          "district": "西华县"
+        },
+        {
+          "source_key": "8dddecadcc76cfb4275c3c97dd25308002106b806a9ce717651420c4cd0ec4dc",
+          "source_station_id": "B0MRKB2IHV",
+          "station_name": "云快充超级充电站(李埠口停车场重卡充电站)",
+          "task_name": "云快充超级充电站(李埠口停车场重卡充电站)",
+          "city": "周口市",
+          "district": "川汇区"
+        },
+        {
+          "source_key": "4fccb4969aa2f519cb419982e6117295cff957d99a632d33e01b98c698f0bc79",
+          "source_station_id": "B0M3YCV9JK",
+          "station_name": "特来电汽车充电站(周口港区志宇二期重卡充电站)",
+          "task_name": "特来电汽车充电站(周口港区志宇二期重卡充电站)",
+          "city": "周口市",
+          "district": "川汇区"
+        },
+        {
+          "source_key": "2fd5b994e72404c6b2c6c1ffe00012b1b48e11f7abf2b4fa4951de55ea12b269",
+          "source_station_id": "B0LAYSZLFO",
+          "station_name": "驴充充超级充电站(虎墩墩超充充电站)",
+          "task_name": "驴充充超级充电站(虎墩墩超充充电站)",
+          "city": "商丘市",
+          "district": "民权县"
+        },
+        {
+          "source_key": "ce4143d6b29b82f9be8eaaaaed40d8fadd6871f42813232417160f62a5673258",
+          "source_station_id": "B0M2ZU3AGJ",
+          "station_name": "特来电超级充电站(特来电商丘民权贾寨G310国道2期重卡充电站)",
+          "task_name": "特来电超级充电站(特来电商丘民权贾寨G310国道2期重卡充电站)",
+          "city": "商丘市",
+          "district": "民权县"
+        },
+        {
+          "source_key": "b6f177d4f13144f204ff80741ddd3bb7daa96ec80903228f53d2ea047f28d18e",
+          "source_station_id": "B0MRHSD46K",
+          "station_name": "启充云超级充电站(悦新新能源480超充站)",
+          "task_name": "启充云超级充电站(悦新新能源480超充站)",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "5db1fe5dd28818674c0c2532e852d17c300f68244220858c12db3abd6a868dce",
+          "source_station_id": "B0L2U5EI1T",
+          "station_name": "国勤智充汽车充电站(练楼重卡充电站)",
+          "task_name": "国勤智充汽车充电站(练楼重卡充电站)",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "c886d5b85de6000cb691a3e70e04c75207e0fda6502bc6c1592f2d44bc81dd7a",
+          "source_station_id": "B0L3PPG0H7",
+          "station_name": "云快充超级充电站(斑马超级快充{特价桩}轻/重/卡站)",
+          "task_name": "云快充超级充电站(斑马超级快充{特价桩}轻/重/卡站)",
+          "city": "商丘市",
+          "district": "睢县"
+        },
+        {
+          "source_key": "254a127ec6606c71c501831a0554896fb1b6b129e31d60f416932f4d58b9153f",
+          "source_station_id": "B0LKHOSBMY",
+          "station_name": "新电途汽车充电站(长葛市悦实充电站)",
+          "task_name": "新电途汽车充电站(长葛市悦实充电站)",
+          "city": "许昌市",
+          "district": ""
+        },
+        {
+          "source_key": "5d502aeab1950675e3b9209fd8e535edf8c69275fd4a515c68f84b40e45d5887",
+          "source_station_id": "svr-fcdc363d39",
+          "station_name": "国家电网汽车充电站(河南省郑州市巩义市310国道宜航汽车销售公司重卡充电站)",
+          "task_name": "国家电网汽车充电站(河南省郑州市巩义市310国道宜航汽车销售公司重卡充电站)",
+          "city": "河南省",
+          "district": ""
+        },
+        {
+          "source_key": "43685d30c7626a7bb4d1a8b6f79893b7e3b723e27df602412cabfbb150f2ef11",
+          "source_station_id": "svr-1c527835a8",
+          "station_name": "新电途汽车充电站(经宏新能源重卡站)",
+          "task_name": "新电途汽车充电站(经宏新能源重卡站)",
+          "city": "河南省",
+          "district": ""
+        }
+      ]
+    },
+    "AMAP_MIN240_647": {
+      "collector": "AMAP",
+      "collection_mode": "DETAIL",
+      "count": 224,
+      "stations": [
+        {
+          "source_key": "939132b833bc7231287d4eda9fc9131ffa11d4ddd96747b3184ca1c99b71b6a5",
+          "source_station_id": "B0MG2411UF",
+          "station_name": "通达云重卡超级充电站(通达牧华重卡充电站)",
+          "task_name": "通达云重卡超级充电站(通达牧华重卡充电站)",
+          "city": "郑州市",
+          "district": "新郑市"
+        },
+        {
+          "source_key": "7fee7c98fba2990d7210277fac9b6832f4063dc0ab5554bbe1c88d960baf93d5",
+          "source_station_id": "B0MB37FXJC",
+          "station_name": "通达云汽车充电站(巩义服务站重卡充电站)",
+          "task_name": "通达云汽车充电站(巩义服务站重卡充电站)",
+          "city": "郑州市",
+          "district": "巩义市"
+        },
+        {
+          "source_key": "16c5ad107072c800f7069968a546158570e3b135b1f10338b4e6589dd0ffed67",
+          "source_station_id": "B0L6LCBZTF",
+          "station_name": "汽车充电站(氢电重卡超充陇海西站)",
+          "task_name": "汽车充电站(氢电重卡超充陇海西站)",
+          "city": "郑州市",
+          "district": "荥阳市"
+        },
+        {
+          "source_key": "22f06f770065218462d041d3887fe010e38b94a39f7e7521abdb2a4c923a80c2",
+          "source_station_id": "B0LDVXAIQU",
+          "station_name": "云快充汽车充电站(阳光重卡充电站)",
+          "task_name": "云快充汽车充电站(阳光重卡充电站)",
+          "city": "郑州市",
+          "district": "新郑市"
+        },
+        {
+          "source_key": "529df8c6e410ee85462c7b5fbcc510c3257bccc0a42bf31ff4af6965c7f67902",
+          "source_station_id": "B0MAO5JAQD",
+          "station_name": "云快充超级充电站(十三大街陆宏重卡充电站)",
+          "task_name": "云快充超级充电站(十三大街陆宏重卡充电站)",
+          "city": "开封市",
+          "district": "龙亭区"
+        },
+        {
+          "source_key": "c8896dbf816d62e2250c5893e7396d397e6a0fc8d856992c8567fd01aa26dd60",
+          "source_station_id": "B0K191NEHA",
+          "station_name": "蔚景云超级充电站(高村·氢电重卡超充站)",
+          "task_name": "蔚景云超级充电站(高村·氢电重卡超充站)",
+          "city": "郑州市",
+          "district": "荥阳市"
+        },
+        {
+          "source_key": "9b30034d6369e82b56fd44ee4ac4eb7b59c47510e537521713ad5588318f124e",
+          "source_station_id": "B0K6NKXKRM",
+          "station_name": "汽车充电站(汇能宏基王朝充电站)",
+          "task_name": "汽车充电站(汇能宏基王朝充电站)",
+          "city": "郑州市",
+          "district": "新郑市"
+        },
+        {
+          "source_key": "b2779026f864cd8e6ffb0731b87452fd2450281b3e6c7b2810d1737160be1bf5",
+          "source_station_id": "B0MA24Q2IW",
+          "station_name": "云快充超级充电站(十三大街雷泽重卡充电站)",
+          "task_name": "云快充超级充电站(十三大街雷泽重卡充电站)",
+          "city": "开封市",
+          "district": "龙亭区"
+        },
+        {
+          "source_key": "034b1d43200da87ba3baf6c82b73da38eb6c95305724dac469c065ab2bb56c45",
+          "source_station_id": "B0MBA68F1V",
+          "station_name": "金玉锋充电汽车充电站(金玉锋重卡充电站)",
+          "task_name": "金玉锋充电汽车充电站(金玉锋重卡充电站)",
+          "city": "驻马店市",
+          "district": "遂平县"
+        },
+        {
+          "source_key": "40feadba9bf34f33406df7c2fdd04d828e120ff05956efa9e5f9be42cb1cc4c6",
+          "source_station_id": "B0LGRLC2RG",
+          "station_name": "通达交通超级充电站(通达老庙重卡充电站)",
+          "task_name": "通达交通超级充电站(通达老庙重卡充电站)",
+          "city": "安阳市",
+          "district": "滑县"
+        },
+        {
+          "source_key": "b1a7389bcfec5ad6ed4dd0bbbea937ac7abe11de7959984fdfbe313e82b44287",
+          "source_station_id": "B0FFKNIVW2",
+          "station_name": "国顺重卡充电站(启充云超级充电站)",
+          "task_name": "国顺重卡充电站(启充云超级充电站)",
+          "city": "开封市",
+          "district": "鼓楼区"
+        },
+        {
+          "source_key": "480cf389fd75bbe9fa504c58a057eab9260912e0cb0dbcb0256374b7c47aac21",
+          "source_station_id": "B0L0P4Z4NR",
+          "station_name": "云快充超级充电站(五路来财重卡充电站)",
+          "task_name": "云快充超级充电站(五路来财重卡充电站)",
+          "city": "安阳市",
+          "district": "殷都区"
+        },
+        {
+          "source_key": "3c338d1cfc843c58d1ab71d85a770099faf4b0ffd3e1c21f2393e1ec292fb725",
+          "source_station_id": "B0LKMC6V3K",
+          "station_name": "金冠智充汽车充电站(方城大风车重卡充电站)",
+          "task_name": "金冠智充汽车充电站(方城大风车重卡充电站)",
+          "city": "南阳市",
+          "district": "方城县"
+        },
+        {
+          "source_key": "e3905825e22904a623f09d653e82da822cad747256334e8003ca34ae1dadf742",
+          "source_station_id": "B0M676V8HW",
+          "station_name": "云快充超级充电站(恒发重卡充电站)",
+          "task_name": "云快充超级充电站(恒发重卡充电站)",
+          "city": "鹤壁市",
+          "district": "淇县"
+        },
+        {
+          "source_key": "590f7624754b629d5777307cc6d87570ed5a83264bfd014fb50b45699d4f3f86",
+          "source_station_id": "B0LR05MLMN",
+          "station_name": "旭电通汽车充电站(大金店泓焱重卡充电站)",
+          "task_name": "旭电通汽车充电站(盛祥重卡快充站)",
+          "city": "新乡市",
+          "district": "辉县市"
+        },
+        {
+          "source_key": "3702332c61136d8e1aeb9c7712bff7340a24895f1201afcc8ff0591462faa824",
+          "source_station_id": "B0MU4P8AM1",
+          "station_name": "特来电汽车充电站(特来电郑州超化豫浙时代广场充电站)",
+          "task_name": "特来电汽车充电站(特来电郑州超化豫浙时代广场充电站)",
+          "city": "郑州市",
+          "district": "新密市"
+        },
+        {
+          "source_key": "766d935b49901e62bbbcc9fe89938d3ef64a55f095307d98530f4cf04dd712e9",
+          "source_station_id": "B0L0V5HRF5",
+          "station_name": "旭电通汽车充电站(大金店泓焱重卡充电站)",
+          "task_name": "旭电通汽车充电站(大金店泓焱重卡充电站)",
+          "city": "郑州市",
+          "district": "登封市"
+        },
+        {
+          "source_key": "20cd8f43ff731bea3e35953fa1c781a283a37e651b819126a2cacb43e2558375",
+          "source_station_id": "B0L0L5AAPB",
+          "station_name": "惠利充汽车充电站(云茂新能源重卡400超充站)",
+          "task_name": "惠利充汽车充电站(云茂新能源重卡400超充站)",
+          "city": "郑州市",
+          "district": "荥阳市"
+        },
+        {
+          "source_key": "2005322fe2f90b6c2882c205537808568df77d5e45da24aaa26bafb04f9f4223",
+          "source_station_id": "B0K1L7IW1Q",
+          "station_name": "玖行能源汽车充电站(郑州重链郑登快速路重卡充电站)",
+          "task_name": "玖行能源汽车充电站(郑州重链郑登快速路重卡充电站)",
+          "city": "郑州市",
+          "district": "新密市"
+        },
+        {
+          "source_key": "b5342d62d673eb9dbf97f1dd3063497aaaef3734a11e8d34cc6e18eaeb3fcc22",
+          "source_station_id": "B0LDRRI8Q7",
+          "station_name": "星星充电汽车充电站(通达云新密米村镇重卡站)",
+          "task_name": "星星充电汽车充电站(通达云新密米村镇重卡站)",
+          "city": "郑州市",
+          "district": "新密市"
+        },
+        {
+          "source_key": "2adc784bd829f4a76c0beb8c6ee0833aa8e70ad7d8e8ca605209481ed0c2da6e",
+          "source_station_id": "B0L2MBXM2D",
+          "station_name": "闪象智充汽车充电站(昌昱达重卡超充)",
+          "task_name": "闪象智充汽车充电站(昌昱达重卡超充)",
+          "city": "郑州市",
+          "district": "登封市"
+        },
+        {
+          "source_key": "f22b30015ecdff604a71770bf08d3356b1408275dac14cb9b8659b7abd8c4b1e",
+          "source_station_id": "B0MA54N2JE",
+          "station_name": "嘉盛智充汽车充电站(宜来电重卡充电站)",
+          "task_name": "嘉盛智充汽车充电站(宜来电重卡充电站)",
+          "city": "洛阳市",
+          "district": "伊川县"
+        },
+        {
+          "source_key": "84d00bac7258098b8c34f9d155d577e4659054471bdecafbdfc91e39a1f7bb47",
+          "source_station_id": "B0L0B4TM2K",
+          "station_name": "阳光充电汽车充电站(洛阳龙羽重卡超充)",
+          "task_name": "阳光充电汽车充电站(洛阳龙羽重卡超充)",
+          "city": "洛阳市",
+          "district": "宜阳县"
+        },
+        {
+          "source_key": "244d705925c34300f14876f309a38b764ded66961e95a0c3eb6294614c74d9ec",
+          "source_station_id": "B0L617N4V4",
+          "station_name": "嘉盛智充汽车充电站(汇途重卡站)",
+          "task_name": "嘉盛智充汽车充电站(汇途重卡站)",
+          "city": "洛阳市",
+          "district": "伊川县"
+        },
+        {
+          "source_key": "adeb45758093c0715bcd3d910ca6e2c1198173cfd14ca67f0d36457c6e630cdc",
+          "source_station_id": "B0MDX4Y5A5",
+          "station_name": "云快充超级充电站(任沟重卡充电站)",
+          "task_name": "云快充超级充电站(任沟重卡充电站)",
+          "city": "洛阳市",
+          "district": "伊川县"
+        },
+        {
+          "source_key": "3fb4ffe9624c3b1ff27adf478a45d0aa5f97f2a5b2744eecffed95c39087d35c",
+          "source_station_id": "B0L1NZVWUQ",
+          "station_name": "容新智充汽车充电站(下峪镇崇阳村重卡充电站)",
+          "task_name": "容新智充汽车充电站(下峪镇崇阳村重卡充电站)",
+          "city": "洛阳市",
+          "district": "洛宁县"
+        },
+        {
+          "source_key": "323c183cd3f36e830808eb909ccd953c5bd3657216e04d258f6c20941204dbd2",
+          "source_station_id": "B0LD3AHJMD",
+          "station_name": "科科魔方汽车充电站(隆越重卡充电站)",
+          "task_name": "科科魔方汽车充电站(隆越重卡充电站)",
+          "city": "洛阳市",
+          "district": "孟津区"
+        },
+        {
+          "source_key": "48263bc866cf17b866999694a69c8d97cd3fb02bd77c6ec88a24546655887c01",
+          "source_station_id": "B0LGOKOLX3",
+          "station_name": "蔚景云超级充电站(偃师·氢电重卡超充站)",
+          "task_name": "蔚景云超级充电站(偃师·氢电重卡超充站)",
+          "city": "洛阳市",
+          "district": "偃师区"
+        },
+        {
+          "source_key": "0856d849d2a52e3a37231511e36b8c0ba24af72de45ae374c6fa3c25c0507161",
+          "source_station_id": "B0MGF43SNE",
+          "station_name": "云快充充电站(九大街新能源汽车公用充电站)",
+          "task_name": "云快充充电站(九大街新能源汽车公用充电站)",
+          "city": "开封市",
+          "district": "龙亭区"
+        },
+        {
+          "source_key": "efb92cb5030ecc2b611dc57af1fefa7c8f054d8ddac31f787f10470e418a7b67",
+          "source_station_id": "B0M6BHHEYH",
+          "station_name": "力氪汽车充电站(兰科奇重卡超充)",
+          "task_name": "力氪汽车充电站(兰科奇重卡超充)",
+          "city": "开封市",
+          "district": "祥符区"
+        },
+        {
+          "source_key": "448428017c15f389bbcd7d7a05f5c00fa519a3a786969f280e55cded3e21f7b5",
+          "source_station_id": "B0M614EJ2U",
+          "station_name": "中国石化汽车充电站(中国石化杜良上路口重卡充电站)",
+          "task_name": "中国石化汽车充电站(中国石化杜良上路口重卡充电站)",
+          "city": "开封市",
+          "district": "祥符区"
+        },
+        {
+          "source_key": "184b458dc09023479ec3d94e09e28ea9ece78e168488523b2b9a6869c4363818",
+          "source_station_id": "B0M6SS2P7P",
+          "station_name": "力氪汽车充电站(怀虚重卡超充)",
+          "task_name": "力氪汽车充电站(怀虚重卡超充)",
+          "city": "开封市",
+          "district": "祥符区"
+        },
+        {
+          "source_key": "197f8168a4a7863432519293efeb19eda2eed3409ad99adddf1479e8602f2a47",
+          "source_station_id": "B0MD7Z5OKH",
+          "station_name": "容新智充汽车充电站(锐锐充电站)",
+          "task_name": "容新智充汽车充电站(锐锐充电站)",
+          "city": "平顶山市",
+          "district": "叶县"
+        },
+        {
+          "source_key": "05e759ccd16e8c3fa6e993999a93aa59b925fc8f0c25f189db9b9b04f0b89f12",
+          "source_station_id": "B0LRHA7ZG0",
+          "station_name": "科科魔方汽车充电站(迎祥重卡快充站1站)",
+          "task_name": "科科魔方汽车充电站(迎祥重卡快充站1站)",
+          "city": "平顶山市",
+          "district": "汝州市"
+        },
+        {
+          "source_key": "b06b15a8bffec9619ce1fd515947cd1bfd061e4f4818f1d9e00deaf21885745a",
+          "source_station_id": "B0L1ZUMPFB",
+          "station_name": "锐创汽车充电站(风安重卡充电站)",
+          "task_name": "锐创汽车充电站(风安重卡充电站)",
+          "city": "平顶山市",
+          "district": "宝丰县"
+        },
+        {
+          "source_key": "d3c0a10409b5dd965cdf1cd459960b6f365edc9b801beedd72c974a7a6cf4d13",
+          "source_station_id": "B0K0TCXHIB",
+          "station_name": "力氪汽车充电站(河南顺永充电站)",
+          "task_name": "力氪汽车充电站(河南顺永充电站)",
+          "city": "平顶山市",
+          "district": "舞钢市"
+        },
+        {
+          "source_key": "4607862ede2f807fb8e51956805bac9b738c62eef7730f075099709434341c28",
+          "source_station_id": "B0LA7ROEUS",
+          "station_name": "新电途汽车充电站(宝丰杨庄新能源重卡站)",
+          "task_name": "新电途汽车充电站(宝丰杨庄新能源重卡站)",
+          "city": "平顶山市",
+          "district": "宝丰县"
+        },
+        {
+          "source_key": "2e3c3a425aab863a1574326fd2fd9f37180fd7d2ba1ed625c96499f8463e029f",
+          "source_station_id": "B0MDKDCU2C",
+          "station_name": "锐创汽车充电站(朝委石油新能源重卡超充站)",
+          "task_name": "锐创汽车充电站(朝委石油新能源重卡超充站)",
+          "city": "平顶山市",
+          "district": "宝丰县"
+        },
+        {
+          "source_key": "88666dba4492e453cfe60cb41760af2182f65e63836d7af42b0e26a37b542c5f",
+          "source_station_id": "B0LRB1P37I",
+          "station_name": "锐创汽车充电站(汝州养田环豫环保重卡充电站)",
+          "task_name": "锐创汽车充电站(汝州养田环豫环保重卡充电站)",
+          "city": "平顶山市",
+          "district": "汝州市"
+        },
+        {
+          "source_key": "0625732d4f1e076dd3fb65a6adbf9d2984b7cbc6c13b70c518dc1a2b22a03c21",
+          "source_station_id": "B0LKFRUQF2",
+          "station_name": "新电途汽车充电站(瑞昇新能源充电站)",
+          "task_name": "新电途汽车充电站(瑞昇新能源充电站)",
+          "city": "平顶山市",
+          "district": "鲁山县"
+        },
+        {
+          "source_key": "dbf74793e2b4219fb0ba23eb765ea2e5d6780c864b6953cf42383ade45b7fb72",
+          "source_station_id": "B0MG07I42M",
+          "station_name": "驿充电汽车充电站(鲁山县昭平湖重卡充电服务区)",
+          "task_name": "驿充电汽车充电站(鲁山县昭平湖重卡充电服务区)",
+          "city": "",
+          "district": ""
+        },
+        {
+          "source_key": "598612f22a1dcf1102a2eaec5ab9db190660736a30ca3248ea2a02606713248d",
+          "source_station_id": "B0L3MSJN8X",
+          "station_name": "星星充电汽车充电站(星星充电-叶县南360KW超快充电站)",
+          "task_name": "星星充电汽车充电站(星星充电-叶县南360KW超快充电站)",
+          "city": "平顶山市",
+          "district": "叶县"
+        },
+        {
+          "source_key": "5fd8fd6f76932303dfc2b7b58acc7f3b3ec2d006db9a180deee70e0854a4d56b",
+          "source_station_id": "B0M14R1TON",
+          "station_name": "特来电重卡充电站(平顶山平郏路惠锐特来电重卡充电站)",
+          "task_name": "特来电重卡充电站(平顶山平郏路惠锐特来电重卡充电站)",
+          "city": "平顶山市",
+          "district": "新华区"
+        },
+        {
+          "source_key": "5ed10273936b5604736840c270c0f1d050397f2b9c5df9c171420f1f69932855",
+          "source_station_id": "B0K0TCX20Q",
+          "station_name": "力氪汽车充电站(平顶山永裕达超级)",
+          "task_name": "力氪汽车充电站(平顶山永裕达超级)",
+          "city": "平顶山市",
+          "district": "叶县"
+        },
+        {
+          "source_key": "260b2b0976cff5d71206e62d924eba95524294e72cf9b7f0d7766ee0f4e468c5",
+          "source_station_id": "B0L30AK2H1",
+          "station_name": "科科魔方汽车充电站(金森重卡快充站1)",
+          "task_name": "科科魔方汽车充电站(金森重卡快充站1)",
+          "city": "平顶山市",
+          "district": "郏县"
+        },
+        {
+          "source_key": "ebec7fd6c6080bce67f0cac60c1e0eff176e4df4fc114792b0c9fd8cbe664d62",
+          "source_station_id": "B0M6YDRCZA",
+          "station_name": "力氪汽车充电站(豫金源超级)",
+          "task_name": "力氪汽车充电站(豫金源超级)",
+          "city": "平顶山市",
+          "district": "叶县"
+        },
+        {
+          "source_key": "412da8c0e1d30fa9a6b09da605068cb8987169918175283209faf654910ec1f4",
+          "source_station_id": "B0MAKHO1LN",
+          "station_name": "驿充电汽车充电站(鲁山县昭平湖重卡充电服务区)",
+          "task_name": "鲁山县昭平湖重卡充电服务区",
+          "city": "平顶山市",
+          "district": "鲁山县"
+        },
+        {
+          "source_key": "9ab0feb026fe0fb491b58068c245552a2d7c880768265758d269c1954f5c5c2a",
+          "source_station_id": "B0LDG49N88",
+          "station_name": "嘉盛智充汽车充电站(慧诚重卡站)",
+          "task_name": "嘉盛智充汽车充电站(慧诚重卡站)",
+          "city": "安阳市",
+          "district": "内黄县"
+        },
+        {
+          "source_key": "c87393a6723d0f9e9448ea4cf301aa1c895f020cc356768803de2ef33659dd3b",
+          "source_station_id": "B0LRL5N26S",
+          "station_name": "通达交通超级充电站(通达老庙重卡充电站)",
+          "task_name": "重卡充电站",
+          "city": "安阳市",
+          "district": "殷都区"
+        },
+        {
+          "source_key": "ab3d1d345dca65824a8ef58bc386140d12ecdd8190c64b84df233932af4901c5",
+          "source_station_id": "B0LBPC0E2M",
+          "station_name": "力氪汽车充电站(振鹏新能源(快速充电站)",
+          "task_name": "力氪汽车充电站(振鹏新能源(快速充电站)",
+          "city": "安阳市",
+          "district": "汤阴县"
+        },
+        {
+          "source_key": "3b73f88d30a0108124a7e8d18291fb233081fb025e6aae55bb4abd4a71e956c7",
+          "source_station_id": "B0K2MAUAFN",
+          "station_name": "力氪汽车充电站(安阳亿辉快速充电站)",
+          "task_name": "力氪汽车充电站(安阳亿辉快速充电站)",
+          "city": "安阳市",
+          "district": "安阳县"
+        },
+        {
+          "source_key": "019e05284aeeaee886b51295d2dd760298b567a663a8527ee517bcdbd6989515",
+          "source_station_id": "B0KK7RKAEE",
+          "station_name": "力氪汽车充电站(森虎商砼充电站)",
+          "task_name": "力氪汽车充电站(森虎商砼充电站)",
+          "city": "安阳市",
+          "district": "汤阴县"
+        },
+        {
+          "source_key": "e7aae9843210c151e901d3fbddde466288c847f1786a493e72b27d7ecabefd96",
+          "source_station_id": "B0LD9Z3V6T",
+          "station_name": "云快充超级充电站(邦远充电站)",
+          "task_name": "云快充超级充电站(邦远充电站)",
+          "city": "安阳市",
+          "district": "安阳县"
+        },
+        {
+          "source_key": "eb589b5693381b12dfd76522833d4b3eb2f3123db697e2eee2b6b1a30bddcb44",
+          "source_station_id": "B0LDD748HM",
+          "station_name": "特来电汽车充电站(安阳彰德路安兴大道欣兴重卡充电站)",
+          "task_name": "特来电汽车充电站(安阳彰德路安兴大道欣兴重卡充电站)",
+          "city": "安阳市",
+          "district": "文峰区"
+        },
+        {
+          "source_key": "5cfc55b27d2f3f55823622065a470abca0a230b664c70ece41155baab3b21473",
+          "source_station_id": "B0L6LCGPV6",
+          "station_name": "力氪汽车充电站(贝优特充电站)",
+          "task_name": "力氪汽车充电站(贝优特充电站)",
+          "city": "安阳市",
+          "district": "殷都区"
+        },
+        {
+          "source_key": "44e52958fa623e7bd7e12a729d78cd91f82e70fc766ebc25660f95edbb6f3055",
+          "source_station_id": "B0KG5B4S60",
+          "station_name": "中国石化汽车充电站(中国石化第二十九充电站)",
+          "task_name": "中国石化汽车充电站(中国石化第二十九充电站)",
+          "city": "安阳市",
+          "district": "殷都区"
+        },
+        {
+          "source_key": "2f7deeda4bb4da0f3384d8a5ca86a1d325a0fa344c19ed99337c0509b1e6cf19",
+          "source_station_id": "B0LGFPJE1E",
+          "station_name": "京能汽车充电站(京能安阳瑞盛昌充电站殷都区)",
+          "task_name": "京能汽车充电站(京能安阳瑞盛昌充电站殷都区)",
+          "city": "安阳市",
+          "district": "安阳县"
+        },
+        {
+          "source_key": "dfe39d137579a2ef86d59f6607f27d352c94245fcb5cbe95327cdc37176005e4",
+          "source_station_id": "B0LGFPLT68",
+          "station_name": "京能汽车充电站(京能瑞盛昌李家岗充电站)",
+          "task_name": "京能汽车充电站(京能瑞盛昌李家岗充电站)",
+          "city": "安阳市",
+          "district": "安阳县"
+        },
+        {
+          "source_key": "16114edad7f5cbb8310f7c08b830cccf162793920acdc1c00bdad142a214c087",
+          "source_station_id": "B0L36LAYCW",
+          "station_name": "通达新能源超级充电站(滑县通达道口西环路重卡充电站)",
+          "task_name": "通达新能源超级充电站(滑县通达道口西环路重卡充电站)",
+          "city": "安阳市",
+          "district": "滑县"
+        },
+        {
+          "source_key": "d94379f6efb98500c91d8995d0738783ff6f337f5b47b54916bd9b2a0d1cc38a",
+          "source_station_id": "B0LUO7KHW6",
+          "station_name": "特来电鹤壁淇滨区大河涧乡星晨充电站",
+          "task_name": "特来电鹤壁淇滨区大河涧乡星晨充电站",
+          "city": "鹤壁市",
+          "district": "淇滨区"
+        },
+        {
+          "source_key": "cfce7254e74deb652a46e6828d8c80a9e0fe2c65ba2dca5f4fc9b9f22c54c077",
+          "source_station_id": "B0K0C4C08I",
+          "station_name": "嘉盛智充汽车充电站(信安重卡充电站)",
+          "task_name": "嘉盛智充汽车充电站(信安重卡充电站)",
+          "city": "鹤壁市",
+          "district": "鹤山区"
+        },
+        {
+          "source_key": "59f69b39b87849be7f2f6a3800058194851131d10416c4ab3d82edc09ab45be8",
+          "source_station_id": "B0LDPPTBOQ",
+          "station_name": "京能汽车充电站(续发重卡庙口站)",
+          "task_name": "京能汽车充电站(续发重卡庙口站)",
+          "city": "鹤壁市",
+          "district": "淇县"
+        },
+        {
+          "source_key": "acfebaf5a299fb5890944833dbd5d2173b7b43571ee57bcd8d133f7c35765e8e",
+          "source_station_id": "B0LRJ4GMGY",
+          "station_name": "京能汽车充电站(光能重卡充电站)",
+          "task_name": "京能汽车充电站(光能重卡充电站)",
+          "city": "鹤壁市",
+          "district": "淇县"
+        },
+        {
+          "source_key": "8d437b4cec88f7908e2fd15cb2d8588d0c60b033c3185c1445bd569078b1ebc7",
+          "source_station_id": "B0L6H7HUGL",
+          "station_name": "力氪汽车充电站(天润快速充电站)",
+          "task_name": "力氪汽车充电站(天润快速充电站)",
+          "city": "鹤壁市",
+          "district": "淇滨区"
+        },
+        {
+          "source_key": "9c4ba6bd9eaa57e7ba89451f53c410733fa1ef1cea161def32023488a9ab7658",
+          "source_station_id": "B0LGH7TP6J",
+          "station_name": "力氪汽车充电站(正鑫快速充电站)",
+          "task_name": "力氪汽车充电站(正鑫快速充电站)",
+          "city": "鹤壁市",
+          "district": "淇滨区"
+        },
+        {
+          "source_key": "8454aa1c3c0bd4989798b81e4ed9f3574fdae32a387415666e6d2b8d1f80199c",
+          "source_station_id": "B0MG76G78N",
+          "station_name": "腾付充汽车充电站(顺源重卡充电站)",
+          "task_name": "腾付充汽车充电站(顺源重卡充电站)",
+          "city": "",
+          "district": ""
+        },
+        {
+          "source_key": "75fcecb92ad4a75df167e64913c0cb4fe9b21f3f0bd3ee6abf24155cb7c382f1",
+          "source_station_id": "B0LU6AMAQN",
+          "station_name": "腾付充汽车充电站(顺源重卡充电站)",
+          "task_name": "腾付充汽车充电站(顺源重卡充电站)",
+          "city": "",
+          "district": ""
+        },
+        {
+          "source_key": "b2d2bc9ae9b156511af643dbd1ffb7863e073aab0b45e16985110206a16070fc",
+          "source_station_id": "B0LGVPSF1K",
+          "station_name": "京能汽车充电站(续发重卡淇县107高村站)",
+          "task_name": "京能汽车充电站(续发重卡淇县107高村站)",
+          "city": "鹤壁市",
+          "district": "淇县"
+        },
+        {
+          "source_key": "4a5909d4ef1e0f6495e61d016413e1c28f6098f0303c9fe480fbdb7a79897f91",
+          "source_station_id": "B0L6U4IY0I",
+          "station_name": "嘉盛智充汽车充电站(辉翰重卡充电站)",
+          "task_name": "嘉盛智充汽车充电站(辉翰重卡充电站)",
+          "city": "鹤壁市",
+          "district": "鹤山区"
+        },
+        {
+          "source_key": "ba3d6dd427b11abd71a4511db1b2a1c8a348161b054741aae8328ba4d8e515a7",
+          "source_station_id": "B0LRTS9E1P",
+          "station_name": "腾付充汽车充电站(中天重卡充电站)",
+          "task_name": "腾付充汽车充电站(中天重卡充电站)",
+          "city": "鹤壁市",
+          "district": "淇县"
+        },
+        {
+          "source_key": "f574be88b943a28f6dc1fe72c90b1494a7921ab8a26dc2937a664d145f1a9d55",
+          "source_station_id": "B0LUXAMRXL",
+          "station_name": "中国铁塔超级充电站(河南鹤壁鹤山充璟重卡充电站)",
+          "task_name": "中国铁塔超级充电站(河南鹤壁鹤山充璟重卡充电站)",
+          "city": "鹤壁市",
+          "district": "鹤山区"
+        },
+        {
+          "source_key": "850618c12c0e7f4b4e5d29559d5d851e8386848a068029de76d7507ed8e8cb15",
+          "source_station_id": "B0LU6AH1F8",
+          "station_name": "腾付充汽车充电站(顺源重卡充电站)",
+          "task_name": "腾付充汽车充电站(顺源重卡充电站)",
+          "city": "鹤壁市",
+          "district": "山城区"
+        },
+        {
+          "source_key": "42dc13078072bd5ac16c8b249bb86d13002e2f8eb5000468992e1cb9f6b750b5",
+          "source_station_id": "B0MUKZXJ6G",
+          "station_name": "容新智充汽车充电站(亿阳充电)",
+          "task_name": "容新智充汽车充电站(亿阳充电)",
+          "city": "新乡市",
+          "district": "辉县市"
+        },
+        {
+          "source_key": "3a2b942891f612554965ff716cb9c7ad22248c6f721e050c96630499e0a9167a",
+          "source_station_id": "B0MBPL23PP",
+          "station_name": "惠利充汽车充电站(永利石化重卡充电站)",
+          "task_name": "惠利充汽车充电站(永利石化重卡充电站)",
+          "city": "新乡市",
+          "district": "延津县"
+        },
+        {
+          "source_key": "2ffd7832a182bd196001cdaebec55f2acb00d2901addf13c9ef17b91cb8f65e2",
+          "source_station_id": "B0LAJXXWA8",
+          "station_name": "云快充超级充电站(升辉重卡充电站)",
+          "task_name": "云快充超级充电站(升辉重卡充电站)",
+          "city": "新乡市",
+          "district": "辉县市"
+        },
+        {
+          "source_key": "d1111cdd3196567656b9313367f1fc908545f5f914d72bba9884b90fb86b0c6d",
+          "source_station_id": "B0MD54VJSA",
+          "station_name": "云快充超级充电站(正道重卡站)",
+          "task_name": "云快充超级充电站(正道重卡站)",
+          "city": "新乡市",
+          "district": "封丘县"
+        },
+        {
+          "source_key": "2094ff3eff6b03a55c994b367ffbe5993dd451c6b0e611a55963815f92d77429",
+          "source_station_id": "B0L03ZC7JO",
+          "station_name": "力氪汽车充电站(金鑫兴安重卡)",
+          "task_name": "力氪汽车充电站(金鑫兴安重卡)",
+          "city": "新乡市",
+          "district": "长垣市"
+        },
+        {
+          "source_key": "96e1e0610e00e0a419e37e404c1571324734862b992d2f67648a9e3d8ad22683",
+          "source_station_id": "B0LRK5IVP0",
+          "station_name": "腾付充汽车充电站(河南陆铁港重卡充电站)",
+          "task_name": "腾付充汽车充电站(河南陆铁港重卡充电站)",
+          "city": "新乡市",
+          "district": "红旗区"
+        },
+        {
+          "source_key": "18c39d8d22a9b9eacdc1b5c5faefcc9d1da7d89d49001ecbc93781833ef97e92",
+          "source_station_id": "B0LDJ5WH4M",
+          "station_name": "星星充电汽车充电站(朱元寨充电站)",
+          "task_name": "星星充电汽车充电站(朱元寨充电站)",
+          "city": "新乡市",
+          "district": "封丘县"
+        },
+        {
+          "source_key": "4cee8e40e4d32f5554723bd63c506144ca8c8a6693b518310bbc91b6cf13b677",
+          "source_station_id": "B0LKL58ONH",
+          "station_name": "微鹏汽车充电站(河南科顺重卡超充站)",
+          "task_name": "微鹏汽车充电站(河南科顺重卡超充站)",
+          "city": "新乡市",
+          "district": "凤泉区"
+        },
+        {
+          "source_key": "e3f0498d71cbc80a5bd86f17e4391af3ab620ae24aeea418ee1731bd87175658",
+          "source_station_id": "B0M6T54JZJ",
+          "station_name": "力氪汽车充电站(中岳重卡综合充电)",
+          "task_name": "力氪汽车充电站(中岳重卡综合充电)",
+          "city": "新乡市",
+          "district": "获嘉县"
+        },
+        {
+          "source_key": "a014ae7ff7b6ee4746ccda3c38a6932eec8edc3e8c22428248fdcc7b56745aa3",
+          "source_station_id": "B0L14BZJJ4",
+          "station_name": "云快充超级充电站(207国道温县服务区重卡充电站)",
+          "task_name": "云快充超级充电站(207国道温县服务区重卡充电站)",
+          "city": "",
+          "district": ""
+        },
+        {
+          "source_key": "cd3872a593fcfd26508a2bbf1f4a76eb48da2296fd6c52a799af23d36f5d6b7d",
+          "source_station_id": "B0LBU7BL3O",
+          "station_name": "合小智充电超级充电站(伟铭新能源重卡)",
+          "task_name": "合小智充电超级充电站(伟铭新能源重卡)",
+          "city": "焦作市",
+          "district": "博爱县"
+        },
+        {
+          "source_key": "da44a9db4c7e0d6032c04772cf675819cabb06dff2bad7e4287bf9a8b062cd83",
+          "source_station_id": "B0MAHCM4ZC",
+          "station_name": "力氪汽车充电站(KTV重卡超级)",
+          "task_name": "力氪汽车充电站(KTV重卡超级)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "f8ae3e31cc703eddaa92ebdebb3543f9fd761a0dd2c6d828d2530adb91cf4c4b",
+          "source_station_id": "B0L2PMPV8Y",
+          "station_name": "云快充超级充电站(207国道温县服务区重卡充电站)",
+          "task_name": "云快充汽车充电站(207国道温县服务区重卡充电站)",
+          "city": "焦作市",
+          "district": "温县"
+        },
+        {
+          "source_key": "613612fff9db545b5cea615756625d74e09b1cf9ac8263461c1dd5119b0641da",
+          "source_station_id": "B0LAGUAFGN",
+          "station_name": "力氪汽车充电站(沁阳市驰航集中式快速充电站)",
+          "task_name": "力氪汽车充电站(沁阳市驰航集中式快速充电站)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "ce0793d1bd87d2bf79132e56d5b0b3c100e2dd9501402a3cdd4de757b0eb4925",
+          "source_station_id": "B0L1B5YGVQ",
+          "station_name": "力氪汽车充电站(广源)",
+          "task_name": "力氪汽车充电站(广源)",
+          "city": "焦作市",
+          "district": "博爱县"
+        },
+        {
+          "source_key": "dcc061aed80f750c4f1466b99e641374cbe32d97cff398fa5f4fb7d7e4def083",
+          "source_station_id": "B0LKP4Z06S",
+          "station_name": "京能汽车充电站(京能日昇新能源充电站)",
+          "task_name": "京能汽车充电站(京能日昇新能源充电站)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "6ab09f7efd98a0e75c88cc744d5813b6a5559f422db6d988159a798125864bae",
+          "source_station_id": "B0L2RZLPB7",
+          "station_name": "力氪汽车充电站(鑫涛超级)",
+          "task_name": "力氪汽车充电站(鑫涛超级)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "520acc11f19927c8a90e77661c6cba267539275eed13225696e5cc0f08de85bd",
+          "source_station_id": "B0K0TMYXWU",
+          "station_name": "新电途汽车充电站(畅亨熙国道327充电站)",
+          "task_name": "新电途汽车充电站(畅亨熙国道327充电站)",
+          "city": "焦作市",
+          "district": "武陟县"
+        },
+        {
+          "source_key": "5d425d81f487b550e06f9b2cccb33545b54e106e55c3e6768d1f2efc31f5f2f3",
+          "source_station_id": "B0LUVXF2MR",
+          "station_name": "云快充超级充电站(修武县七贤西下庄重卡1号充电站)",
+          "task_name": "云快充超级充电站(修武县七贤西下庄重卡1号充电站)",
+          "city": "焦作市",
+          "district": "修武县"
+        },
+        {
+          "source_key": "a3f2da5163ebb9e59d5ac880608ac195fed730556c223abd0e3432b01018bce8",
+          "source_station_id": "B0K0YZFVFH",
+          "station_name": "力氪汽车充电站(沁阳捷程快速)",
+          "task_name": "力氪汽车充电站(沁阳捷程快速)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "454161d358a644b98b14f70793db4fef39774441e3d7e80aca7d403dd976ca48",
+          "source_station_id": "B0LUDA51HZ",
+          "station_name": "力氪汽车充电站(沁阳卓铖充电站)",
+          "task_name": "力氪汽车充电站(沁阳卓铖充电站)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "649e9194dde4e6c4fd6440a401dd584a3b923027e6e0bff708e2cbf1cd48d97c",
+          "source_station_id": "B0MDV4MQB5",
+          "station_name": "云快充超级充电站(博爱百企千联1003号重卡充电站)",
+          "task_name": "云快充超级充电站(博爱百企千联1003号重卡充电站)",
+          "city": "焦作市",
+          "district": "博爱县"
+        },
+        {
+          "source_key": "c48f605f3b597bc2305680d5fd856ab5cabcd591c381f27ec2a7e6edbf5a957f",
+          "source_station_id": "B0K0V4E067",
+          "station_name": "汽车充电站(力氪松文新能源重卡站)",
+          "task_name": "汽车充电站(力氪松文新能源重卡站)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "153e6f82e0af5f7499d2efb940fafc8be6ec126881fcf38349e9d1087b538983",
+          "source_station_id": "B0LKR76003",
+          "station_name": "新电途汽车充电站(温县谦讯重卡充电站)",
+          "task_name": "新电途汽车充电站(温县谦讯重卡充电站)",
+          "city": "焦作市",
+          "district": "温县"
+        },
+        {
+          "source_key": "321e02fdb4b75bea567573dcec0c21a6e73eab5684cf292ab2c833c79bea0e1d",
+          "source_station_id": "B0LBPC0E2N",
+          "station_name": "力氪汽车充电站(沁阳航顺超充站)",
+          "task_name": "力氪汽车充电站(沁阳航顺超充站)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "f0f4e334be7900dedd160189b25567866ec689bde1045d40173fbfd844636ae0",
+          "source_station_id": "B0M6649DF1",
+          "station_name": "新电途汽车充电站(速电平价重卡站)",
+          "task_name": "新电途汽车充电站(速电平价重卡站)",
+          "city": "焦作市",
+          "district": "博爱县"
+        },
+        {
+          "source_key": "a99e36b255902fe5a38479830ac9d717ae4e65e1acdae6b7a45177dae75122f8",
+          "source_station_id": "B0LUDAAANJ",
+          "station_name": "力氪汽车充电站(沁阳中盛超级充电站)",
+          "task_name": "力氪汽车充电站(沁阳中盛超级充电站)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "2885a978287505c8cc1ca280ff65f80bddd402f0f7725641f9c0bd1bc13f5fc3",
+          "source_station_id": "B0LDJ7WBHI",
+          "station_name": "力氪汽车充电站(沁阳虎斌超速充电站)",
+          "task_name": "力氪汽车充电站(沁阳虎斌超速充电站)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "6666d75db4365ea1d7c0ad43f0a48d5137c7d99db5790012861ef1d267c3e992",
+          "source_station_id": "B0K2TZRGBK",
+          "station_name": "力氪汽车充电站(沁阳禾庆充电站)",
+          "task_name": "力氪汽车充电站(沁阳禾庆充电站)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "4d21339d29e4f7472782d06cf301f340d49696278d379ad8a11905cd567cda4c",
+          "source_station_id": "B0LB3S6N70",
+          "station_name": "力氪汽车充电站(驰骋新能源充电站)",
+          "task_name": "力氪汽车充电站(驰骋新能源充电站)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "1ff84ee729128bdd0c667872dc9e2ed93c8683d10932e6d53e4ca0e5093a8b84",
+          "source_station_id": "B0MABLSX73",
+          "station_name": "濮阳国能重卡超级充电站(濮阳国能新能源科技有限公司)",
+          "task_name": "濮阳国能重卡超级充电站(濮阳国能新能源科技有限公司)",
+          "city": "濮阳市",
+          "district": "濮阳县"
+        },
+        {
+          "source_key": "ada0b1ec4efc532285538b24eb20124e73739e5f87fc383d62ab36de9f5e29dd",
+          "source_station_id": "B0LB4HG7VR",
+          "station_name": "新电途汽车充电站(南乐县G341服务区重卡超充站)",
+          "task_name": "新电途汽车充电站(南乐县G341服务区重卡超充站)",
+          "city": "濮阳市",
+          "district": "南乐县"
+        },
+        {
+          "source_key": "d3a792a19553c54b08e86d71915259029aa5ed3fadd0a3d89adef777f8976337",
+          "source_station_id": "B0MGP513LA",
+          "station_name": "惠利充超级充电站(濮阳驿车超充重卡充电站)",
+          "task_name": "惠利充超级充电站(濮阳驿车超充重卡充电站)",
+          "city": "濮阳市",
+          "district": "清丰县"
+        },
+        {
+          "source_key": "924cddd86b2dd488634acc4c56fb9e52e2fc695616de05fb058389e56a02c5cd",
+          "source_station_id": "B0K2O57B5S",
+          "station_name": "运达科技超级充电站(运达科技液冷超充站·华为超充技术支持)",
+          "task_name": "运达科技超级充电站(运达科技液冷超充站·华为超充技术支持)",
+          "city": "濮阳市",
+          "district": "华龙区"
+        },
+        {
+          "source_key": "cab09a776ae4abb7ee997d5db6bf510588aeb283c7cf41f06c99d8d0675fcf8b",
+          "source_station_id": "B0MB39GKRR",
+          "station_name": "元电超级充电站(禹州光伏重卡站)",
+          "task_name": "元电超级充电站(禹州光伏重卡站)",
+          "city": "许昌市",
+          "district": "禹州市"
+        },
+        {
+          "source_key": "940a98809a0914783f7ac05aba0470ce55579e037fe0174becf083fd174d9479",
+          "source_station_id": "B0LR4HP9P9",
+          "station_name": "宇隆超级充电站(禹州建峰重卡充电站)",
+          "task_name": "宇隆超级充电站(禹州建峰重卡充电站)",
+          "city": "许昌市",
+          "district": "禹州市"
+        },
+        {
+          "source_key": "6991bc4f45ee3b2d5c86009d842d56e70e5c1d1d64a83839c3640ccfffdf7bcd",
+          "source_station_id": "B0L024N6XX",
+          "station_name": "京能汽车充电站(重卡充电站可开合法专票)",
+          "task_name": "京能汽车充电站(重卡充电站可开合法专票)",
+          "city": "许昌市",
+          "district": "禹州市"
+        },
+        {
+          "source_key": "43eafd2d9f7521ac23dd7e89291df70356b4a9e58fefff1bb8a3a310bb8f370d",
+          "source_station_id": "B0MBDZG107",
+          "station_name": "容新智充汽车充电站(洧川大桥重卡充电站)",
+          "task_name": "容新智充汽车充电站(洧川大桥重卡充电站)",
+          "city": "许昌市",
+          "district": "长葛市"
+        },
+        {
+          "source_key": "7fd0c3da30a351dab68d39fc7f0423c69c48de1b39d69308c2beecef08905772",
+          "source_station_id": "B0M6J5DNSM",
+          "station_name": "启充云充卡超充站(长葛京港澳高速重卡超充站)",
+          "task_name": "启充云充卡超充站(长葛京港澳高速重卡超充站)",
+          "city": "许昌市",
+          "district": "长葛市"
+        },
+        {
+          "source_key": "77535716a21ebf298fc6bf03d7ef70d3e6472bcfa1e371603be4e339e5e2a03d",
+          "source_station_id": "B0LKA59IJG",
+          "station_name": "腾付充汽车充电站(跃升重卡超充电站)",
+          "task_name": "腾付充汽车充电站(跃升重卡超充电站)",
+          "city": "许昌市",
+          "district": "禹州市"
+        },
+        {
+          "source_key": "77e208698efda439de355e4899f068bd70ce3b7d1f8a580d5379b85688f57c1f",
+          "source_station_id": "B0LAYBWD7P",
+          "station_name": "驿充电汽车充电站(昶源快速充电站360KW)",
+          "task_name": "驿充电汽车充电站(昶源快速充电站360KW)",
+          "city": "许昌市",
+          "district": "禹州市"
+        },
+        {
+          "source_key": "55e10520a874fd199a85b1978940bde9c380ac902df2ae02b140b6ba04f97cfd",
+          "source_station_id": "B0LDT4Z06M",
+          "station_name": "京能汽车充电站(京能闪达兔重卡超充站)",
+          "task_name": "京能汽车充电站(京能闪达兔重卡超充站)",
+          "city": "漯河市",
+          "district": "源汇区"
+        },
+        {
+          "source_key": "1d9b9ae9b5487c7b8893168c1876566f26ccddff9a23f9130605882f7f5aea52",
+          "source_station_id": "B0L241PDVT",
+          "station_name": "新电途汽车充电站(舞阳县安顺重卡充电站)",
+          "task_name": "新电途汽车充电站(舞阳县安顺重卡充电站)",
+          "city": "漯河市",
+          "district": "舞阳县"
+        },
+        {
+          "source_key": "678e2753e6c58d026dcb96fe780646d1dd170e9830e638d2dae4fa0b9795a2ec",
+          "source_station_id": "B0L09UCFCG",
+          "station_name": "特来电汽车充电站(漯河市政集团桂景园重卡公共充电站)",
+          "task_name": "特来电汽车充电站(漯河市政集团桂景园重卡公共充电站)",
+          "city": "漯河市",
+          "district": "召陵区"
+        },
+        {
+          "source_key": "d50fa06a66437a50bfa19f0aa1684901bac154d8ef1f4505af69b560e76ebaaf",
+          "source_station_id": "B0MAAH95DU",
+          "station_name": "力氪汽车充电站(佳德重卡)",
+          "task_name": "力氪汽车充电站(佳德重卡)",
+          "city": "三门峡市",
+          "district": "渑池县"
+        },
+        {
+          "source_key": "d9e3e903d15d24c4964f878d4467030d9b43a7885916d0374747369c861531ec",
+          "source_station_id": "B0K24HEXTE",
+          "station_name": "特来电汽车充电站(三门峡市诚美商贸物流中心重卡充电站)",
+          "task_name": "特来电汽车充电站(三门峡市诚美商贸物流中心重卡充电站)",
+          "city": "三门峡市",
+          "district": "湖滨区"
+        },
+        {
+          "source_key": "c7ff5df7f0af5737a41f22c486148f4e1a631cc8360d2f2cbfe3ce97dfbf1682",
+          "source_station_id": "B0M136N099",
+          "station_name": "特来电汽车充电站(三门峡中铁物流园重卡充电站)",
+          "task_name": "特来电汽车充电站(三门峡中铁物流园重卡充电站)",
+          "city": "三门峡市",
+          "district": "陕州区"
+        },
+        {
+          "source_key": "0c2d6d29f129b9a313e415d92f11d2a896f11f539f7c4c29e298cc8df2fe6dc2",
+          "source_station_id": "B0KR01EQWI",
+          "station_name": "蔚景云超级充电站(锦荣·氢电重卡超充站)",
+          "task_name": "蔚景云超级充电站(锦荣·氢电重卡超充站)",
+          "city": "三门峡市",
+          "district": "陕州区"
+        },
+        {
+          "source_key": "904c5cf52456d116c4bad8e6927f18b11294e5e0c5c03027f870056f69a72030",
+          "source_station_id": "B0L1YUEFFO",
+          "station_name": "玖行能源汽车充电站(三门峡大货车重卡充电站)",
+          "task_name": "玖行能源汽车充电站(三门峡大货车重卡充电站)",
+          "city": "三门峡市",
+          "district": "陕州区"
+        },
+        {
+          "source_key": "83d81a2dd672a59be6352381ef093d87086d976d6e5f9ad482a2512b3f59cba5",
+          "source_station_id": "B0MDUBYHT7",
+          "station_name": "腾付充汽车充电站(问道街集中式快充充电站)",
+          "task_name": "腾付充汽车充电站(问道街集中式快充充电站)",
+          "city": "南阳市",
+          "district": "新野县"
+        },
+        {
+          "source_key": "5d452baa1a8a0fdc6aeb53ac330fd3dc62d99c39577bd2825b64af0f976dd98e",
+          "source_station_id": "B0K0DKG2TR",
+          "station_name": "云快充超级充电站(中澳-312耀诚重卡超充站)",
+          "task_name": "云快充超级充电站(中澳-312耀诚重卡超充站)",
+          "city": "南阳市",
+          "district": "卧龙区"
+        },
+        {
+          "source_key": "f3177bd00eb6e796d691243be88c2a411da991e8065eb74ca06f7db3bce19a7c",
+          "source_station_id": "B0L6HKS9YJ",
+          "station_name": "金冠智充汽车充电站(南阳市博晟重卡充电站)",
+          "task_name": "金冠智充汽车充电站(南阳市博晟重卡充电站)",
+          "city": "南阳市",
+          "district": "卧龙区"
+        },
+        {
+          "source_key": "b30d3dd91b5af414e84d28b87c74c763d47ab15167942b6c2d42e0a239415dc7",
+          "source_station_id": "B0MDHRSOSW",
+          "station_name": "嘉盛智充汽车充电站(西峡亨欣重卡超充站)",
+          "task_name": "嘉盛智充汽车充电站(西峡亨欣重卡超充站)",
+          "city": "郑州市",
+          "district": "西峡县"
+        },
+        {
+          "source_key": "c0641abe9cc407422305264eee57f88f98baf4b0581195a5c379d69c7d059cee",
+          "source_station_id": "B0MG7ZGVQM",
+          "station_name": "金冠智充汽车充电站(南召长兴重卡充电站)",
+          "task_name": "金冠智充汽车充电站(南召长兴重卡充电站)",
+          "city": "南阳市",
+          "district": "南召县"
+        },
+        {
+          "source_key": "75f6be9ddc54ba0069b37afec70bd7f5cb53b4a0d8bcf961fc9ec1dd13157c51",
+          "source_station_id": "B0MDD4KI30",
+          "station_name": "云快充超级充电站(鑫城重卡充电站)",
+          "task_name": "云快充超级充电站(鑫城重卡充电站)",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "983f9f1fe9f18af0976e53876049eab67e946cd766ea797c585a3f8ea9616c2f",
+          "source_station_id": "B0LRD45QL0",
+          "station_name": "惠利充汽车充电站(景博重卡超级充电站)",
+          "task_name": "惠利充汽车充电站(景博重卡超级充电站)",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "f834dc7cc42e6fe6401f413dbcd2a927eda2e03cc5ab2a6cbee19169c4d245e4",
+          "source_station_id": "B0JK3LHT35",
+          "station_name": "智链充超级充电站(北环加油站小车及重卡超充站)",
+          "task_name": "智链充超级充电站(北环加油站小车及重卡超充站)",
+          "city": "商丘市",
+          "district": "柘城县"
+        },
+        {
+          "source_key": "075df3627c771d3206cd3fe1c48c396eb318947ca52cfcd460426e9e200e9bfa",
+          "source_station_id": "B0MDK4BM7U",
+          "station_name": "云快充超级充电站(卓旭新能源重卡小卡轿车快速充电站)",
+          "task_name": "云快充超级充电站(卓旭新能源重卡小卡轿车快速充电站)",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "c5a940c3977c9608728fd0265b11061da55896543a1821370f5589b2bc281df7",
+          "source_station_id": "B0L2M4WJZF",
+          "station_name": "京能汽车充电站(祥辉永夏路口重卡超充站)",
+          "task_name": "京能汽车充电站(祥辉永夏路口重卡超充站)",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "af68e8582f41c906e4db0298e84465bbfed013529a75bfd6a8133be40fc1b5b1",
+          "source_station_id": "B0L2M4XXVC",
+          "station_name": "京能汽车充电站(祥辉陈集钢厂重卡超充站)",
+          "task_name": "京能汽车充电站(祥辉陈集钢厂重卡超充站)",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "5843d12f93426fba03b736be7e692bb80e19d04678ce72408cd91adbd325ea0a",
+          "source_station_id": "B0MDJ1LA9G",
+          "station_name": "京能汽车充电站(永城市恒程仓储充电站)",
+          "task_name": "京能汽车充电站(永城市恒程仓储充电站)",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "54334b78ba55b603333b5e3f7e7ece839260df27f75f103810d1e1e4780d643a",
+          "source_station_id": "B0LKVH49SK",
+          "station_name": "力氪汽车充电站(峰盛重卡充电桩)",
+          "task_name": "力氪汽车充电站(峰盛重卡充电桩)",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "e30ee3599e8344e0be2a49b1b77634be1ea0b0270d1196e191e19adea30b6e6d",
+          "source_station_id": "B0JG9H7ZRM",
+          "station_name": "民权运昌超级充电站(民权运昌新能源科技站)",
+          "task_name": "民权运昌超级充电站(民权运昌新能源科技站)",
+          "city": "商丘市",
+          "district": "民权县"
+        },
+        {
+          "source_key": "314a0d02c047ded9238f467f8b2444591c1ec8176ec01dd8ecdca9e5fb182460",
+          "source_station_id": "B0M6GSORKK",
+          "station_name": "力氪汽车充电站(金力重卡)",
+          "task_name": "力氪汽车充电站(金力重卡)",
+          "city": "商丘市",
+          "district": "柘城县"
+        },
+        {
+          "source_key": "49543410ac224de5efc90b2588f470106e01cf5b152724b7413b7d44730094e5",
+          "source_station_id": "B0M6FZXKYT",
+          "station_name": "惠利充超级充电站(永城市鑫辉重卡超充站)",
+          "task_name": "惠利充超级充电站(永城市鑫辉重卡超充站)",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "ae848b82ce1ae73736fc5eea8a42e9042c16eb260caacb77a4f7eb61df551b66",
+          "source_station_id": "B0MAZCDO67",
+          "station_name": "惠利充超级充电站(鑫达重卡充电站)",
+          "task_name": "惠利充汽车充电站(鑫达重卡充电站)",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "a3b6b5144a9abae3ced49d670a6c8a75023ed886b7a16e19228482fd171d8e92",
+          "source_station_id": "B0LK4HWVXA",
+          "station_name": "永城市国投重卡超级充电站(潘庄物流港超充站)",
+          "task_name": "永城市国投重卡超级充电站(潘庄物流港超充站)",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "a68b5260e59847220f433bf1be2cd34c0ea2284deda49a8a6690d0295bcc726c",
+          "source_station_id": "B0L2N4HLMH",
+          "station_name": "京能汽车充电站(鑫辉重卡超充电站)",
+          "task_name": "京能汽车充电站(鑫辉重卡超充电站)",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "c840a05b6bd0dd1d39808312aa5f76e88051886c7524d8afab1502e6da760ea0",
+          "source_station_id": "B0LU7M006T",
+          "station_name": "新电途汽车充电站(商丘中福石油超级充电站可充半挂车辆)",
+          "task_name": "新电途汽车充电站(商丘中福石油超级充电站可充半挂车辆)",
+          "city": "商丘市",
+          "district": "梁园区"
+        },
+        {
+          "source_key": "7017e5a277842874dc74122f7360acaaa37630f0875e917b9fab19dc95efd10b",
+          "source_station_id": "B0MAZUDEQT",
+          "station_name": "保丰重卡超充充电站",
+          "task_name": "保丰重卡超充充电站",
+          "city": "商丘市",
+          "district": "永城市"
+        },
+        {
+          "source_key": "7bb05d3d6133c0eefd47e14f73cfbd4319ab9b33fd759c8f44b3c4681af32fe4",
+          "source_station_id": "B0MBG433FN",
+          "station_name": "广汽能源汽车充电站(重卡充电站广汽能源大广高速泼河服务区大庆方向)",
+          "task_name": "广汽能源汽车充电站(重卡充电站广汽能源大广高速泼河服务区大庆方向)",
+          "city": "信阳市",
+          "district": "光山县"
+        },
+        {
+          "source_key": "737702beb985a2cf7115737686343ae00e73288c8fa27fc9e66d1834d2dee659",
+          "source_station_id": "B0M6P5LYNH",
+          "station_name": "力氪汽车充电站(尹台村重卡超快)",
+          "task_name": "力氪汽车充电站(尹台村重卡超快)(暂停营业)",
+          "city": "信阳市",
+          "district": "浉河区"
+        },
+        {
+          "source_key": "19142b69f68c47182bff58773a8dcb0a81fe8ab4566b561b2cfc742832c626e2",
+          "source_station_id": "B0MDTBBENH",
+          "station_name": "中国石化超级充电站(魏岗重卡充电站)",
+          "task_name": "中国石化超级充电站(魏岗重卡充电站)",
+          "city": "信阳市",
+          "district": "潢川县"
+        },
+        {
+          "source_key": "81c535fefa42552885f72fd3941564dd450dddf2beb9a9a546fe08c1498ab91c",
+          "source_station_id": "B0MABRTJSB",
+          "station_name": "惠利充超级充电站(锐能重卡超级充电站)",
+          "task_name": "惠利充超级充电站(锐能重卡超级充电站)",
+          "city": "信阳市",
+          "district": "固始县"
+        },
+        {
+          "source_key": "b713978c592b355e30a568eb67f93514218d4c77c1dd195d633bedef6763a8fa",
+          "source_station_id": "B0MDUHZQKP",
+          "station_name": "众宏重卡超级充电站(众宏新能源兆瓦超充站)",
+          "task_name": "众宏重卡超级充电站(众宏新能源兆瓦超充站)",
+          "city": "周口市",
+          "district": "项城市"
+        },
+        {
+          "source_key": "3cee871d2dfc1720922f32822010a01ad560cee7a031b2cc5146f2d7c8459cf9",
+          "source_station_id": "B0MAZ4BX2H",
+          "station_name": "通达云重卡超级充电站(扶沟县腾充新能源有限公司)",
+          "task_name": "通达云重卡超级充电站(扶沟县腾充新能源有限公司)",
+          "city": "周口市",
+          "district": "扶沟县"
+        },
+        {
+          "source_key": "f5ed5dbd84495b59f3bf6ffbb1fea224c539f4687a56fb9ccc30d2dc8b8fd621",
+          "source_station_id": "B0MG5Z0GL4",
+          "station_name": "容新智充汽车充电站(豫鑫重卡充电站)",
+          "task_name": "容新智充汽车充电站(豫鑫重卡充电站)",
+          "city": "周口市",
+          "district": "鹿邑县"
+        },
+        {
+          "source_key": "7df3b5c62ef1876d19dc39a3104f3c11339158eba754f0509426e6aa1e7a7efb",
+          "source_station_id": "B0MU1D18I6",
+          "station_name": "特来电(特来电周口兴源建材龙源路重卡充电站)",
+          "task_name": "特来电(特来电周口兴源建材龙源路重卡充电站)",
+          "city": "周口市",
+          "district": "川汇区"
+        },
+        {
+          "source_key": "7185f413d99b28feddc55fd37ee82dc87b66cc6cc1a0f53969f8a8c3bd95bfc8",
+          "source_station_id": "B0MUAH0XOL",
+          "station_name": "小桔充电汽车充电站(周口驿能重卡超充电站)",
+          "task_name": "小桔充电汽车充电站(周口驿能重卡超充电站)",
+          "city": "周口市",
+          "district": "淮阳区"
+        },
+        {
+          "source_key": "dc2750cf4ade72f43fa61014f4137143917a1211301e26c1a289feaf4b381e96",
+          "source_station_id": "B0LK3KXJVP",
+          "station_name": "云快充超级充电站(贝壳新能源超快充充电站)",
+          "task_name": "云快充超级充电站(贝壳新能源超快充充电站)",
+          "city": "周口市",
+          "district": "川汇区"
+        },
+        {
+          "source_key": "294973c65cdc5386a12f6442781264278b0aeed244b74e1cd6f25afa769ea0dc",
+          "source_station_id": "B0LAJ4IGZS",
+          "station_name": "广汽能源汽车充电站(重卡充电站广汽能源大广高速新蔡服务区广州方向)",
+          "task_name": "广汽能源汽车充电站(重卡充电站广汽能源大广高速新蔡服务区广州方向)",
+          "city": "驻马店市",
+          "district": "新蔡县"
+        },
+        {
+          "source_key": "343a77b487a5ea3a2f7213b33cde9a8ef886a31260bebf706f487d3539549b25",
+          "source_station_id": "B0M6LC6MJY",
+          "station_name": "新电途汽车充电站(智充充电站崇礼乡360kw充电堆超级快充站)",
+          "task_name": "新电途汽车充电站(智充充电站崇礼乡360kw充电堆超级快充站)",
+          "city": "驻马店市",
+          "district": "上蔡县"
+        },
+        {
+          "source_key": "48a0cb2f69bcd6dc8febc0e1792dc111fd1744ca9ee63af7250a75c48c248457",
+          "source_station_id": "B0MDT5BJH6",
+          "station_name": "力氪汽车充电站(民和重卡超充站)",
+          "task_name": "力氪汽车充电站(民和重卡超充站)",
+          "city": "驻马店市",
+          "district": "确山县"
+        },
+        {
+          "source_key": "620c345fc05d543bee78edc498653fa745170352e2ad12855cb1aebe56b9ecdf",
+          "source_station_id": "B0LUAPJBBA",
+          "station_name": "新电途汽车充电站(确山重链重卡超充站)",
+          "task_name": "新电途汽车充电站(确山重链重卡超充站)",
+          "city": "驻马店市",
+          "district": "确山县"
+        },
+        {
+          "source_key": "c6fde665675e5fdf162edcff49687a9dc1f9934b572f6b92fa8fc5002cf7b5b6",
+          "source_station_id": "B0M6APYGQK",
+          "station_name": "特来电汽车充电站(特来电驻马店城投特来电平舆重卡充电站)",
+          "task_name": "特来电汽车充电站(特来电驻马店城投特来电平舆重卡充电站)",
+          "city": "驻马店市",
+          "district": "平舆县"
+        },
+        {
+          "source_key": "b885d90157e146454cb299245d1310947159b344d153cbdfb88d05303515fb22",
+          "source_station_id": "B0LUBHAEJV",
+          "station_name": "腾付充汽车充电站(南库重卡超充站)",
+          "task_name": "腾付充汽车充电站(南库重卡超充站)",
+          "city": "驻马店市",
+          "district": "确山县"
+        },
+        {
+          "source_key": "926f0e7aaaa848987965f2cca6f449a12a5e22965069718528b383fd49174450",
+          "source_station_id": "B0MD649QYM",
+          "station_name": "京能汽车充电站(济源市金瑞充电站)",
+          "task_name": "京能汽车充电站(济源市金瑞充电站)",
+          "city": "济源市",
+          "district": "济源市"
+        },
+        {
+          "source_key": "e53ca8bafb03b994706bbc2cd97ae08f8b6f2cb81e6eb9f66418bc68b733ae7e",
+          "source_station_id": "B0MGCKDHEX",
+          "station_name": "合小智充电超级充电站(济西重卡超充站)",
+          "task_name": "合小智充电超级充电站(济西重卡超充站)",
+          "city": "济源市",
+          "district": "济源市"
+        },
+        {
+          "source_key": "1d0f0a68d228c221431d433dad67a0096ceb2edcffdf73a97e3f1c493bd62596",
+          "source_station_id": "B0MUM9X6QT",
+          "station_name": "云快充汽车充电站(蓝鑫重卡充电站)",
+          "task_name": "云快充汽车充电站(蓝鑫重卡充电站)",
+          "city": "南阳市",
+          "district": "方城县"
+        },
+        {
+          "source_key": "f63e9efcb503b9921495f8d5e0c59e1e63794dbaa613bebbc31f67c943c05a5b",
+          "source_station_id": "B0MUG4H127",
+          "station_name": "通达云充汽车充电站(产投梨河重卡充电站)",
+          "task_name": "通达云充汽车充电站(产投梨河重卡充电站)",
+          "city": "郑州市",
+          "district": "新郑市"
+        },
+        {
+          "source_key": "86e6f9342e38f6068d0fe707decfaaaff13b24e23eb61812849040a8c62e9612",
+          "source_station_id": "B0MUS48ZMW",
+          "station_name": "嘉盛智充汽车充电站(阔路重卡超充站)",
+          "task_name": "嘉盛智充汽车充电站(阔路重卡超充站)",
+          "city": "洛阳市",
+          "district": "伊川县"
+        },
+        {
+          "source_key": "f6673f93c3fd7ffbaad3df37cfa441cf65d692b4c9d7b696e670cc908dafb5c1",
+          "source_station_id": "B0MUD4GOE1",
+          "station_name": "互联充电汽车充电站(洛阳星合电气重卡)",
+          "task_name": "互联充电汽车充电站(洛阳星合电气重卡)",
+          "city": "洛阳市",
+          "district": "宜阳县"
+        },
+        {
+          "source_key": "828bf86f83ccab75fcc35506633fc0a9a048df244b04a9e4021068fbec094057",
+          "source_station_id": "B0MUZ641N7",
+          "station_name": "云快充超级充电站(小电匠重卡充电站)",
+          "task_name": "云快充超级充电站(小电匠重卡充电站)",
+          "city": "焦作市",
+          "district": "博爱县"
+        },
+        {
+          "source_key": "5332a810410c2ee5e8108038ec73e3f0d7b87154c8c7fcee3239f49247ab5272",
+          "source_station_id": "B0MUA72LYE",
+          "station_name": "新电途汽车充电站(速电光储充示范重卡站)",
+          "task_name": "新电途汽车充电站(速电光储充示范重卡站)",
+          "city": "焦作市",
+          "district": "博爱县"
+        },
+        {
+          "source_key": "796350864d947b0cef11ba0a0537d4725d1ef3907c0dd20790f7e3d5be15dd5b",
+          "source_station_id": "B0LUTC6A3B",
+          "station_name": "云快充超级充电站(源远重卡充电站)",
+          "task_name": "云快充超级充电站(源远重卡充电站)",
+          "city": "鹤壁市",
+          "district": "浚县"
+        },
+        {
+          "source_key": "f0186fe217b0df9231b6b1776f3238fe83e49f4235eadaa8864d4c7b4722a2af",
+          "source_station_id": "B0LBFUTGYO",
+          "station_name": "力氪汽车充电站(泓博快速充电站)",
+          "task_name": "力氪汽车充电站(泓博快速充电站)",
+          "city": "焦作市",
+          "district": "沁阳市"
+        },
+        {
+          "source_key": "ba75732d9a6fff84e558266a8d1c417e06a12877dca5683d37d957c854372033",
+          "source_station_id": "B0MBBGVLPI",
+          "station_name": "惠利充汽车充电站(恒风重卡1号站)",
+          "task_name": "惠利充汽车充电站(恒风重卡1号站)",
+          "city": "安阳市",
+          "district": "林州市"
+        },
+        {
+          "source_key": "c2a2bff5152b580346c4e56fb82d6e32368ee235f5f38187905ec07c8b8a208c",
+          "source_station_id": "B0IDMCXR4T",
+          "station_name": "中国铁塔电动汽车充电站(恒飞站)",
+          "task_name": "中国铁塔电动汽车充电站(恒飞站)",
+          "city": "安阳市",
+          "district": "殷都区"
+        },
+        {
+          "source_key": "9a8b2c698d7a895e5333d50c094d0e9e4d0ad0ce6d0e67947df3ec9c4b1e5672",
+          "source_station_id": "B0L2MBX6KB",
+          "station_name": "闪象智充汽车充电站(跃瑞重卡)",
+          "task_name": "闪象智充汽车充电站(跃瑞重卡)",
+          "city": "郑州市",
+          "district": "登封市"
+        },
+        {
+          "source_key": "7a01cddc4466b3c87f20ad24232dde439a81a6cd04b64255a788e3f8da484f58",
+          "source_station_id": "B0KKDU5STY",
+          "station_name": "力氪汽车充电站(万泓丰鹤充电站)",
+          "task_name": "力氪汽车充电站(万泓丰鹤充电站)",
+          "city": "鹤壁市",
+          "district": "山城区"
+        },
+        {
+          "source_key": "1342eea06edd679949bb6523bad1fa18aa83b1fcbcd31813364d20d3f18c4510",
+          "source_station_id": "B0L6LCGPV5",
+          "station_name": "力氪汽车充电站(景源充电站)",
+          "task_name": "力氪汽车充电站(景源充电站)",
+          "city": "安阳市",
+          "district": "安阳县"
+        },
+        {
+          "source_key": "34ba830c3bf6bd51da560430c12054066defbb90b225a6e998d1150c1a9127a5",
+          "source_station_id": "B0LGKCPPSQ",
+          "station_name": "闪象智充汽车充电站(智鑫重卡充电站)",
+          "task_name": "闪象智充汽车充电站(智鑫重卡充电站)",
+          "city": "郑州市",
+          "district": "登封市"
+        },
+        {
+          "source_key": "0309ae3eb5c5396947244474248d3629818f11b1b319394e156f48a99d2659b0",
+          "source_station_id": "B0MDM5Y4FS",
+          "station_name": "云快充超级充电站(鹿邑县唐集高速宾馆楼下充电站)",
+          "task_name": "云快充超级充电站(鹿邑县唐集高速宾馆楼下充电站)",
+          "city": "周口市",
+          "district": "鹿邑县"
+        },
+        {
+          "source_key": "c61ddc474a5a4cfcd2428c571506b57dfe60fbdd4a24757f0aeb1522d71b7548",
+          "source_station_id": "B0K1S79YOF",
+          "station_name": "力氪汽车充电站(淇县窦氏重卡站)",
+          "task_name": "淇县窦氏重卡站",
+          "city": "鹤壁市",
+          "district": "淇县"
+        },
+        {
+          "source_key": "7ba9d01852e57c6ac37dc2fd6c082de09b0216655e24b19c21a7a44c5c29cd51",
+          "source_station_id": "B0K16CUOSE",
+          "station_name": "力氪汽车充电站(淇县窦氏重卡站)",
+          "task_name": "力氪汽车充电站(淇县窦氏重卡站)",
+          "city": "",
+          "district": ""
+        },
+        {
+          "source_key": "2cc18401b7296e7175f6b9c1443f5b7f800416c214d07ba8ef03e0da4ff82daf",
+          "source_station_id": "B0M6UXT7IE",
+          "station_name": "平高智联超级充电站(小庄重卡充电站)",
+          "task_name": "平高智联超级充电站(小庄重卡充电站)",
+          "city": "济源市",
+          "district": "济源市"
+        },
+        {
+          "source_key": "7bdf4eb607a8605414b17302ad81ad9a6f46d1846f5e164a94b9ddf9b5d49963",
+          "source_station_id": "B0JKY7CIID",
+          "station_name": "中国石化汽车充电站(中国石化第二十充电站)",
+          "task_name": "中国石化汽车充电站(中国石化第二十充电站)",
+          "city": "济源市",
+          "district": "济源市"
+        },
+        {
+          "source_key": "5617471d94ff26c41d030ed8e0e841f33bd25c77c49022a550041dc117a78f72",
+          "source_station_id": "B0L3ZC0Y9W",
+          "station_name": "新电途汽车充电站(洛界重卡充电站)",
+          "task_name": "新电途汽车充电站(洛界重卡充电站)",
+          "city": "许昌市",
+          "district": "襄城县"
+        },
+        {
           "source_key": "7c868ff95f6e0b9fad3e6c58b6ed99a80bf8367941f9b856a688061f45646013",
           "source_station_id": "B0L6XAZDB8",
           "station_name": "力氪汽车充电站(珑宝快速充电站)",
@@ -8533,14 +8829,6 @@
           "task_name": "新电途汽车充电站(万安重卡充电站)",
           "city": "洛阳市",
           "district": "伊川县"
-        },
-        {
-          "source_key": "d0842e840387da0418a6b8c35445f24d874eae76bf3634d6c68b73ac5dd254d5",
-          "source_station_id": "B0MUA6YKIM",
-          "station_name": "比亚迪闪充汽车充电站(洛阳吉利南陈小区)",
-          "task_name": "比亚迪闪充汽车充电站(洛阳吉利南陈小区)",
-          "city": "洛阳市",
-          "district": "孟津区"
         },
         {
           "source_key": "fd2945a188d5b5985f1f9f84611118dff60fb4ad87c9fb48f4e5e79e053978e7",
@@ -8615,68 +8903,12 @@
           "district": "固始县"
         },
         {
-          "source_key": "f105d12baccb4a4f4f6fd77d91588855156c90239c14279ed74dea4d3e9e6b09",
-          "source_station_id": "B0MRA7ZQSO",
-          "station_name": "启充云超级充电站(潢川县光储充一体重卡小车充电站)",
-          "task_name": "启充云超级充电站(潢川县光储充一体重卡小车充电站)",
-          "city": "信阳市",
-          "district": "潢川县"
-        },
-        {
-          "source_key": "6d6e81741eb165375b379539792164b8a86f785f18d66f4eeb96a32a1f57f213",
-          "source_station_id": "B0MUVAVOS4",
-          "station_name": "星星充电汽车充电站(中联重卡400KW超充站)",
-          "task_name": "星星充电汽车充电站(中联重卡400KW超充站)",
-          "city": "信阳市",
-          "district": "平桥区"
-        },
-        {
-          "source_key": "5dcc2c28c1714bf10b5c72431f49a9a707065fe35f886025e2fff0030fe263f5",
-          "source_station_id": "B0MR6BY1WI",
-          "station_name": "腾付充汽车充电站(河南建元建材重卡充电站)",
-          "task_name": "腾付充汽车充电站(河南建元建材重卡充电站)",
-          "city": "濮阳市",
-          "district": "清丰县"
-        },
-        {
           "source_key": "df41ba5b4ac751fefe6f84673d646e3652441ee16aa233273a02d10bd6c3b533",
           "source_station_id": "B0LKJB1C73",
           "station_name": "卫莱电汽车充电站(八公桥重卡站)",
           "task_name": "卫莱电汽车充电站(八公桥重卡站)",
           "city": "濮阳市",
           "district": "濮阳县"
-        },
-        {
-          "source_key": "d5caf9582fd1256e742dcb72c42a6894ba22a184a3d0a2e55ee56e6b1657ce5b",
-          "source_station_id": "B0MRKA2R9E",
-          "station_name": "特来电汽车充电站(灵宝函谷关重卡充电示范站)",
-          "task_name": "特来电汽车充电站(灵宝函谷关重卡充电示范站)",
-          "city": "三门峡市",
-          "district": "灵宝市"
-        },
-        {
-          "source_key": "c98a2d9fc4bfb80a13c1954ffc04b725a7febc3d4674c5a1d80c13eb25661d14",
-          "source_station_id": "B0MR6KY0VB",
-          "station_name": "云快充超级充电站(胡寨液冷超充站宏达路)",
-          "task_name": "云快充超级充电站(胡寨液冷超充站宏达路)",
-          "city": "许昌市",
-          "district": "建安区"
-        },
-        {
-          "source_key": "c5e89f34c808e07fc26d88db8cc20861b936e2e1931a57863f18eb4f5a7d827c",
-          "source_station_id": "B0MRD59QH4",
-          "station_name": "启充云超级充电站(长葛曙信光储充重卡充电站)",
-          "task_name": "启充云超级充电站(长葛曙信光储充重卡充电站)",
-          "city": "许昌市",
-          "district": "长葛市"
-        },
-        {
-          "source_key": "83e4e68506eee6bf8ce3e02e533548032c429ebb2842d4a7de47cc350be4027c",
-          "source_station_id": "B0M2OA05PO",
-          "station_name": "特来电汽车充电站(许昌长葛G107弘润2期重卡充电站)",
-          "task_name": "特来电汽车充电站(许昌长葛G107弘润2期重卡充电站)",
-          "city": "",
-          "district": ""
         },
         {
           "source_key": "89446a2fc06f9805ba0985824728c312f2e15195c5d02c7bfd1f1e44df5625b9",
@@ -8687,34 +8919,10 @@
           "district": "禹州市"
         },
         {
-          "source_key": "b3816daefa766f978e4880c3813f30d0d3e759c39b41da34fc49d0d48aaefcbe",
-          "source_station_id": "B0MRND75Q7",
-          "station_name": "惠利充超级充电站(鄢陵南高速路口重卡站)",
-          "task_name": "惠利充超级充电站(鄢陵南高速路口重卡站)",
-          "city": "许昌市",
-          "district": "鄢陵县"
-        },
-        {
-          "source_key": "8fb938cfb9f87de7a54292ff1bdb659bf0cf763fb4fe076d2932180dc48f81cc",
-          "source_station_id": "B0MAKOPDCN",
-          "station_name": "新电途汽车充电站(鸿蒙智行授权用户中心·焦作丰收路超充站)",
-          "task_name": "新电途汽车充电站(鸿蒙智行授权用户中心·焦作丰收路超充站)",
-          "city": "焦作市",
-          "district": "解放区"
-        },
-        {
           "source_key": "4e68794046ea04c887e8caf9a54a53624e4f21afff0b101552eecc4fe7699e48",
           "source_station_id": "B0LUGPAXO5",
           "station_name": "车电网汽车充电站(焦作市政务服务东大厅北)",
           "task_name": "车电网汽车充电站(焦作市政务服务东大厅北)",
-          "city": "焦作市",
-          "district": "解放区"
-        },
-        {
-          "source_key": "f6e041666d289b674d4ff3296385ea2b59a70f4e6576f19491074f5a64e033d1",
-          "source_station_id": "B0MGGN2UCO",
-          "station_name": "比亚迪闪充汽车充电站(比亚迪焦作欣博源4S店)",
-          "task_name": "比亚迪闪充汽车充电站(比亚迪焦作欣博源4S店)",
           "city": "焦作市",
           "district": "解放区"
         },
@@ -8727,34 +8935,10 @@
           "district": "解放区"
         },
         {
-          "source_key": "3cbc2b9159b83a89e0f3e31a3f6a941cef63606f1e00959cb5ea2ba2b959e4d1",
-          "source_station_id": "B0MU66TMC5",
-          "station_name": "比亚迪闪充汽车充电站(焦作新店花园)",
-          "task_name": "比亚迪闪充汽车充电站(焦作新店花园)",
-          "city": "焦作市",
-          "district": "解放区"
-        },
-        {
-          "source_key": "7e9c08828c69b56c755207ae2301685f2a87a092a875e46b5130148e38c91a5f",
-          "source_station_id": "B0MDYGTQLM",
-          "station_name": "昆仑网电汽车充电站(昆仑网电焦作人民路充电站)",
-          "task_name": "昆仑网电汽车充电站(昆仑网电焦作人民路充电站)",
-          "city": "焦作市",
-          "district": "解放区"
-        },
-        {
           "source_key": "610824acb459e5ae5cbff88184c9fb96c08e6da947d3b7afc8c552977236ac26",
           "source_station_id": "B0MDJ6H98G",
           "station_name": "比亚迪闪充汽车充电站(焦作宏达名车城)",
           "task_name": "比亚迪闪充汽车充电站(焦作宏达名车城)",
-          "city": "焦作市",
-          "district": "解放区"
-        },
-        {
-          "source_key": "6406efeb20e59b4d62d92af42cb4874f09f8b0faf747a6b2dffee5029778aa43",
-          "source_station_id": "B0MU96WSI5",
-          "station_name": "比亚迪闪充汽车充电站(焦作绿都叠翠园)",
-          "task_name": "比亚迪闪充汽车充电站(焦作绿都叠翠园)",
           "city": "焦作市",
           "district": "解放区"
         },
@@ -8775,14 +8959,6 @@
           "district": "温县"
         },
         {
-          "source_key": "6ed66604a940b50acfd29f5f02eb0cad453fcc7402898e6e9ed0d7b6b353ecee",
-          "source_station_id": "B0KKDP426L",
-          "station_name": "新电途汽车充电站(飞翔运输重卡充电站)",
-          "task_name": "新电途汽车充电站(飞翔运输重卡充电站)",
-          "city": "焦作市",
-          "district": "沁阳市"
-        },
-        {
           "source_key": "5241611053d77ef2fadc24651bac3fcf03a5116d69110a9100da48d6a2ebe56a",
           "source_station_id": "B0MRKK2SZT",
           "station_name": "云快充超级充电站(创宏重卡超级充电站)",
@@ -8799,44 +8975,12 @@
           "district": "祥符区"
         },
         {
-          "source_key": "b5d25fb69828af58f43c42ca3a5a2139b39c2ca872556f7da489d36038b6cc9b",
-          "source_station_id": "B0MD9KN811",
-          "station_name": "滴滴充电汽车充电站(确山德高重卡液冷超级充电站)",
-          "task_name": "滴滴充电汽车充电站(确山德高重卡液冷超级充电站)",
-          "city": "驻马店市",
-          "district": "确山县"
-        },
-        {
-          "source_key": "c3ecde42bdcca9a7c1a32b81039d50794bda7398da6a6e8ae30571fcd1e60787",
-          "source_station_id": "B0MRAL0QKT",
-          "station_name": "益冠超级充电站(上蔡县站)",
-          "task_name": "益冠超级充电站(上蔡县站)",
-          "city": "驻马店市",
-          "district": "上蔡县"
-        },
-        {
-          "source_key": "0e47a4dddfff7d7a0dc30f42864cf671345d60bf8f31a03f187e7abb9bcb78ce",
-          "source_station_id": "B0MUUCXJV6",
-          "station_name": "云快充超级充电站(林州河顺光储超充站)",
-          "task_name": "云快充超级充电站(林州河顺光储超充站)",
-          "city": "安阳市",
-          "district": "林州市"
-        },
-        {
           "source_key": "2c26d0f32a4650a3109a763c46bd9d4c43687c8e7da8e66a550cfe10d19bbe98",
           "source_station_id": "B0MUJMSAKR",
           "station_name": "新电途汽车充电站(林州市禾电能源有限公司)",
           "task_name": "新电途汽车充电站(林州市禾电能源有限公司)",
           "city": "安阳市",
           "district": "林州市"
-        },
-        {
-          "source_key": "a9b734c6ef1532a412327c71c9bd4b03b85cde71093106d7dbc4f6dd43ac6280",
-          "source_station_id": "B0MGSAM3M4",
-          "station_name": "中国铁塔超级充电站(河南安阳泳骏石料厂重卡充电站)",
-          "task_name": "中国铁塔超级充电站(河南安阳泳骏石料厂重卡充电站)",
-          "city": "安阳市",
-          "district": "安阳县"
         },
         {
           "source_key": "180c254cf1df8b320c7f34ec2e0db75f56bfac299f42ee07428f5bad7b7f1811",
@@ -8847,28 +8991,12 @@
           "district": "文峰区"
         },
         {
-          "source_key": "b01e7822731c45865d36a89177e6a523ccd04471cbec741ad2470407d9efb5d1",
-          "source_station_id": "B0MU34NJ0A",
-          "station_name": "云快充超级充电站(封丘留光北侯重卡超充站二期北)",
-          "task_name": "云快充超级充电站(封丘留光北侯重卡超充站二期北)",
-          "city": "新乡市",
-          "district": "封丘县"
-        },
-        {
           "source_key": "554eaadd7538d0bc249292820b7b13ac3cc07fe4efade451d90e492727f1ccb3",
           "source_station_id": "B0LK5RTWAV",
           "station_name": "惠利充汽车充电站(李洋充电桩)",
           "task_name": "惠利充汽车充电站(李洋充电桩)",
           "city": "新乡市",
           "district": "辉县市"
-        },
-        {
-          "source_key": "ffaa19cb3046197e4c0fceefbdeced6c7613ec6acf1750eb78c8ad42a65b70ac",
-          "source_station_id": "B0MRB68YIG",
-          "station_name": "云快充超级充电站(旭能重卡充电站)",
-          "task_name": "云快充超级充电站(旭能重卡充电站)",
-          "city": "新乡市",
-          "district": "延津县"
         },
         {
           "source_key": "2dd5e66e58c426da2d4edc87587d64374e52e20e3c6b57e0f645352384934567",
@@ -8879,76 +9007,12 @@
           "district": "延津县"
         },
         {
-          "source_key": "7993d1a57cabbeda4b5e6200403f219e9fd96fdf3cb27ee900daf92516f91349",
-          "source_station_id": "B0MGT57DHE",
-          "station_name": "旭电通汽车充电站(大金店丙晟重卡超充站)",
-          "task_name": "旭电通汽车充电站(大金店丙晟重卡超充站)",
-          "city": "郑州市",
-          "district": "登封市"
-        },
-        {
-          "source_key": "a5e20a2899e1f661f9a535c68055ac6edb291b31c9f7eccb70487dacd50c3384",
-          "source_station_id": "B0MAN5PYRX",
-          "station_name": "新电途汽车充电站(程诚唐庄重卡超充站)",
-          "task_name": "新电途汽车充电站(程诚唐庄重卡超充站)",
-          "city": "郑州市",
-          "district": "登封市"
-        },
-        {
-          "source_key": "93badb84bd384cb1bd20e83cce07eb771174833d94a79e9531f0ded37d04ec52",
-          "source_station_id": "B0L24KMZ4G",
-          "station_name": "新电途汽车充电站(郑州小龙重卡充电站)",
-          "task_name": "新电途汽车充电站(郑州小龙重卡充电站)",
-          "city": "郑州市",
-          "district": "新密市"
-        },
-        {
-          "source_key": "73c014e90e0ae3e54a7d2ab1069669e0e0f86e8af4898e730c8e8919fccafd6a",
-          "source_station_id": "B0L3UBGQ61",
-          "station_name": "新电途汽车充电站(东讯快速充电站)",
-          "task_name": "新电途汽车充电站(东讯快速充电站)",
-          "city": "郑州市",
-          "district": "新密市"
-        },
-        {
-          "source_key": "ecd42b363423a5ef94efc40b223ed8c78c0d07409087ee661278a47eedbba743",
-          "source_station_id": "B0LRRGK094",
-          "station_name": "特来电汽车充电站(特来电郑州新密平陌镇兴阳线重卡充电站)",
-          "task_name": "特来电汽车充电站(特来电郑州新密平陌镇兴阳线重卡充电站)",
-          "city": "郑州市",
-          "district": "新密市"
-        },
-        {
           "source_key": "cfc8a2c53f301278f6e432919bc632f892dcb917fc259210bb324212bbc5be6c",
           "source_station_id": "B0LKSZHQRX",
           "station_name": "容新智充汽车充电站(鑫全重卡充电站)",
           "task_name": "容新智充汽车充电站(鑫全重卡充电站)",
           "city": "郑州市",
           "district": "荥阳市"
-        },
-        {
-          "source_key": "f587deda6decdecb66a0f752b9180c218fcfd27c355ad187d820d9190c10ac56",
-          "source_station_id": "B0L2T6306O",
-          "station_name": "启充云超级充电站(鼎盛鸿重卡充电站)",
-          "task_name": "启充云超级充电站(鼎盛鸿重卡充电站)",
-          "city": "郑州市",
-          "district": "新郑市"
-        },
-        {
-          "source_key": "0242d6dc59501ace36907ea392c3ea8405405d3a215d6b518f75b52de3e39ba9",
-          "source_station_id": "B0LGBZ0J83",
-          "station_name": "新电途汽车充电站(经宏新能源重卡站)",
-          "task_name": "新电途汽车充电站(经宏新能源重卡站)",
-          "city": "郑州市",
-          "district": "新郑市"
-        },
-        {
-          "source_key": "925d3dbe721a32396e29fd9fe1dfeecae26f2551d63a95c27ded4623e9122794",
-          "source_station_id": "B0LDCUUVP2",
-          "station_name": "旭电通汽车充电站(文鑫超级充电站)(暂停营业)",
-          "task_name": "旭电通汽车充电站(文鑫超级充电站)(暂停营业)",
-          "city": "郑州市",
-          "district": "新郑市"
         },
         {
           "source_key": "20071768a877f114473482262ae0fdb0df0b84ee884057dae66cf9c24bc3197a",
@@ -8959,36 +9023,12 @@
           "district": "巩义市"
         },
         {
-          "source_key": "689a55f5ffbb6e41bf17169750ec26c935b3f35d0810a03680ce4362d03e3b52",
-          "source_station_id": "B0MBM77ZJO",
-          "station_name": "国家电网汽车充电站(河南省郑州市巩义市310国道宜航汽车销售公...",
-          "task_name": "国家电网汽车充电站(河南省郑州市巩义市310国道宜航汽车销售公司重卡充电站)",
-          "city": "郑州市",
-          "district": "巩义市"
-        },
-        {
-          "source_key": "f109f3a129193d1dc06c3bef039077f592b918a7ce8b3eaef985628ace0c263d",
-          "source_station_id": "B0KB15A5AY",
-          "station_name": "星星充电汽车充电站(迅能来郑州陇海路绕城高速口充电站)",
-          "task_name": "星星充电汽车充电站(迅能来郑州陇海路绕城高速口充电站)",
-          "city": "郑州市",
-          "district": "中原区"
-        },
-        {
           "source_key": "40f4090dca4553466a689b0fb94ebbfad90da0929bb2666e3b2e68076151a446",
           "source_station_id": "B0LUOPINDU",
           "station_name": "驴充充汽车充电站(沈丘县冷链物流港充电桩)",
           "task_name": "驴充充汽车充电站(沈丘县冷链物流港充电桩)",
           "city": "周口市",
           "district": "沈丘县"
-        },
-        {
-          "source_key": "9427f62507b8d7fa07cec5e9f69a9fc42768ff3c78417d3324cdb862c064a4b2",
-          "source_station_id": "B0MRMKSBOD",
-          "station_name": "金冠智充汽车充电站(瑞光重卡充电站)",
-          "task_name": "金冠智充汽车充电站(瑞光重卡充电站)",
-          "city": "周口市",
-          "district": "西华县"
         },
         {
           "source_key": "1f077b71ca14d3b32c038348576f0098643a15c3bd4d60600ac71334e702b6d4",
@@ -8999,44 +9039,12 @@
           "district": "扶沟县"
         },
         {
-          "source_key": "8dddecadcc76cfb4275c3c97dd25308002106b806a9ce717651420c4cd0ec4dc",
-          "source_station_id": "B0MRKB2IHV",
-          "station_name": "云快充超级充电站(李埠口停车场重卡充电站)",
-          "task_name": "云快充超级充电站(李埠口停车场重卡充电站)",
-          "city": "周口市",
-          "district": "川汇区"
-        },
-        {
-          "source_key": "4fccb4969aa2f519cb419982e6117295cff957d99a632d33e01b98c698f0bc79",
-          "source_station_id": "B0M3YCV9JK",
-          "station_name": "特来电汽车充电站(周口港区志宇二期重卡充电站)",
-          "task_name": "特来电汽车充电站(周口港区志宇二期重卡充电站)",
-          "city": "周口市",
-          "district": "川汇区"
-        },
-        {
           "source_key": "e74da676a050c3fd94607ce4aca7e0c0d04786b4636c3b657a42d5278e101ecf",
           "source_station_id": "B0MU27ETPW",
           "station_name": "冉庄重卡、轻卡、小车综合超充站",
           "task_name": "冉庄重卡、轻卡、小车综合超充站",
           "city": "商丘市",
           "district": "夏邑县"
-        },
-        {
-          "source_key": "2fd5b994e72404c6b2c6c1ffe00012b1b48e11f7abf2b4fa4951de55ea12b269",
-          "source_station_id": "B0LAYSZLFO",
-          "station_name": "驴充充超级充电站(虎墩墩超充充电站)",
-          "task_name": "驴充充超级充电站(虎墩墩超充充电站)",
-          "city": "商丘市",
-          "district": "民权县"
-        },
-        {
-          "source_key": "ce4143d6b29b82f9be8eaaaaed40d8fadd6871f42813232417160f62a5673258",
-          "source_station_id": "B0M2ZU3AGJ",
-          "station_name": "特来电超级充电站(特来电商丘民权贾寨G310国道2期重卡充电站)",
-          "task_name": "特来电超级充电站(特来电商丘民权贾寨G310国道2期重卡充电站)",
-          "city": "商丘市",
-          "district": "民权县"
         },
         {
           "source_key": "d5b80c65c66a492634a5e3f6a7a46e1fc88cdca0325f2e3e2c043347cab37a41",
@@ -9047,44 +9055,12 @@
           "district": "永城市"
         },
         {
-          "source_key": "b6f177d4f13144f204ff80741ddd3bb7daa96ec80903228f53d2ea047f28d18e",
-          "source_station_id": "B0MRHSD46K",
-          "station_name": "启充云超级充电站(悦新新能源480超充站)",
-          "task_name": "启充云超级充电站(悦新新能源480超充站)",
-          "city": "商丘市",
-          "district": "永城市"
-        },
-        {
-          "source_key": "5db1fe5dd28818674c0c2532e852d17c300f68244220858c12db3abd6a868dce",
-          "source_station_id": "B0L2U5EI1T",
-          "station_name": "国勤智充汽车充电站(练楼重卡充电站)",
-          "task_name": "国勤智充汽车充电站(练楼重卡充电站)",
-          "city": "商丘市",
-          "district": "永城市"
-        },
-        {
-          "source_key": "c886d5b85de6000cb691a3e70e04c75207e0fda6502bc6c1592f2d44bc81dd7a",
-          "source_station_id": "B0L3PPG0H7",
-          "station_name": "云快充超级充电站(斑马超级快充{特价桩}轻/重/卡站)",
-          "task_name": "云快充超级充电站(斑马超级快充{特价桩}轻/重/卡站)",
-          "city": "商丘市",
-          "district": "睢县"
-        },
-        {
           "source_key": "6629ea7361d8b7b800a3ac42e31ee4f0f239c5909fc25af4f9e72db65603eb36",
           "source_station_id": "B0MU2DC7HV",
           "station_name": "汽车充电站(柘城县北环快充站)",
           "task_name": "汽车充电站(柘城县北环快充站)",
           "city": "商丘市",
           "district": "柘城县"
-        },
-        {
-          "source_key": "21805761f96c729f8e9631429aa38cbe2e730d16c757fc3444c1e05486293877",
-          "source_station_id": "B0MRU6JQ2G",
-          "station_name": "云快充超级充电站(旭塬重卡超充站)",
-          "task_name": "云快充超级充电站(旭塬重卡超充站)",
-          "city": "洛阳市",
-          "district": "宜阳县"
         },
         {
           "source_key": "4887d5ce4b85bc2cffa37e64d9a94bc089ccbd2925278532f34730f872b448de",
@@ -9119,12 +9095,20 @@
           "district": "正阳县"
         },
         {
-          "source_key": "254a127ec6606c71c501831a0554896fb1b6b129e31d60f416932f4d58b9153f",
-          "source_station_id": "B0LKHOSBMY",
-          "station_name": "新电途汽车充电站(长葛市悦实充电站)",
-          "task_name": "新电途汽车充电站(长葛市悦实充电站)",
-          "city": "许昌市",
+          "source_key": "6a1e76070af67827badcdaeeb82dd736fc679398e7524c89259614c569fc1086",
+          "source_station_id": "svr-613543ed52",
+          "station_name": "通达云重卡超级充电站(巩义市盛泰物流有限公司)",
+          "task_name": "通达云重卡超级充电站(巩义市盛泰物流有限公司)",
+          "city": "河南省",
           "district": ""
+        },
+        {
+          "source_key": "21805761f96c729f8e9631429aa38cbe2e730d16c757fc3444c1e05486293877",
+          "source_station_id": "B0MRU6JQ2G",
+          "station_name": "云快充超级充电站(旭塬重卡超充站)",
+          "task_name": "云快充超级充电站(旭塬重卡超充站)",
+          "city": "洛阳市",
+          "district": "宜阳县"
         },
         {
           "source_key": "2935e1b06a04bc2cfe4bad9e3cbe7e3f07326dd0a1adae00432f2960d8b55038",
@@ -9135,28 +9119,44 @@
           "district": "舞钢市"
         },
         {
-          "source_key": "5d502aeab1950675e3b9209fd8e535edf8c69275fd4a515c68f84b40e45d5887",
-          "source_station_id": "svr-fcdc363d39",
-          "station_name": "国家电网汽车充电站(河南省郑州市巩义市310国道宜航汽车销售公司重卡充电站)",
-          "task_name": "国家电网汽车充电站(河南省郑州市巩义市310国道宜航汽车销售公司重卡充电站)",
-          "city": "河南省",
-          "district": ""
+          "source_key": "70cd39414e4b4e7c601d3f8559d6d7ae412abf14fa89dea48d4c96ed70492d44",
+          "source_station_id": "B0FFL51J8O",
+          "station_name": "兰考服务区电动汽车充电站",
+          "task_name": "兰考服务区电动汽车充电站",
+          "city": "开封市",
+          "district": "兰考县"
         },
         {
-          "source_key": "6a1e76070af67827badcdaeeb82dd736fc679398e7524c89259614c569fc1086",
-          "source_station_id": "svr-613543ed52",
-          "station_name": "通达云重卡超级充电站(巩义市盛泰物流有限公司)",
-          "task_name": "通达云重卡超级充电站(巩义市盛泰物流有限公司)",
-          "city": "河南省",
-          "district": ""
+          "source_key": "c18b3b192a0364345f986f84c13f5ab5cf2418d9e702a562f76f733bb3ae09ab",
+          "source_station_id": "B0L1LREQV0",
+          "station_name": "微鹏充电汽车充电站(陶屯重卡充电站)",
+          "task_name": "微鹏充电汽车充电站(陶屯重卡充电站)",
+          "city": "开封市",
+          "district": "杞县"
         },
         {
-          "source_key": "43685d30c7626a7bb4d1a8b6f79893b7e3b723e27df602412cabfbb150f2ef11",
-          "source_station_id": "svr-1c527835a8",
-          "station_name": "新电途汽车充电站(经宏新能源重卡站)",
-          "task_name": "新电途汽车充电站(经宏新能源重卡站)",
-          "city": "河南省",
-          "district": ""
+          "source_key": "f649e8dc40a62b96538a5d672e1c5803a30f01bea787a183450058eb26514663",
+          "source_station_id": "B0L6ZBYRH0",
+          "station_name": "许禹路充电站",
+          "task_name": "许禹路充电站",
+          "city": "许昌市",
+          "district": "建安区"
+        },
+        {
+          "source_key": "7406c108c2df75fd0a1abe83a590c427b840a494eb28842f5a559f34fc4d9ae9",
+          "source_station_id": "B0L6AKSCPX",
+          "station_name": "金冠电气汽车充电站(瑞豫重卡充电站)",
+          "task_name": "金冠电气汽车充电站(瑞豫重卡充电站)",
+          "city": "许昌市",
+          "district": "禹州市"
+        },
+        {
+          "source_key": "52510ad1f0ce542a82fc8b365db63428963aba3e70bf7e9712858993bca85e51",
+          "source_station_id": "B0L1DHTD0V",
+          "station_name": "黑豹能源岛重卡超充电站(元宇宙充电站)(暂停营业)",
+          "task_name": "黑豹能源岛重卡超充电站(元宇宙充电站)(暂停营业)",
+          "city": "郑州市",
+          "district": "新郑市"
         }
       ]
     }

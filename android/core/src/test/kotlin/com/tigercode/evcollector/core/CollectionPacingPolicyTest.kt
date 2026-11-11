@@ -44,11 +44,4 @@ class CollectionPacingPolicyTest {
         assertEquals(61_500L, CollectionPacingPolicy.requiredDetailDelayMs(timestamps, now))
     }
 
-    @Test
-    fun usesLowerDensityAtNight() {
-        assertEquals(5_000L, CollectionPacingPolicy.delayRangeForHour(9).minMs)
-        assertEquals(8_000L, CollectionPacingPolicy.delayRangeForHour(14).minMs)
-        assertEquals(12_000L, CollectionPacingPolicy.delayRangeForHour(20).minMs)
-        assertEquals(25_000L, CollectionPacingPolicy.delayRangeForHour(2).minMs)
-    }
 }

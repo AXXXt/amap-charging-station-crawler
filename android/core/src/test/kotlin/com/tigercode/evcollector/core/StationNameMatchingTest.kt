@@ -163,4 +163,43 @@ class StationNameMatchingTest {
 
         assertEquals(556, match?.centerY)
     }
+
+    private val yongnaiTask = "特来电充电站(郑州新密G310永耐重卡充电站)"
+    private val yongnaiSuggestion = "特来电汽车充电站(特来电郑州新密G310永耐重卡充电站)"
+
+    @Test
+    fun repeatedBrandAtBracketBoundaryKeepsSpecificStationName() {
+        assertEquals(StationNameNormalizer.normalize(yongnaiTask), StationNameNormalizer.normalize(yongnaiSuggestion))
+        assertEquals(
+            StationNameNormalizer.normalize(yongnaiTask),
+            StationNameNormalizer.normalize("特来电超级充电站（特来电郑州新密G310永耐重卡充电站）"),
+        )
+        assertTrue(StationNameNormalizer.normalize("详情\n$yongnaiSuggestion\n营业时间").contains(StationNameNormalizer.normalize(yongnaiTask)))
+        assertTrue(StationNameNormalizer.normalize(yongnaiSuggestion) != StationNameNormalizer.normalize("云快充充电站(特来电郑州新密G310永耐重卡充电站)"))
+        assertEquals("充电站特来电郑州新密g310永耐重卡充电站", StationNameNormalizer.normalize("汽车充电站(特来电郑州新密G310永耐重卡充电站)"))
+    }
+
+    @Test
+    fun repeatedBrandSelectsFourthSuggestionAndRejectsOtherSites() {
+        val names = listOf(
+            "特来电汽车充电站(特来电郑州新密S316安畅重卡充电站)",
+            "特来电超级充电站(特来电郑州新密白寨凯发重卡充电站)",
+            "特来电超级充电站(特来电郑州新郑新村大道重卡充电站)",
+            yongnaiSuggestion,
+        )
+        val rows = names.mapIndexed { index, name ->
+            val top = 338 + index * 170
+            """<node clickable="true" content-desc="$name" bounds="[118,$top][830,${top + 154}]" />"""
+        }
+        val snapshot = root("""<hierarchy bounds="[0,0][1080,2280]">${rows.joinToString("")}<node clickable="true" content-desc="打车" bounds="[840,848][940,1002]" /><node clickable="true" content-desc="路线" bounds="[940,848][1080,1002]" /></hierarchy>""")
+        val match = StationMatcher.bestSuggestionMatch(snapshot, yongnaiTask)
+        assertEquals(yongnaiSuggestion, match?.description)
+        assertEquals(925, match?.centerY)
+        assertTrue(checkNotNull(match).centerX < 830)
+        for (row in rows.take(3)) {
+            assertEquals(null, StationMatcher.bestSuggestionMatch(root("""<hierarchy bounds="[0,0][1080,2280]">$row</hierarchy>"""), yongnaiTask))
+        }
+        assertEquals(yongnaiSuggestion, StationMatcher.bestMatch(snapshot, yongnaiTask)?.description)
+    }
+
 }

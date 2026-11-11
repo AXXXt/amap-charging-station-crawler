@@ -1,3 +1,4 @@
+import daily_tariff_policy
 """
 api_server.py — 重卡充电站数据API服务
 功能：
@@ -1373,6 +1374,36 @@ def _mobile_task_payload(row):
     }
 
 
+def _with_daily_tariff(task, collector):
+    """Enrich claims only; listings/progress must not query tariff history per task."""
+    if not task or task.get("type") not in {"SITE_STATION_DETAIL", "HENAN_POI_DETAIL", "HENAN_POI_LIST"}:
+        return task
+    station_id = str(task.get("stationId") or "").strip()
+    if not station_id:
+        return task
+    try:
+        now = int(time.time())
+        source_key = station_source_key(station_id, task.get("stationName") or task.get("keyword"))
+        conn = _henan_mysql_conn()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT captured_at, price_json FROM site_exploration_charging_station_dynamic_history "
+                    "WHERE source_key=%s AND captured_at >= %s "
+                    "AND JSON_UNQUOTE(JSON_EXTRACT(price_json, '$.priceSchedulePlatform'))=%s "
+                    "ORDER BY captured_at DESC, id DESC LIMIT 1",
+                    (source_key, now - 86400, collector),
+                )
+                cache = daily_tariff_policy.cached_tariff(cursor.fetchall(), collector, now)
+        finally:
+            conn.close()
+        return {**task, "dailyTariff": cache}
+    except Exception as error:
+        # An unavailable cache must never prevent a task claim or skip price collection.
+        print(f"Daily tariff cache unavailable: {type(error).__name__}", file=sys.stderr)
+        return task
+
+
 def _henan_poi_task_payload_fields(row):
     """Expose POI identity data for the mobile station-detail collector."""
     if row is None or row["type"] != HENAN_POI_DETAIL_TASK:
@@ -2183,7 +2214,7 @@ def _mobile_claim_allowed(request, device):
                 conn.commit()
             finally:
                 conn.close()
-            return {"task": _mobile_task_payload(claimed), "reason": claim_reason}
+            return {"task": _with_daily_tariff(_mobile_task_payload(claimed), collector), "reason": claim_reason}
         if claim_reason == "QUEUE_EMPTY":
             return {"task": None, "reason": "QUEUE_EMPTY"}
 
@@ -2219,7 +2250,7 @@ def _mobile_claim_allowed(request, device):
                 )
             ):
                 conn.commit()
-                return {"task": _mobile_task_payload(task), "reason": "CURRENT_TASK"}
+                return {"task": _with_daily_tariff(_mobile_task_payload(task), collector), "reason": "CURRENT_TASK"}
             if task:
                 conn.execute(
                     """UPDATE collector_device
@@ -2358,7 +2389,7 @@ def _mobile_claim_allowed(request, device):
         _sync_henan_task(claimed)
     if claimed is None:
         return {"task": None, "reason": "QUEUE_EMPTY"}
-    return {"task": _mobile_task_payload(claimed), "reason": claim_reason}
+    return {"task": _with_daily_tariff(_mobile_task_payload(claimed), collector), "reason": claim_reason}
 
 
 @app.post("/api/v1/device-tasks/{task_id}/ack")

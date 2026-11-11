@@ -203,6 +203,33 @@ class ChargingAccessibilityService : AccessibilityService() {
         dispatchGesture(gesture, null, null)
     }
 
+    suspend fun dragVerificationSlider(x1: Int, y1: Int, x2: Int, y2: Int): Boolean {
+        if (!isAmapWindowActive()) return false
+        val path = Path().apply {
+            moveTo(x1.toFloat(), y1.toFloat())
+            lineTo(x2.toFloat(), y2.toFloat())
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, 1000L))
+            .build()
+        return kotlinx.coroutines.withTimeoutOrNull(2500L) {
+            kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { continuation ->
+                val callback = object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription?) {
+                        if (continuation.isActive) continuation.resumeWith(Result.success(true))
+                    }
+
+                    override fun onCancelled(gestureDescription: GestureDescription?) {
+                        if (continuation.isActive) continuation.resumeWith(Result.success(false))
+                    }
+                }
+                if (!dispatchGesture(gesture, callback, android.os.Handler(mainLooper)) && continuation.isActive) {
+                    continuation.resumeWith(Result.success(false))
+                }
+            }
+        } ?: false
+    }
+
     fun globalBack() {
         if (!isAmapWindowActive()) return
         performGlobalAction(GLOBAL_ACTION_BACK)
@@ -496,8 +523,9 @@ class ChargingAccessibilityService : AccessibilityService() {
     fun isPriceEntrySafelyVisible(bounds: Rect): Boolean {
         if (bounds.isEmpty) return false
         val screenHeight = resources.displayMetrics.heightPixels
-        val safeTop = maxOf(180, (screenHeight * 0.08f).toInt())
-        val safeBottom = screenHeight - maxOf(460, (screenHeight * 0.20f).toInt())
+        val safeTop = maxOf(120, (screenHeight * 0.05f).toInt())
+        // 只避开底部导航栏，避免把“可见但靠近底部”的价格入口误判为屏幕外
+        val safeBottom = screenHeight - maxOf(220, (screenHeight * 0.09f).toInt())
         return bounds.top >= safeTop && bounds.bottom <= safeBottom
     }
 
@@ -1013,6 +1041,66 @@ class ChargingAccessibilityService : AccessibilityService() {
     }
 
     fun scrollSmallDown(): Boolean = gestureScroll(0.72f, 0.46f, 320)
+
+    /**
+     * 详情页专用：在底部卡片内部缓慢上滑一小段。
+     * 原来的 0.72→0.46 会滑到上方地图区域，导致高德把详情卡片收起。
+     */
+    fun scrollDetailSlow(): Boolean = gestureScroll(0.88f, 0.72f, 1000)
+
+    /**
+     * 详情页自适应滚动：找到站点名称，在名称下方 90px 处起手，向上滑 250px。
+     * 全程落在详情卡片内部，不会碰到上方地图。
+     */
+    fun scrollDetailFromStation(stationName: String): Boolean {
+        val root = amapRoot() ?: return false
+        try {
+            val screenHeight = resources.displayMetrics.heightPixels
+            val screenWidth = resources.displayMetrics.widthPixels
+            val key = stationName.take(10)
+            var titleBounds: Rect? = null
+            fun walk(node: AccessibilityNodeInfo) {
+                val text = node.text?.toString().orEmpty()
+                val desc = node.contentDescription?.toString().orEmpty()
+                if (text.contains(key) || desc.contains(key)) {
+                    val b = Rect()
+                    node.getBoundsInScreen(b)
+                    val current = titleBounds
+                    if (!b.isEmpty && b.top > screenHeight * 0.3f &&
+                        (current == null || b.top < current.top)
+                    ) {
+                        titleBounds = Rect(b)
+                    }
+                }
+                for (index in 0 until node.childCount) {
+                    node.getChild(index)?.let { child ->
+                        walk(child)
+                        child.recycle()
+                    }
+                }
+            }
+            walk(root)
+            val bounds = titleBounds ?: return scrollDetailSlow()
+            val startY = (bounds.bottom + 90).coerceAtMost(screenHeight - 260)
+            val endY = (startY - 250).coerceAtLeast(bounds.top)
+            if (startY - endY < 120) return scrollDetailSlow()
+            val x = bounds.centerX().coerceIn(60, screenWidth - 60)
+            Log.i("EvCollector", "详情滚动: 标题=${bounds.toShortString()} 起点($x,$startY) 终点($x,$endY)")
+            return gestureScrollPx(x, startY, x, endY, 800L)
+        } finally {
+            root.recycle()
+        }
+    }
+
+    private fun gestureScrollPx(startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Long): Boolean {
+        if (!isAmapWindowActive()) return false
+        val path = Path().apply {
+            moveTo(startX.toFloat(), startY.toFloat())
+            lineTo(endX.toFloat(), endY.toFloat())
+        }
+        val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
+        return dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+    }
 
     fun scrollSmallUp(): Boolean = gestureScroll(0.46f, 0.72f, 320)
 

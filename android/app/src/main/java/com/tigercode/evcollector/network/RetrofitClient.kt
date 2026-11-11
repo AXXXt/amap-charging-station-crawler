@@ -8,13 +8,13 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
-    fun serverApi(baseUrl: String, context: Context): ServerApi {
+    fun serverApi(baseUrl: String, context: Context, controlPlane: Boolean = false): ServerApi {
         val normalized = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
         val client = OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(120, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .callTimeout(120, TimeUnit.SECONDS)
+            .connectTimeout(if (controlPlane) 3 else 10, TimeUnit.SECONDS)
+            .readTimeout(if (controlPlane) 3 else 120, TimeUnit.SECONDS)
+            .writeTimeout(if (controlPlane) 3 else 30, TimeUnit.SECONDS)
+            .callTimeout(if (controlPlane) 5 else 120, TimeUnit.SECONDS)
             .addInterceptor { chain ->
                 val token = AppPreferences.deviceToken(context)
                 val request = if (token.isNotEmpty()) {

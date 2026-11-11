@@ -24,8 +24,13 @@ import com.tigercode.evcollector.network.HenanTaskResetRequest
 import com.tigercode.evcollector.engine.CollectionEngine
 import com.tigercode.evcollector.engine.CollectionListener
 import com.tigercode.evcollector.engine.CollectionState
+import com.tigercode.evcollector.network.FleetControlClient
+import com.tigercode.evcollector.network.FleetStopRequest
 import com.tigercode.evcollector.network.SyncManager
 import com.tigercode.evcollector.network.SyncOutcome
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -46,6 +51,9 @@ class MainActivity : AppCompatActivity() {
     private var currentMessage = "待机"
     private var currentStation = ""
     private var stationCount = 0
+    private var collectionJob: Job? = null
+    private var startJob: Job? = null
+    private var fleetWatchJob: Job? = null
 
     private val engineListener = CollectionListener { state, message, count, station ->
         currentState = state
@@ -75,15 +83,15 @@ class MainActivity : AppCompatActivity() {
         binding.saveConfigButton.setOnClickListener { saveConfig() }
         binding.openAccessibilityButton.setOnClickListener { openAccessibilitySettings() }
         binding.openAmapButton.setOnClickListener { openAmap() }
-        binding.startCollectButton.setOnClickListener { startCollector() }
+        binding.startCollectButton.setOnClickListener { startWithFleetPermission { startCollector() } }
         binding.stopCollectButton.setOnClickListener { stopCollector() }
-        binding.syncNowButton.setOnClickListener { syncNow() }
+        binding.syncNowButton.setOnClickListener { startWithFleetPermission { syncNow() } }
         binding.importHenanPoiButton.setOnClickListener { importHenanPois() }
-        binding.startHenanCollectButton.setOnClickListener { startHenanCollect() }
-        binding.startMonitorCollectButton.setOnClickListener { startMonitorCollect() }
-        binding.startMonitorListButton.setOnClickListener { startMonitorListCollect() }
+        binding.startHenanCollectButton.setOnClickListener { startWithFleetPermission { startHenanCollect() } }
+        binding.startMonitorCollectButton.setOnClickListener { startWithFleetPermission { startMonitorCollect() } }
+        binding.startMonitorDetailButton.setOnClickListener { startWithFleetPermission { startPriorityDetailCollect() } }
         binding.resetHenanTasksButton.setOnClickListener { confirmResetHenanTasks() }
-        binding.localScanButton.setOnClickListener { startLocalScan() }
+        binding.localScanButton.setOnClickListener { startWithFleetPermission { startLocalScan() } }
         binding.stopRunButton.setOnClickListener { stopRunning() }
         binding.clearLogButton.setOnClickListener { clearLogs() }
 
@@ -99,7 +107,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         refreshHandler.removeCallbacks(refreshRunnable)
+        startJob?.cancel()
+        fleetWatchJob?.cancel()
+        collectionJob?.cancel()
         engine.removeListener(engineListener)
+        engine.stop()
         super.onDestroy()
     }
 
@@ -130,6 +142,34 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
+    private var fleetStartInProgress = false
+
+    private fun startWithFleetPermission(action: () -> Unit) {
+        if (fleetStartInProgress) return
+        if (AppPreferences.isScanning(this) || engine.isRunning() || collectionJob?.isActive == true) {
+            Toast.makeText(this, "本机正在采集，请先停止后再开始", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!saveConfig()) return
+        fleetStartInProgress = true
+        startJob = lifecycleScope.launch {
+            try {
+                FleetControlClient.resumeManually(this@MainActivity)
+                if (isActive) action()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                val message = "无法开始：${error.message ?: error.javaClass.simpleName}"
+                AppPreferences.setRemoteStatus(this@MainActivity, message)
+                AppPreferences.appendLog(this@MainActivity, message)
+                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+            } finally {
+                fleetStartInProgress = false
+                refreshUi()
+            }
+        }
+    }
+
     private fun startCollector() {
         if (!saveConfig()) return
         requestNotificationPermissionIfNeeded()
@@ -141,6 +181,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopCollector() {
+        startJob?.cancel()
+        fleetWatchJob?.cancel()
+        collectionJob?.cancel()
+        engine.stop()
         AppPreferences.setMonitorMode(this, false)
         AppPreferences.setScanning(this, false)
         CollectorKeepAliveService.stop(this)
@@ -150,7 +194,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun syncNow() {
         if (!saveConfig()) return
-        lifecycleScope.launch {
+        collectionJob = lifecycleScope.launch {
+            startActivityFleetWatcher()
+            try {
             AppPreferences.setRemoteStatus(this@MainActivity, "正在同步")
             refreshUi()
             engine.awaitReadyForNextTask()
@@ -190,14 +236,15 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
                 is SyncOutcome.HumanVerification -> {
+                    AppPreferences.setScanning(this@MainActivity, false)
                     AppPreferences.setRemoteStatus(
                         this@MainActivity,
-                        "人机验证，任务已释放",
+                        "人机验证，等待人工处理",
                         outcome.message,
                     )
                     AppPreferences.appendLog(
                         this@MainActivity,
-                        "人机验证，任务已释放，返回列表继续: ${outcome.message}",
+                        "本机已暂停，请手动完成验证后点击开始采集: ${outcome.message}",
                     )
                 }
                 is SyncOutcome.Failed -> {
@@ -208,12 +255,19 @@ class MainActivity : AppCompatActivity() {
                     )
                     AppPreferences.appendLog(this@MainActivity, "同步失败: ${outcome.message}")
                 }
+                is SyncOutcome.FleetStopped -> {
+                    currentMessage = "收到全部停止指令，需手动开始"
+                }
                 is SyncOutcome.NoTask -> {
                     AppPreferences.setRemoteStatus(this@MainActivity, "暂无待领取任务")
                     AppPreferences.appendLog(this@MainActivity, "同步完成，暂无任务")
                 }
             }
             refreshUi()
+            } finally {
+                fleetWatchJob?.cancel()
+                fleetWatchJob = null
+            }
         }
     }
 
@@ -296,7 +350,7 @@ class MainActivity : AppCompatActivity() {
         }
         requestNotificationPermissionIfNeeded()
         AppPreferences.setMonitorMode(this, true)
-        AppPreferences.setMonitorListMode(this, false)
+        AppPreferences.setPriorityStationMode(this, false)
         AppPreferences.setScanning(this, true)
         CollectorKeepAliveService.start(this)
         AppPreferences.setRemoteStatus(this, "重点站点小时监控已启动")
@@ -304,7 +358,7 @@ class MainActivity : AppCompatActivity() {
         ChargingAccessibilityService.current()?.launchAmap()
         refreshUi()
     }
-    private fun startMonitorListCollect() {
+    private fun startPriorityDetailCollect() {
         if (!saveConfig()) return
         if (!ChargingAccessibilityService.isConnected()) {
             Toast.makeText(this, "请先开启无障碍服务", Toast.LENGTH_SHORT).show()
@@ -313,11 +367,11 @@ class MainActivity : AppCompatActivity() {
         }
         requestNotificationPermissionIfNeeded()
         AppPreferences.setMonitorMode(this, true)
-        AppPreferences.setMonitorListMode(this, true)
+        AppPreferences.setPriorityStationMode(this, true)
         AppPreferences.setScanning(this, true)
         CollectorKeepAliveService.start(this)
-        AppPreferences.setRemoteStatus(this, "重点站点列表快照采集已启动")
-        AppPreferences.appendLog(this, "已启动重点站点列表快照滚动调度")
+        AppPreferences.setRemoteStatus(this, "高德224站详情循环采集已启动")
+        AppPreferences.appendLog(this, "已启动高德224站详情循环采集：电价、电桩明细、分时电价及服务费")
         ChargingAccessibilityService.current()?.launchAmap()
         refreshUi()
     }
@@ -379,10 +433,42 @@ class MainActivity : AppCompatActivity() {
         val district = binding.districtInput.text?.toString()?.trim().orEmpty()
         val keyword = binding.keywordInput.text?.toString()?.trim().orEmpty()
         engine.startLocal(city, district, keyword, engineListener)
+        startActivityFleetWatcher(localScan = true)
         refreshUi()
     }
 
+    private fun startActivityFleetWatcher(localScan: Boolean = false) {
+        fleetWatchJob?.cancel()
+        fleetWatchJob = lifecycleScope.launch {
+            val api = FleetControlClient.api(this@MainActivity)
+            while (isActive) {
+                    val stopped = try {
+                        val control = FleetControlClient.control(this@MainActivity, api)
+                        if (control.stopRequired || !control.releaseComplete) control else null
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (stopped != null) {
+                        engine.stop()
+                        // Finish the bounded receipt before cancelling the collecting job.
+                        FleetControlClient.stopAndAcknowledge(this@MainActivity, api, stopped.stopGeneration)
+                        collectionJob?.cancel()
+                        currentMessage = "收到全部停止指令，需手动开始"
+                        refreshUi()
+                        return@launch
+                    }
+                    if (localScan && !engine.isRunning()) return@launch
+                    delay(3_000L)
+            }
+        }
+    }
+
     private fun stopRunning() {
+        startJob?.cancel()
+        fleetWatchJob?.cancel()
+        collectionJob?.cancel()
         engine.stop()
         AppPreferences.setMonitorMode(this, false)
         AppPreferences.setScanning(this, false)
@@ -446,7 +532,7 @@ class MainActivity : AppCompatActivity() {
         val scanning = AppPreferences.isScanning(this)
         binding.startHenanCollectButton.isEnabled = !scanning
         binding.startMonitorCollectButton.isEnabled = !scanning
-        binding.startMonitorListButton.isEnabled = !scanning
+        binding.startMonitorDetailButton.isEnabled = !scanning
         binding.serviceStatusText.text = buildString {
             append("无障碍服务: ")
             append(

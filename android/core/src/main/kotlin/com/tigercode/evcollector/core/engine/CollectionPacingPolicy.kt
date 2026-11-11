@@ -1,10 +1,5 @@
 package com.tigercode.evcollector.core.engine
 
-data class PacingDelayRange(
-    val minMs: Long,
-    val maxMs: Long,
-)
-
 /**
  * Conservative pacing policy for AMap detail-page access.
  *
@@ -25,13 +20,6 @@ object CollectionPacingPolicy {
         Window(durationMs = 5 * 60 * 1000L, maxEntries = 16),
         Window(durationMs = 15 * 60 * 1000L, maxEntries = 36),
     )
-
-    fun delayRangeForHour(hour: Int): PacingDelayRange = when (hour.coerceIn(0, 23)) {
-        in 6..11 -> PacingDelayRange(5_000L, 9_000L)
-        in 12..17 -> PacingDelayRange(8_000L, 14_000L)
-        in 18..22 -> PacingDelayRange(12_000L, 20_000L)
-        else -> PacingDelayRange(25_000L, 45_000L)
-    }
 
     fun pruneDetailEntries(
         timestamps: Collection<Long>,

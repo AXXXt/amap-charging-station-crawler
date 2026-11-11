@@ -108,4 +108,31 @@ class DetailParserTest {
         assertTrue(result.superPower.contains("400.0kW"))
         assertTrue(result.fastPower.contains("320.0kW"))
     }
+
+    @Test
+    fun stationPageKeepsAvailabilityWithoutPerGunDetails() {
+        for (idle in listOf(14, 0)) {
+            val xml = """
+                <hierarchy>
+                    <node content-desc="汽车充电站(氢电重卡超充陇海西站)" />
+                    <node text="电站信息" />
+                    <node text="查看历史空闲" />
+                    <node text="超充" />
+                    <node text="空闲" />
+                    <node text="$idle" />
+                    <node text="/20" />
+                    <node text="320.0kW" />
+                    <node text="1.41" />
+                    <node text="/度" />
+                </hierarchy>
+            """.trimIndent()
+
+            val result = DetailParser.parse(root(xml))
+            assertEquals(idle.toString(), result.superAvailable)
+            assertEquals("20", result.superTotal)
+            assertEquals("1.41", result.currentPrice)
+            assertTrue(result.chargingPiles.isEmpty())
+        }
+    }
+
 }

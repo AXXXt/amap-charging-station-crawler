@@ -23,6 +23,7 @@ data class DeviceRegisterResponse(
     @SerializedName("deviceToken") val deviceToken: String = "",
     @SerializedName("heartbeatIntervalSeconds") val heartbeatIntervalSeconds: Int = 15,
     @SerializedName("taskPollIntervalSeconds") val taskPollIntervalSeconds: Int = 5,
+    @SerializedName("priorityStationScopes") val priorityStationScopes: Map<String, Int>? = null,
 )
 
 data class HeartbeatRequest(
@@ -61,12 +62,14 @@ data class RemoteTaskDto(
     @SerializedName("stationLatitude") val stationLatitude: Double? = null,
     @SerializedName("stationLongitude") val stationLongitude: Double? = null,
     @SerializedName("stationSequence") val stationSequence: Int = 0,
+    @SerializedName("dailyTariff") val dailyTariff: com.tigercode.evcollector.core.engine.DailyTariffCache? = null,
     @SerializedName("sourcePayload") val sourcePayload: Map<String, Any> = emptyMap(),
 )
 
 data class ClaimTaskResponse(
     @SerializedName("task") val task: RemoteTaskDto?,
     @SerializedName("reason") val reason: String = "",
+    @SerializedName("fleetControl") val fleetControl: FleetControlDto? = null,
 )
 
 data class TaskActionRequest(
@@ -131,7 +134,44 @@ data class HenanTaskResetResponse(
     @SerializedName("statusCounts") val statusCounts: Map<String, Int> = emptyMap(),
 )
 
+data class FleetControlDto(
+    @SerializedName("supported") val supported: Boolean = false,
+    @SerializedName("stopGeneration") val stopGeneration: Long = 0,
+    @SerializedName("stopRequired") val stopRequired: Boolean = false,
+    @SerializedName("releaseComplete") val releaseComplete: Boolean = false,
+    @SerializedName("canStopAll") val canStopAll: Boolean = false,
+)
+
+data class DeviceConfigResponse(
+    @SerializedName("fleetControl") val fleetControl: FleetControlDto? = null,
+)
+
+data class FleetGenerationRequest(
+    @SerializedName("stopGeneration") val stopGeneration: Long,
+)
+
+data class FleetStopRequest(@SerializedName("requestId") val requestId: String)
+
+data class FleetStopResponse(
+    @SerializedName("status") val status: String = "",
+    @SerializedName("stopGeneration") val stopGeneration: Long = 0,
+    @SerializedName("releasedTaskCount") val releasedTaskCount: Int = 0,
+    @SerializedName("deviceCount") val deviceCount: Int = 0,
+)
+
 interface ServerApi {
+    @GET("api/v1/devices/me/config")
+    suspend fun deviceConfig(): DeviceConfigResponse
+
+    @POST("api/v1/devices/me/resume")
+    suspend fun resumeDevice(@Body body: FleetGenerationRequest): DeviceConfigResponse
+
+    @POST("api/v1/devices/me/stopped")
+    suspend fun acknowledgeStop(@Body body: FleetGenerationRequest): DeviceConfigResponse
+
+    @POST("api/v1/devices/stop-all")
+    suspend fun stopAllDevices(@Body body: FleetStopRequest): FleetStopResponse
+
     @POST("api/v1/devices/register")
     suspend fun register(@Body body: DeviceRegisterRequest): DeviceRegisterResponse
 

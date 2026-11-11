@@ -18,11 +18,17 @@ import androidx.core.content.ContextCompat
 import com.tigercode.evcollector.accessibility.ChargingAccessibilityService
 import com.tigercode.evcollector.data.CollectorRepository
 import com.tigercode.evcollector.engine.CollectionEngine
+import com.tigercode.evcollector.network.FleetControlClient
+import com.tigercode.evcollector.network.FleetGenerationRequest
+import com.tigercode.evcollector.network.FleetStoppedException
 import com.tigercode.evcollector.network.SyncManager
 import com.tigercode.evcollector.network.SyncOutcome
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -34,6 +40,7 @@ class CollectorKeepAliveService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var loopJob: Job? = null
+    private var fleetWatchJob: Job? = null
     private var engine: CollectionEngine? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -72,6 +79,8 @@ class CollectorKeepAliveService : Service() {
     override fun onDestroy() {
         engine?.stop()
         loopJob?.cancel()
+        fleetWatchJob?.cancel()
+        scope.cancel()
         engine = null
         releaseKeepAliveLock()
         super.onDestroy()
@@ -90,10 +99,12 @@ class CollectorKeepAliveService : Service() {
         }
         engineRef = engine
         this.engine = engine
+        startFleetWatcher()
         engine.addListener { _, message, _, _ ->
             showStepToast(message)
         }
         loopJob = scope.launch {
+            try {
             // 避免无任务时每 15 秒重复弹 Toast；重新发现并完成任务后会再次提示。
             var waitingToastShown = false
             while (isActive && AppPreferences.isScanning(this@CollectorKeepAliveService)) {
@@ -193,16 +204,17 @@ class CollectorKeepAliveService : Service() {
                         8_000L
                     }
                     is SyncOutcome.HumanVerification -> {
-                        val message = "检测到人机验证，当前任务已释放，返回列表继续采集"
+                        val message = "本机已暂停，请手动完成验证后点击开始采集"
+                        AppPreferences.setScanning(this@CollectorKeepAliveService, false)
                         AppPreferences.setRemoteStatus(
                             this@CollectorKeepAliveService,
-                            "人机验证，继续采集",
+                            "人机验证，等待人工处理",
                             outcome.message,
                         )
                         updateNotification(message)
                         showStepToast(message)
                         waitingToastShown = false
-                        8_000L
+                        0L
                     }
                     is SyncOutcome.Failed -> {
                         AppPreferences.setRemoteStatus(
@@ -214,6 +226,10 @@ class CollectorKeepAliveService : Service() {
                         showStepToast("同步失败：${outcome.message}")
                         waitingToastShown = false
                         8_000L
+                    }
+                    is SyncOutcome.FleetStopped -> {
+                        updateNotification("收到全部停止指令，需手动开始")
+                        0L
                     }
                     is SyncOutcome.NoTask -> {
                         val message = "当前暂无待领取任务，正在等待新任务"
@@ -233,6 +249,36 @@ class CollectorKeepAliveService : Service() {
                 delay(nextSyncDelayMs)
             }
             stopSelf()
+            } finally {
+                fleetWatchJob?.cancel()
+            }
+        }
+        loopJob?.invokeOnCompletion {
+            if (!AppPreferences.isScanning(this@CollectorKeepAliveService)) stopSelf()
+        }
+    }
+
+    private fun startFleetWatcher() {
+        if (fleetWatchJob?.isActive == true) return
+        fleetWatchJob = scope.launch {
+            val api = FleetControlClient.api(this@CollectorKeepAliveService)
+            while (isActive && AppPreferences.isScanning(this@CollectorKeepAliveService)) {
+                try {
+                    val control = FleetControlClient.control(this@CollectorKeepAliveService, api)
+                    if (control.stopRequired || !control.releaseComplete) {
+                        engine?.stop()
+                        FleetControlClient.stopAndAcknowledge(this@CollectorKeepAliveService, api, control.stopGeneration)
+                        loopJob?.cancelAndJoin()
+                        stopSelf()
+                        return@launch
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    // Covers task gaps, cooldown and accessibility reconnection waits.
+                }
+                delay(3_000L)
+            }
         }
     }
 

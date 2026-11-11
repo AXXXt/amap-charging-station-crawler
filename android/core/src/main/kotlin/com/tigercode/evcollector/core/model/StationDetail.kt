@@ -24,6 +24,8 @@ data class StationDetail(
     val slowAvailable: String = "",
     val slowTotal: String = "",
     val slowPower: String = "",
+    val priceScheduleCapturedAt: Long = 0,
+    val priceScheduleReused: Boolean = false,
     val priceTrendTitle: String = "",
     val fastPrices: List<PricePeriod> = emptyList(),
     val slowPrices: List<PricePeriod> = emptyList(),

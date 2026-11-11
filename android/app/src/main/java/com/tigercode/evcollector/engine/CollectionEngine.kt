@@ -1,14 +1,19 @@
 package com.tigercode.evcollector.engine
 
+import com.tigercode.evcollector.core.engine.DailyTariffCache
+import com.tigercode.evcollector.core.engine.DailyTariffPolicy
+
 import android.content.Context
+import android.os.SystemClock
+import android.os.Build
 import com.google.gson.Gson
 import com.tigercode.evcollector.AppPreferences
 import com.tigercode.evcollector.accessibility.ChargingAccessibilityService
 import com.tigercode.evcollector.core.engine.CollectionPacingPolicy
+import com.tigercode.evcollector.core.engine.SliderVerificationPolicy
 import com.tigercode.evcollector.core.engine.HumanVerificationDetector
 import com.tigercode.evcollector.core.engine.NetworkErrorDetector
 import com.tigercode.evcollector.core.engine.StationMatcher
-import com.tigercode.evcollector.core.model.ChargingPileDetail
 import com.tigercode.evcollector.core.model.NodeSnapshot
 import com.tigercode.evcollector.core.model.PageKind
 import com.tigercode.evcollector.core.model.PricePeriod
@@ -26,7 +31,6 @@ import com.tigercode.evcollector.core.parser.StationNameNormalizer
 import com.tigercode.evcollector.data.CollectorRepository
 import com.tigercode.evcollector.data.ScanTaskEntity
 import java.util.ArrayDeque
-import java.util.Calendar
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.max
@@ -45,6 +49,11 @@ import kotlinx.coroutines.withContext
 class StationNotFoundException(
     val stationName: String,
 ) : IllegalStateException("搜索结果中未找到目标站点: $stationName")
+
+class VerificationAttemptsExhaustedException(
+    val stationName: String,
+    val attempts: Int,
+) : IllegalStateException("人机验证尝试${attempts}轮后仍未确认目标详情，跳过: $stationName")
 
 class HumanVerificationException(
     val phrase: String,
@@ -95,20 +104,6 @@ private sealed interface PriceEntryResult {
     data class NotFound(val entryClicked: Boolean = false) : PriceEntryResult
 }
 
-/**
- * Result of the optional charging-pile dialog flow.
- *
- * A non-null StationDetail is not sufficient to say that the dialog was
- * completely handled: a slow-loading dialog can be parsed as an empty
- * snapshot. Keep completion and close confirmation explicit so the price
- * flow cannot race the dialog.
- */
-private data class ChargingPileCollectionResult(
-    val detail: StationDetail,
-    val completed: Boolean,
-    val dialogClosed: Boolean,
-)
-
 class CollectionEngine(
     private val context: Context,
     private val repository: CollectorRepository,
@@ -119,6 +114,9 @@ class CollectionEngine(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val runMutex = Mutex()
     private var activeJob: Job? = null
+    private var verificationStation = ""
+    private var verificationAttempts = 0
+    private var verificationRecoveryUsed = false
 
     @Volatile
     private var stopRequested = false
@@ -131,8 +129,8 @@ class CollectionEngine(
 
     private val batchTargetMin = 25
     private val batchTargetMax = 30
-    private val batchCooldownMinMs = 9 * 60 * 1000L
-    private val batchCooldownMaxMs = 11 * 60 * 1000L
+    private val batchCooldownMinMs = 5 * 60 * 1000L
+    private val batchCooldownMaxMs = 8 * 60 * 1000L
     private val detailEntryTimes = ArrayDeque<Long>().apply {
         addAll(AppPreferences.pacingDetailEntryTimes(context))
     }
@@ -143,7 +141,6 @@ class CollectionEngine(
     private var batchCooldownUntilMs = AppPreferences.pacingCooldownUntil(context)
 
     private val MAX_PRICE_CLICK_ATTEMPTS = 2
-    private val MAX_CHARGING_PILE_SCROLLS = 30
     private val MAX_TARGET_RESULT_SCROLLS = 1
 
     private val riskPhrases = listOf(
@@ -270,6 +267,7 @@ class CollectionEngine(
                 var loadingWaits = 0
                 var consecutiveRecoveryFails = 0
 
+                verificationStation = ""
                 while (!stopRequested) {
                     awaitReadyForNextTask()
                     if (stopRequested) break
@@ -404,7 +402,14 @@ class CollectionEngine(
                     }
                     seenCards.add(cardFingerprint(nextCard))
                     humanDelay(800L, 1800L)
-                    val detail = collectStation(service, nextCard, city, district, query)
+                    val detail = try {
+                        collectStation(service, nextCard, city, district, query)
+                    } catch (error: VerificationAttemptsExhaustedException) {
+                        AppPreferences.appendLog(context, error.message.orEmpty())
+                        null
+                    } finally {
+                        verificationStation = ""
+                    }
                     if (detail != null) {
                         collected.add(detail)
                         collectedCount = collected.size
@@ -429,11 +434,13 @@ class CollectionEngine(
         latitude: Double?,
         longitude: Double?,
         remoteTaskId: String = "",
+        dailyTariff: DailyTariffCache? = null,
     ): StationDetail? = runMutex.withLock {
         withContext(Dispatchers.Main.immediate) {
             stopRequested = false
             collectedCount = 0
             val requestedName = stationName.trim()
+            beginVerificationStation(requestedName)
             require(requestedName.isNotBlank()) { "站点名称不能为空" }
             awaitReadyForNextTask()
             if (stopRequested) {
@@ -500,6 +507,7 @@ class CollectionEngine(
                         district = "",
                         query = requestedName,
                         remoteTaskId = remoteTaskId,
+                        dailyTariff = dailyTariff,
                     )
                     break
                 }
@@ -548,14 +556,33 @@ class CollectionEngine(
             } else if (stopRequested) {
                 emit(CollectionState.STOPPED, "目标站点采集已停止", 0, requestedName)
             } else if (!matchedTarget) {
-                emit(
-                    CollectionState.DONE,
-                    "搜索结果中没有对应站点，已跳过: $requestedName",
-                    0,
-                    requestedName,
+                // 搜索结果列表没有目标站点：尝试联想搜索兜底（点击搜索框保留
+                // 原站名，不清空重输；联想列表命中后进入详情采集桩详情）。
+                val fallbackDetail = runSuggestionFallback(
+                    service = service,
+                    requestedName = requestedName,
+                    stationId = stationId,
+                    address = address,
+                    latitude = latitude,
+                    longitude = longitude,
+                    remoteTaskId = remoteTaskId,
+                    dailyTariff = dailyTariff,
                 )
-                stopRequested = false
-                throw StationNotFoundException(requestedName)
+                if (fallbackDetail != null) {
+                    collectedCount = 1
+                    stopRequested = false
+                    emit(CollectionState.DONE, "联想详情采集完成", 1, requestedName)
+                    detail = fallbackDetail
+                } else {
+                    emit(
+                        CollectionState.DONE,
+                        "联想搜索也没有对应站点，已跳过: $requestedName",
+                        0,
+                        requestedName,
+                    )
+                    stopRequested = false
+                    throw StationNotFoundException(requestedName)
+                }
             } else {
                 emit(CollectionState.ERROR, "已找到目标站点，但详情采集失败: $requestedName", 0, requestedName)
             }
@@ -576,6 +603,7 @@ class CollectionEngine(
             stopRequested = false
             collectedCount = 0
             val requestedName = stationName.trim()
+            beginVerificationStation(requestedName)
             require(requestedName.isNotBlank()) { "站点名称不能为空" }
             if (StationNameNormalizer.isGenericStationName(requestedName)) {
                 AppPreferences.appendLog(context, "泛化名称，直接跳过: $requestedName")
@@ -701,6 +729,7 @@ class CollectionEngine(
         latitude: Double?,
         longitude: Double?,
         remoteTaskId: String,
+        dailyTariff: DailyTariffCache? = null,
     ): StationDetail? {
         if (stopRequested) return null
         emit(CollectionState.SCANNING_RESULTS, "NO_MATCH，尝试联想搜索: $requestedName", 0, requestedName)
@@ -722,70 +751,28 @@ class CollectionEngine(
             )
             throw SuggestionSearchNotStartedException(requestedName, "SUGGESTION_LIST_MISSING")
         }
-        val suggestion = StationMatcher.bestSuggestionMatch(suggestionSnapshot, requestedName) ?: run {
-            AppPreferences.appendLog(
-                context,
-                "联想列表已出现但没有匹配项，确认 NO_MATCH: $requestedName",
-            )
+        if (StationMatcher.bestSuggestionMatch(suggestionSnapshot, requestedName) == null) {
+            AppPreferences.appendLog(context, "联想列表已出现但没有匹配项，确认 NO_MATCH: $requestedName")
             return null
         }
-        AppPreferences.appendLog(context, "联想命中: ${suggestion.description} centerY=${suggestion.centerY}")
-        val clicked = service.clickAt(suggestion.centerX, suggestion.centerY) ||
-            service.clickNodeByText(suggestion.description) ||
-            service.clickNodeByText(requestedName)
-        if (!clicked) {
-            AppPreferences.appendLog(context, "联想点击失败，释放任务重试: $requestedName")
-            throw SuggestionSearchNotStartedException(requestedName, "SUGGESTION_CLICK_FAILED")
-        }
-        humanDelay(1700L, 2600L)
-
         var detailSnapshot = try {
-            waitForPage(15000, 600) { root ->
-                val assessment = PageAssessor.assess(root, requestedName)
-                val pageText = collectPageText(root)
-                val hasDetailMarkers = "电站信息" in pageText ||
-                    "营业时间" in pageText ||
-                    "导航" in pageText
-                assessment.kind == PageKind.SEARCH_RESULTS ||
-                    assessment.kind == PageKind.DETAIL ||
-                    assessment.kind == PageKind.PRICE_DETAIL ||
-                    (assessment.expectedStationVisible && hasDetailMarkers)
-            } ?: run {
-                AppPreferences.appendLog(context, "联想详情页未识别(超时): $requestedName")
-                service.globalBack()
-                humanDelay(600L, 1000L)
+            openMatchedStationDetail(
+                service, requestedName, address, requestedName, allowSuggestions = true,
+            ) ?: run {
+                AppPreferences.appendLog(context, "联想入口补点后仍未确认详情: $requestedName")
                 return null
             }
         } catch (error: HumanVerificationException) {
             AppPreferences.appendLog(
                 context,
-                "联想详情页触发封控(${error.phrase})，释放当前任务并返回列表继续: $requestedName",
+                "联想详情页检测到人机验证，已暂停本机，等待人工完成: $requestedName",
             )
-            stopRequested = false
-            service.globalBack()
-            humanDelay(700L, 1200L)
-            service.globalBack()
-            humanDelay(700L, 1200L)
-            throw DetailPageRiskControlException(
-                stationName = requestedName,
-                phrase = error.phrase,
-                pageExcerpt = error.pageExcerpt,
-            )
+            throw error
         }
 
-        val detailAssessment = PageAssessor.assess(detailSnapshot, requestedName)
-        val detailPageText = collectPageText(detailSnapshot)
-        val hasDetailMarkers = "电站信息" in detailPageText ||
-            "营业时间" in detailPageText ||
-            "导航" in detailPageText
         val stationNameVisible = pageContainsStationName(detailSnapshot, requestedName)
-        val detailLike = detailAssessment.kind == PageKind.DETAIL ||
-            detailAssessment.kind == PageKind.PRICE_DETAIL ||
-            (stationNameVisible && hasDetailMarkers)
-        if (!detailLike) {
-            AppPreferences.appendLog(context, "联想结果仍是列表，真正跳过: $requestedName")
-            service.globalBack()
-            humanDelay(600L, 1000L)
+        if (!isConfirmedStationDetail(detailSnapshot, requestedName)) {
+            AppPreferences.appendLog(context, "未确认目标详情页，不读取列表卡片数据: $requestedName")
             return null
         }
         if (!stationNameVisible) {
@@ -805,9 +792,9 @@ class CollectionEngine(
         if (!hasVisiblePriceOrPiles(detail)) {
             val viewport = StationMatcher.listViewport(detailSnapshot)
             if (viewport != null) {
-                service.scrollWithin(viewport, 360)
+                service.scrollWithin(viewport, 300)
             } else {
-                service.scrollForward()
+                service.scrollDetailFromStation(requestedName)
             }
             humanDelay(850L, 1300L)
             detailSnapshot = service.freshSnapshot() ?: detailSnapshot
@@ -818,6 +805,45 @@ class CollectionEngine(
             service.globalBack()
             humanDelay(600L, 1000L)
             return null
+        }
+
+        // Availability comes from the station page; static per-gun details are retained server-side.
+        emit(CollectionState.READING_DETAIL, "联想详情：读取页面电桩状态", 0, requestedName)
+
+        val reused = DailyTariffPolicy.reuse(detail, dailyTariff, "AMAP")
+        if (reused != null) {
+            detail = reused
+            emit(CollectionState.READING_PRICE, "当前价核对一致，沿用今日分时方案，仅更新桩状态", 0, requestedName)
+        } else {
+        emit(CollectionState.OPENING_PRICE, "联想详情：采集分时电价", 0, requestedName)
+        var suggestionPriceEntry: PriceEntryResult = openPriceDetail(service, requestedName, 0)
+        if (suggestionPriceEntry !is PriceEntryResult.Opened) {
+            for (scrollIndex in 1..3) {
+                if (stopRequested) break
+                service.scrollDetailFromStation(requestedName)
+                humanDelay(900L, 1400L)
+                val scrolled = service.freshSnapshot()
+                if (scrolled != null) {
+                    val parsed = DetailParser.parse(scrolled)
+                    if (parsed.filledFieldCount > 0) {
+                        detail = ResultMerger.merge(detail, parsed)
+                    }
+                }
+                suggestionPriceEntry = openPriceDetail(service, requestedName, 0)
+                if (suggestionPriceEntry is PriceEntryResult.Opened) break
+            }
+        }
+        if (suggestionPriceEntry is PriceEntryResult.Opened) {
+            val periods = PriceDetailParser.parse(suggestionPriceEntry.snapshot)
+            detail = detail.copy(fastPrices = mergePricePeriods(detail.fastPrices, periods), priceScheduleCapturedAt = System.currentTimeMillis(), priceScheduleReused = false)
+            backOneLevel(service)
+            waitForPage(7000, 650) { root ->
+                val assessment = PageAssessor.assess(root, requestedName)
+                assessment.kind == PageKind.DETAIL || assessment.expectedStationVisible
+            }
+            humanDelay(1200L, 2000L)
+        }
+
         }
 
         val card = StationCandidate(
@@ -849,52 +875,73 @@ class CollectionEngine(
     ): Boolean {
         if (!ensureAmapAdClosed(service)) return false
 
-        // MI8 devices can still be loading the result page when the fallback
-        // starts. Try the full open/clear/type sequence twice instead of
-        // giving up after the first miss.
+        // Preserve the 18-series flow: non-K60 devices keep their existing query.
+        // K60 must clear and retype the task station name to refresh suggestions.
+        // Slow devices can still be loading the result page, so retry opening.
         repeat(2) { attempt ->
             val opened = service.clickNodeByRegex("搜索框") ||
                 service.clickTopSearchBar() ||
                 service.focusSearchInput()
             if (opened) {
-                humanDelay(700L, 1200L)
-                if (service.focusSearchInput()) {
-                    humanDelay(250L, 500L)
-                    // Clear first so the same query triggers a fresh suggestion request.
-                    service.clickNodeByText("清空")
-                    humanDelay(250L, 450L)
-                    service.setFocusedText("")
-                    humanDelay(250L, 450L)
-                    if (service.setFocusedText(query)) {
-                        AppPreferences.appendLog(context, "重新输入完成，等待联想列表加载(2~3秒): $query")
-                        humanDelay(2000L, 3000L)
-                        return true
+                if (isK60Device()) {
+                    humanDelay(400L, 800L)
+                    val retyped = service.setFocusedText(query)
+                    AppPreferences.appendLog(
+                        context,
+                        if (retyped) "K60：已清空并重新输入站名，等待联想列表: $query"
+                        else "K60：清空重输失败，重试打开搜索框: $query",
+                    )
+                    if (!retyped) {
+                        humanDelay(500L, 800L)
+                        return@repeat
                     }
-                    AppPreferences.appendLog(context, "联想搜索输入框写入失败(${attempt + 1}/2): $query")
+                    humanDelay(2000L, 2300L)
                 } else {
-                    AppPreferences.appendLog(context, "联想搜索输入框聚焦失败(${attempt + 1}/2): $query")
+                    AppPreferences.appendLog(context, "已点击搜索框，保留原站名，等待联想列表加载(约2秒): $query")
+                    humanDelay(2000L, 2300L)
                 }
-            } else {
-                AppPreferences.appendLog(context, "联想搜索框打开失败(${attempt + 1}/2): $query")
+                return true
             }
+            AppPreferences.appendLog(context, "联想搜索框打开失败(${attempt + 1}/2): $query")
             humanDelay(1500L, 2500L)
         }
 
-        // Last resort: reopen AMap's search page with the keyword and retry
-        // the clear/type once more. This recovers from a stale result page.
+        // Recover a stale result page; K60 still needs a successful input refresh.
         AppPreferences.appendLog(context, "联想搜索兜底重开高德搜索页: $query")
         service.openAmapSearch(query)
         humanDelay(2500L, 3500L)
         if (service.focusSearchInput()) {
-            service.setFocusedText("")
-            humanDelay(300L, 500L)
-            if (service.setFocusedText(query)) {
-                AppPreferences.appendLog(context, "重开搜索页后重新输入完成: $query")
-                humanDelay(2000L, 3000L)
-                return true
+            if (isK60Device()) {
+                humanDelay(400L, 800L)
+                if (!service.setFocusedText(query)) {
+                    AppPreferences.appendLog(context, "K60：重开搜索页后清空重输失败，释放任务重试: $query")
+                    return false
+                }
+                AppPreferences.appendLog(context, "K60：重开搜索页后已清空重输站名: $query")
+            } else {
+                AppPreferences.appendLog(context, "重开搜索页后已点击搜索框，等待联想列表加载(约2秒): $query")
             }
+            humanDelay(2000L, 2300L)
+            return true
         }
         return false
+    }
+
+    private fun isK60Device(): Boolean =
+        Build.MODEL.contains("23013RK75C", ignoreCase = true)
+
+    /** 当前页面是否仍停留在联想建议列表（用于判断点击是否生效）。 */
+    private fun isSuggestionListPage(
+        root: NodeSnapshot,
+        query: String,
+    ): Boolean {
+        val pageText = collectPageText(root)
+        val match = StationMatcher.bestSuggestionMatch(root, query)
+        val belowSearch = match != null && match.centerY > 250
+        val looksLikeResultList = "暂无更多内容" in pageText ||
+            "展开列表" in pageText ||
+            "查看地图" in pageText
+        return match != null && belowSearch && !looksLikeResultList
     }
 
     private suspend fun waitForSuggestionList(
@@ -902,15 +949,7 @@ class CollectionEngine(
         query: String,
         timeoutMs: Long = 20_000L,
     ): NodeSnapshot? {
-        return waitForPage(timeoutMs, 500) { root ->
-            val pageText = collectPageText(root)
-            val match = StationMatcher.bestSuggestionMatch(root, query)
-            val belowSearch = match != null && match.centerY > 250
-            val looksLikeResultList = "暂无更多内容" in pageText ||
-                "展开列表" in pageText ||
-                "查看地图" in pageText
-            match != null && belowSearch && !looksLikeResultList
-        }
+        return waitForPage(timeoutMs, 500) { root -> isSuggestionListPage(root, query) }
     }
 
     private fun parseVisibleDetail(
@@ -947,6 +986,176 @@ class CollectionEngine(
             detail.slowTotal.isNotBlank() ||
             detail.chargingPileTotal > 0
 
+    private data class StationDetailEntryTarget(
+        val match: com.tigercode.evcollector.core.engine.StationMatch,
+        val isSuggestion: Boolean,
+    )
+
+    private fun matchStationDetailEntry(
+        root: NodeSnapshot,
+        stationName: String,
+        address: String,
+        listQuery: String,
+        allowSuggestions: Boolean,
+    ): StationDetailEntryTarget? {
+        if (isConfirmedSearchResults(root, listQuery)) {
+            return StationMatcher.bestMatch(root, stationName, address)?.let {
+                StationDetailEntryTarget(it, isSuggestion = false)
+            }
+        }
+        // A station name alone also exists on detail pages. Only match a
+        // suggestion while the search editor is actually focused.
+        if (allowSuggestions && hasFocusedSearchInput(root) &&
+            isSuggestionListPage(root, stationName)
+        ) {
+            return StationMatcher.bestSuggestionMatch(root, stationName)?.let {
+                StationDetailEntryTarget(it, isSuggestion = true)
+            }
+        }
+        return null
+    }
+
+    private suspend fun waitForStableStationList(
+        service: ChargingAccessibilityService,
+        stationName: String,
+        address: String,
+        listQuery: String,
+        allowSuggestions: Boolean,
+        timeoutMs: Long,
+    ): StationDetailEntryTarget? {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        var previous: StationDetailEntryTarget? = null
+        while (!stopRequested && SystemClock.elapsedRealtime() < deadline) {
+            // Cached roots may describe the previous search or a moved card.
+            val root = service.freshSnapshot()
+            if (root != null) {
+                checkPageRisk(service, root)
+                if (stopRequested) return null
+                val current = matchStationDetailEntry(root, stationName, address, listQuery, allowSuggestions)
+                if (current != null && previous != null &&
+                    current.isSuggestion == previous.isSuggestion &&
+                    current.match.description == previous.match.description &&
+                    kotlin.math.abs(current.match.centerX - previous.match.centerX) <= 12 &&
+                    kotlin.math.abs(current.match.centerY - previous.match.centerY) <= 12
+                ) return current
+                previous = current
+            } else {
+                previous = null
+            }
+            delay(500L)
+        }
+        return null
+    }
+
+    private fun isConfirmedStationDetail(root: NodeSnapshot, stationName: String): Boolean {
+        if (hasFocusedSearchInput(root) || isNetworkErrorPage(root)) return false
+        // Reject the list before considering station names or price/pile text:
+        // all of those can also appear on a search-result card.
+        if (PageAssessor.assess(root).kind == PageKind.SEARCH_RESULTS) return false
+        val assessment = PageAssessor.assess(root, stationName)
+        if (!assessment.expectedStationVisible || assessment.kind == PageKind.POPUP) return false
+        if (assessment.kind == PageKind.DETAIL || assessment.kind == PageKind.PRICE_DETAIL) return true
+        val text = collectPageText(root)
+        return assessment.kind == PageKind.UNKNOWN &&
+            ("电站信息" in text || "营业时间" in text || "24小时价格趋势图" in text)
+    }
+
+    private suspend fun waitForFreshStationDetail(
+        service: ChargingAccessibilityService,
+        stationName: String,
+        timeoutMs: Long,
+        requireContent: Boolean = false,
+    ): NodeSnapshot? {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (!stopRequested && SystemClock.elapsedRealtime() < deadline) {
+            val root = service.freshSnapshot()
+            if (root != null) {
+                checkPageRisk(service, root)
+                if (stopRequested) return null
+                if (isNetworkErrorPage(root)) return root
+                if (isConfirmedStationDetail(root, stationName) &&
+                    (!requireContent || isLoadedStationDetail(root, stationName))
+                ) return root
+            }
+            delay(350L)
+        }
+        return null
+    }
+
+    private suspend fun openMatchedStationDetail(
+        service: ChargingAccessibilityService,
+        stationName: String,
+        address: String,
+        listQuery: String,
+        allowSuggestions: Boolean = false,
+    ): NodeSnapshot? {
+        emit(CollectionState.SCANNING_RESULTS, "等待搜索列表及目标站点加载: $stationName", collectedCount, stationName)
+        if (waitForStableStationList(service, stationName, address, listQuery, allowSuggestions, 15000L) == null) {
+            if (!stopRequested) {
+                AppPreferences.appendLog(context, "未确认列表中的匹配站点，取消详情点击: $stationName")
+            }
+            return null
+        }
+        // At most one initial click and two supplemental clicks. Every click
+        // consumes the existing entry permit and uses newly read coordinates.
+        for (attempt in 0..2) {
+            if (stopRequested || !awaitDetailEntryPermit(stationName)) return null
+            val target = waitForStableStationList(
+                service, stationName, address, listQuery, allowSuggestions, 4000L,
+            )
+            if (target == null) {
+                // The page may have changed during the pacing wait. Do not
+                // dispatch a list click onto a loading detail page.
+                val changed = waitForFreshStationDetail(service, stationName, 10000L)
+                return finishStationDetailEntry(service, stationName, changed)
+            }
+            if (stopRequested) return null
+            val action = if (attempt == 0) "列表已确认，点击进入详情" else "仍在列表，重新匹配后补点第${attempt}次"
+            emit(CollectionState.OPENING_DETAIL, "$action: $stationName", collectedCount, stationName)
+            val clicked = service.clickAt(target.match.centerX, target.match.centerY)
+            AppPreferences.appendLog(
+                context,
+                "$action，派发=$clicked，联想=${target.isSuggestion}，坐标=${target.match.centerX},${target.match.centerY}: $stationName",
+            )
+            var opened = waitForFreshStationDetail(service, stationName, if (attempt == 2) 14000L else 6000L)
+            if (opened != null) return finishStationDetailEntry(service, stationName, opened)
+            if (stopRequested) return null
+
+            val latest = service.freshSnapshot()
+            if (latest != null) checkPageRisk(service, latest)
+            if (stopRequested) return null
+            val stillOnList = latest != null &&
+                matchStationDetailEntry(latest, stationName, address, listQuery, allowSuggestions) != null
+            if (!stillOnList) {
+                // No list is visible: give the detail time to render, with no
+                // extra click that could hit an unrelated control.
+                opened = waitForFreshStationDetail(service, stationName, 8000L)
+                return finishStationDetailEntry(service, stationName, opened)
+            }
+            if (attempt < 2) {
+                AppPreferences.appendLog(context, "点击后确认仍在列表，准备重新定位补点: $stationName")
+            }
+        }
+        AppPreferences.appendLog(context, "补点两次后仍未确认目标详情，结束本次打开: $stationName")
+        return null
+    }
+
+    private suspend fun finishStationDetailEntry(
+        service: ChargingAccessibilityService,
+        stationName: String,
+        snapshot: NodeSnapshot?,
+    ): NodeSnapshot? {
+        if (snapshot == null || stopRequested) return null
+        val detail = if (isNetworkErrorPage(snapshot)) {
+            recoverDetailNetworkError(service, stationName)
+        } else {
+            snapshot
+        }
+        if (detail == null || stopRequested || !isConfirmedStationDetail(detail, stationName)) return null
+        AppPreferences.appendLog(context, "已确认进入目标详情页: $stationName")
+        return detail
+    }
+
     private suspend fun collectStation(
         service: ChargingAccessibilityService,
         card: StationCandidate,
@@ -954,131 +1163,24 @@ class CollectionEngine(
         district: String,
         query: String,
         remoteTaskId: String = "",
+        dailyTariff: DailyTariffCache? = null,
     ): StationDetail? {
-        val centerX = card.centerX ?: return null
-        val centerY = card.centerY ?: return null
-        emit(
-            CollectionState.OPENING_DETAIL,
-            "进入详情: ${card.name}",
-            collectedCount,
-            card.name,
-        )
-        if (!awaitDetailEntryPermit(card.name)) return null
-        val clicked = service.clickAt(centerX, centerY) ||
-            service.clickStationCard(card.name) ||
-            service.clickNodeByText(card.name)
-        var detailSnapshot = waitForPage(14000, 700) { root ->
-            val assessment = PageAssessor.assess(root, card.name)
-            isNetworkErrorPage(root) ||
-                assessment.kind == PageKind.DETAIL ||
-                (assessment.expectedStationVisible &&
-                    assessment.kind != PageKind.SEARCH_RESULTS &&
-                    assessment.kind != PageKind.POPUP)
-        }
-        if (detailSnapshot != null && isNetworkErrorPage(detailSnapshot)) {
-            detailSnapshot = recoverDetailNetworkError(service, card.name) ?: run {
-                emit(
-                    CollectionState.ERROR,
-                    "详情页网络异常且刷新失败: ${card.name}",
-                    collectedCount,
-                    card.name,
-                )
-                service.globalBack()
-                humanDelay(1400L, 2200L)
-                return null
+        if (verificationStation != card.name) beginVerificationStation(card.name)
+        var detailSnapshot = openMatchedStationDetail(service, card.name, card.address, query) ?: run {
+            if (!stopRequested) {
+                emit(CollectionState.ERROR, "未能确认目标站点详情: ${card.name}", collectedCount, card.name)
             }
-        }
-        if (detailSnapshot == null && clicked) {
-            emit(
-                CollectionState.OPENING_DETAIL,
-                "详情打开超时，重试点击",
-                collectedCount,
-                card.name,
-            )
-            if (!awaitDetailEntryPermit(card.name)) return null
-            service.clickAt(centerX, centerY) || service.clickStationCard(card.name)
-            detailSnapshot = waitForPage(14000, 700) { root ->
-                val assessment = PageAssessor.assess(root, card.name)
-                isNetworkErrorPage(root) ||
-                    assessment.kind == PageKind.DETAIL ||
-                    (assessment.expectedStationVisible &&
-                        assessment.kind != PageKind.SEARCH_RESULTS &&
-                        assessment.kind != PageKind.POPUP)
-            }
-            if (detailSnapshot != null && isNetworkErrorPage(detailSnapshot)) {
-                detailSnapshot = recoverDetailNetworkError(service, card.name)
-            }
-        }
-        if (detailSnapshot == null) {
-            emit(
-                CollectionState.ERROR,
-                "未能打开站点详情: ${card.name}",
-                collectedCount,
-                card.name,
-            )
-            service.globalBack()
-            humanDelay(1400L, 2200L)
             return null
         }
-
-        val rendered = waitForPage(2500, 350) { root ->
-            DetailPageClassifier.classify(root).scrollsNeeded > 0
-        }
-        if (rendered != null) detailSnapshot = rendered
+        val rendered = waitForFreshStationDetail(service, card.name, 2500L, requireContent = true)
+        if (rendered != null && !isNetworkErrorPage(rendered)) detailSnapshot = rendered
 
         var merged = DetailParser.parse(detailSnapshot)
         if (merged.stationName.isBlank()) {
             merged = merged.copy(stationName = card.name)
         }
-        var chargingPileDialogHandled = false
-        collectChargingPileDetailsIfVisible(service, card.name, waitForEntryLoad = true)?.let { result ->
-            merged = ResultMerger.merge(merged, result.detail)
-            chargingPileDialogHandled = result.completed && result.dialogClosed
-            if (!result.completed) {
-                AppPreferences.appendLog(
-                    context,
-                    "电桩详情尚未完整采集，禁止直接认为流程完成: ${card.name}",
-                )
-            }
-            if (!result.dialogClosed) {
-                AppPreferences.appendLog(
-                    context,
-                    "电桩详情弹窗尚未确认关闭: ${card.name}",
-                )
-            }
-        }
-        // A slow first render can make the first dialog attempt return a
-        // partial result. Retry once before the price flow, never after it.
-        if (!chargingPileDialogHandled && !stopRequested &&
-            service.findChargingPileHistoryEntryBounds() != null
-        ) {
-            collectChargingPileDetailsIfVisible(service, card.name)?.let { result ->
-                merged = ResultMerger.merge(merged, result.detail)
-                chargingPileDialogHandled = result.completed && result.dialogClosed
-                if (!result.completed) {
-                    AppPreferences.appendLog(
-                        context,
-                        "重试后电桩详情仍未完整采集: ${card.name}",
-                    )
-                }
-            }
-        }
-        if (chargingPileDialogHandled) {
-            emit(
-                CollectionState.READING_DETAIL,
-                "电桩详情已完成，开始采集分时电价",
-                collectedCount,
-                card.name,
-            )
-            val refreshedDetail = waitForPage(5000L, 400L) { root ->
-                val assessment = PageAssessor.assess(root, card.name)
-                assessment.kind == PageKind.DETAIL ||
-                    (assessment.expectedStationVisible &&
-                        assessment.kind != PageKind.SEARCH_RESULTS &&
-                        assessment.kind != PageKind.POPUP)
-            } ?: service.freshSnapshot()
-            if (refreshedDetail != null) detailSnapshot = refreshedDetail
-        }
+        // Read idle/total counts from the station page, then continue to tariff and service fees.
+        emit(CollectionState.READING_DETAIL, "读取页面电桩状态，继续采集分时电价", collectedCount, card.name)
         if (detailSnapshot != null && isNetworkErrorPage(detailSnapshot)) {
             detailSnapshot = recoverDetailNetworkError(service, card.name) ?: run {
                 emit(
@@ -1092,6 +1194,12 @@ class CollectionEngine(
                 return null
             }
         }
+        val reused = DailyTariffPolicy.reuse(merged, dailyTariff, "AMAP")
+        if (reused != null) {
+            merged = reused
+            emit(CollectionState.READING_DETAIL, "当前价核对一致，沿用今日分时方案，仅更新桩状态", collectedCount, card.name)
+            AppPreferences.appendLog(context, "分时价格沿用今日方案，原采集时间=${reused.priceScheduleCapturedAt}: ${card.name}")
+        } else {
         val pageInfo = DetailPageClassifier.classify(detailSnapshot)
         val scrolls = maxOf(
             when (pageInfo.type) {
@@ -1131,9 +1239,9 @@ class CollectionEngine(
                     collectedCount,
                     card.name,
                 )
-                if (!service.scrollSmallDown()) {
+                if (!service.scrollDetailFromStation(card.name)) {
                     humanDelay(300L, 700L)
-                    service.scrollSmallDown()
+                    service.scrollDetailFromStation(card.name)
                 }
                 humanDelay(1800L, 2600L)
                 val scrolledSnapshot = service.snapshot() ?: continue
@@ -1191,6 +1299,8 @@ class CollectionEngine(
                 val periods = PriceDetailParser.parse(priceEntry.snapshot)
                 merged = merged.copy(
                     fastPrices = mergePricePeriods(merged.fastPrices, periods),
+                    priceScheduleCapturedAt = System.currentTimeMillis(),
+                    priceScheduleReused = false,
                 )
                 backOneLevel(service)
                 waitForPage(7000, 650) { root ->
@@ -1222,6 +1332,8 @@ class CollectionEngine(
                 backOneLevel(service)
                 humanDelay(1800L, 3000L)
             }
+        }
+
         }
 
         if (stopRequested) {
@@ -1399,6 +1511,9 @@ class CollectionEngine(
             "slowAvailable" to detail.slowAvailable,
             "slowTotal" to detail.slowTotal,
             "slowPower" to detail.slowPower,
+            "priceScheduleCapturedAt" to (detail.priceScheduleCapturedAt.takeIf { it > 0 } ?: if (detail.fastPrices.isNotEmpty() || detail.slowPrices.isNotEmpty()) System.currentTimeMillis() else 0L),
+            "priceScheduleMode" to if (detail.priceScheduleReused) "REUSED" else "COLLECTED",
+            "priceSchedulePlatform" to "AMAP",
             "priceTrendTitle" to detail.priceTrendTitle,
             "fastPrices" to detail.fastPrices,
             "slowPrices" to detail.slowPrices,
@@ -1437,201 +1552,6 @@ class CollectionEngine(
         // not be treated as a locally claimed task.
         repository.saveResult(task, resultJson, markLocalTaskSucceeded = false)
     }
-
-    private suspend fun collectChargingPileDetailsIfVisible(
-        service: ChargingAccessibilityService,
-        stationName: String,
-        waitForEntryLoad: Boolean = false,
-    ): ChargingPileCollectionResult? {
-        if (stopRequested) return null
-        // AMap may render the detail shell first and add "查看历史空闲" after a
-        // short network delay. Give the first attempt one bounded warm-up; the
-        // retry remains fast so a truly absent entry does not wait twice.
-        if (waitForEntryLoad && !stopRequested) {
-            emit(
-                CollectionState.READING_DETAIL,
-                "等待查看历史空闲入口渲染",
-                collectedCount,
-                stationName,
-            )
-            humanDelay(1500L, 2500L)
-        }
-        val current = service.freshSnapshot() ?: return null
-        var dialogSnapshot = current.takeIf(ChargingPileDialogParser::isDialog)
-
-        if (dialogSnapshot == null) {
-            var entryBounds = service.findChargingPileHistoryEntryBounds()
-            if (entryBounds == null && waitForEntryLoad && !stopRequested) {
-                val waitDeadline = System.currentTimeMillis() + 3_500L
-                while (entryBounds == null && !stopRequested &&
-                    System.currentTimeMillis() < waitDeadline
-                ) {
-                    delay(350L)
-                    entryBounds = service.findChargingPileHistoryEntryBounds()
-                }
-            }
-            if (entryBounds == null) return null
-            emit(
-                CollectionState.READING_DETAIL,
-                "打开查看历史空闲，采集电桩详情",
-                collectedCount,
-                stationName,
-            )
-            humanDelay(700L, 1200L)
-            if (!service.clickChargingPileHistoryEntry()) {
-                AppPreferences.appendLog(context, "查看历史空闲入口点击失败: $entryBounds")
-                return null
-            }
-            dialogSnapshot = waitForPage(10_000, 400) { root ->
-                ChargingPileDialogParser.isDialog(root)
-            }
-            if (dialogSnapshot == null) {
-                // The dialog can finish opening just after the last regular
-                // poll. Always use a fresh snapshot for this final check.
-                dialogSnapshot = service.freshSnapshot()
-                    ?.takeIf(ChargingPileDialogParser::isDialog)
-            }
-            if (dialogSnapshot == null) {
-                AppPreferences.appendLog(context, "点击查看历史空闲后未识别到电桩详情弹窗")
-                return null
-            }
-        }
-
-        // Seeing the dialog title is not enough: AMap may expose the shell of
-        // the dialog before the pile list has rendered. Wait for usable data
-        // and for one repeated, stable snapshot before parsing/scrolling.
-        var readySnapshot = dialogSnapshot
-        var previousReadySignature = ""
-        var stableReadyPolls = 0
-        val readyDeadline = System.currentTimeMillis() + 12_000L
-        while (!stopRequested && System.currentTimeMillis() < readyDeadline) {
-            val fresh = service.freshSnapshot()
-            if (fresh == null || !ChargingPileDialogParser.isDialog(fresh)) break
-            readySnapshot = fresh
-            val parsed = ChargingPileDialogParser.parse(fresh)
-            val signature = buildPileSignature(parsed)
-            val hasUsableContent = parsed.expectedTotal > 0 || parsed.piles.isNotEmpty()
-            stableReadyPolls = if (hasUsableContent && signature == previousReadySignature) {
-                stableReadyPolls + 1
-            } else {
-                0
-            }
-            previousReadySignature = signature
-            if (hasUsableContent && stableReadyPolls >= 1) break
-            delay(450L)
-        }
-        dialogSnapshot = readySnapshot
-        val initialParsed = ChargingPileDialogParser.parse(dialogSnapshot)
-        val contentReady = initialParsed.expectedTotal > 0 || initialParsed.piles.isNotEmpty()
-        if (!contentReady) {
-            AppPreferences.appendLog(context, "电桩详情弹窗已出现但内容仍未加载完成: $stationName")
-        }
-
-        var expectedTotal = 0
-        var piles = emptyList<ChargingPileDetail>()
-        var previousSignature = ""
-        var noProgressScrolls = 0
-        var reachedBottom = false
-        var activeDialogSnapshot = checkNotNull(dialogSnapshot)
-        var dialogClosed = false
-
-        try {
-            for (scrollIndex in 0..MAX_CHARGING_PILE_SCROLLS) {
-                if (stopRequested) break
-                val parsed = ChargingPileDialogParser.parse(activeDialogSnapshot)
-                expectedTotal = maxOf(expectedTotal, parsed.expectedTotal)
-                val beforeCount = piles.size
-                piles = ChargingPileDialogParser.merge(piles, parsed.piles)
-                val signature = buildPileSignature(parsed)
-                noProgressScrolls = if (
-                    piles.size == beforeCount &&
-                    signature.isNotBlank() &&
-                    signature == previousSignature
-                ) {
-                    noProgressScrolls + 1
-                } else {
-                    0
-                }
-                previousSignature = signature
-
-                emit(
-                    CollectionState.READING_DETAIL,
-                    "读取电桩详情 ${piles.size}/${expectedTotal.takeIf { it > 0 } ?: "?"}",
-                    collectedCount,
-                    stationName,
-                )
-                // A known total needs one stable no-op scroll at the bottom;
-                // an unknown total needs three unchanged snapshots. Merely
-                // seeing the dialog or reaching a failed scroll is not enough.
-                val reachedExpectedTotal = expectedTotal > 0 && piles.size >= expectedTotal
-                val confirmedAtBottom = reachedExpectedTotal && noProgressScrolls >= 1
-                val stableWithoutKnownTotal = expectedTotal <= 0 &&
-                    piles.isNotEmpty() && noProgressScrolls >= 3
-                if (confirmedAtBottom || stableWithoutKnownTotal) {
-                    reachedBottom = true
-                    break
-                }
-                if (scrollIndex >= MAX_CHARGING_PILE_SCROLLS) {
-                    reachedBottom = piles.isNotEmpty() && expectedTotal > 0 &&
-                        piles.size >= expectedTotal
-                    break
-                }
-
-                val stillOpen = service.freshSnapshot()
-                    ?.let(ChargingPileDialogParser::isDialog)
-                    ?: false
-                if (!stillOpen || !service.scrollChargingPileDialog()) break
-                humanDelay(1100L, 1700L)
-                activeDialogSnapshot = service.freshSnapshot()
-                    ?.takeIf(ChargingPileDialogParser::isDialog)
-                    ?: break
-            }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Throwable) {
-            AppPreferences.appendLog(
-                context,
-                "电桩详情采集异常，继续原流程: ${error.message ?: error.javaClass.simpleName}",
-            )
-        } finally {
-            // Price lookup is not allowed to start until this function has
-            // confirmed that the visual dialog is actually gone.
-            dialogClosed = closeChargingPileDialogAndReturn(service, stationName)
-        }
-
-        val complete = contentReady && reachedBottom &&
-            ((expectedTotal > 0 && piles.size >= expectedTotal) ||
-                (expectedTotal <= 0 && piles.isNotEmpty())) &&
-            dialogClosed
-        if (complete) {
-            AppPreferences.appendLog(
-                context,
-                "电桩详情采集完成: ${piles.size}/${expectedTotal.takeIf { it > 0 } ?: "?"}",
-            )
-        } else {
-            AppPreferences.appendLog(
-                context,
-                "电桩详情采集未完成: ${piles.size}/${expectedTotal.takeIf { it > 0 } ?: "?"}, " +
-                    "bottom=$reachedBottom closed=$dialogClosed",
-            )
-        }
-        return ChargingPileCollectionResult(
-            detail = StationDetail(
-                stationName = stationName,
-                chargingPileTotal = expectedTotal,
-                chargingPiles = piles,
-            ),
-            completed = complete,
-            dialogClosed = dialogClosed,
-        )
-    }
-
-    private fun buildPileSignature(snapshot: com.tigercode.evcollector.core.model.ChargingPileDialogSnapshot): String =
-        "${snapshot.expectedTotal}:" +
-            snapshot.piles.joinToString("|") {
-                "${it.deviceId}:${it.filledFieldCount}:${it.chargingType}:${it.ratedPower}:" +
-                    "${it.ratedCurrent}:${it.ratedVoltage}:${it.status}"
-            }
 
     private suspend fun closeChargingPileDialogAndReturn(
         service: ChargingAccessibilityService,
@@ -1793,22 +1713,24 @@ class CollectionEngine(
         intervalMs: Long,
         predicate: (NodeSnapshot) -> Boolean,
     ): NodeSnapshot? {
-        val deadline = System.currentTimeMillis() + timeoutMs
+        var deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (stopRequested) return null
             val service = ChargingAccessibilityService.current()
             if (service != null) {
                 val snapshot = service.snapshot()
                 if (snapshot != null) {
-                    checkPageRisk(service, snapshot)
+                    val checked = checkPageRisk(service, snapshot)
                     if (stopRequested) return null
-                    if (predicate(snapshot)) return snapshot
+                    if (checked !== snapshot) deadline = System.currentTimeMillis() + timeoutMs
+                    if (predicate(checked)) return checked
                 }
                 val fresh = service.freshSnapshot()
                 if (fresh != null) {
-                    checkPageRisk(service, fresh)
+                    val checked = checkPageRisk(service, fresh)
                     if (stopRequested) return null
-                    if (predicate(fresh)) return fresh
+                    if (checked !== fresh) deadline = System.currentTimeMillis() + timeoutMs
+                    if (predicate(checked)) return checked
                 }
             }
             delay(intervalMs)
@@ -2207,17 +2129,6 @@ class CollectionEngine(
     fun batchCooldownEndAt(): Long = batchCooldownUntilMs
 
     private suspend fun awaitDetailEntryPermit(stationName: String): Boolean {
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        val delayRange = CollectionPacingPolicy.delayRangeForHour(hour)
-        val cadenceDelayMs = randomLongInclusive(delayRange.minMs, delayRange.maxMs)
-        emit(
-            CollectionState.PAUSED,
-            "${dayPeriodLabel(hour)}访问节奏：详情打开前停留 ${cadenceDelayMs / 1000} 秒",
-            collectedCount,
-            stationName,
-        )
-        if (!delayWhileRunning(cadenceDelayMs)) return false
-
         while (!stopRequested) {
             val nowMs = System.currentTimeMillis()
             replaceDetailEntryHistory(
@@ -2298,13 +2209,6 @@ class CollectionEngine(
     private fun randomLongInclusive(minMs: Long, maxMs: Long): Long =
         if (maxMs <= minMs) minMs else Random.nextLong(minMs, maxMs + 1L)
 
-    private fun dayPeriodLabel(hour: Int): String = when (hour) {
-        in 6..11 -> "上午"
-        in 12..17 -> "下午"
-        in 18..22 -> "晚间"
-        else -> "夜间"
-    }
-
     private fun minutesRoundedUp(durationMs: Long): Long =
         (durationMs.coerceAtLeast(0L) + 59_999L) / 60_000L
 
@@ -2321,35 +2225,112 @@ class CollectionEngine(
         return riskPhrases.any { it in pageText }
     }
 
-    private suspend fun checkPageRisk(service: ChargingAccessibilityService, root: NodeSnapshot) {
+    private suspend fun checkPageRisk(service: ChargingAccessibilityService, root: NodeSnapshot): NodeSnapshot {
         val pageText = collectPageText(root)
         val verificationPhrase = HumanVerificationDetector.find(pageText)
         if (verificationPhrase != null) {
-            stopForHumanVerification(service, verificationPhrase, pageText)
+            if (verificationStation.isNotBlank()) {
+                return recoverSliderVerification(service, root)
+            }
+            stopForHumanVerification(verificationPhrase, pageText)
         }
         if (hasRiskPhrase(root)) {
             handleRiskPause(root)
         }
+        return root
     }
 
-    private suspend fun stopForHumanVerification(
+    private fun beginVerificationStation(stationName: String) {
+        verificationStation = stationName
+        verificationAttempts = 0
+        verificationRecoveryUsed = false
+    }
+
+    private suspend fun recoverSliderVerification(
         service: ChargingAccessibilityService,
+        initial: NodeSnapshot,
+    ): NodeSnapshot {
+        val stationName = verificationStation
+        val deadline = SystemClock.elapsedRealtime() + 60_000L
+        var snapshot = initial
+        var actionDeadline = 0L
+        var dragInFlight = false
+        var retryClicked = false
+        if (verificationRecoveryUsed && verificationAttempts >= SliderVerificationPolicy.MAX_ATTEMPTS) {
+            skipVerificationStation(service, stationName)
+        }
+        verificationRecoveryUsed = true
+        while (!stopRequested && SystemClock.elapsedRealtime() < deadline) {
+            val now = SystemClock.elapsedRealtime()
+            val pageText = collectPageText(snapshot)
+            if (HumanVerificationDetector.find(pageText) == null &&
+                !hasRiskPhrase(snapshot) && !isNetworkErrorPage(snapshot) &&
+                isConfirmedStationDetail(snapshot, stationName) &&
+                isLoadedStationDetail(snapshot, stationName)
+            ) {
+                AppPreferences.appendLog(context, "验证恢复成功，已确认目标详情: $stationName")
+                return snapshot
+            }
+            val retry = SliderVerificationPolicy.retryTarget(snapshot)
+            if (retry != null && !retryClicked) {
+                if (verificationAttempts >= SliderVerificationPolicy.MAX_ATTEMPTS) break
+                if (service.clickAt(retry.centerX, retry.centerY)) {
+                    retryClicked = true
+                    dragInFlight = false
+                    actionDeadline = now + 15_000L
+                    AppPreferences.appendLog(context, "点击验证重试，等待滑块: $stationName")
+                }
+            } else if (retry == null) {
+                retryClicked = false
+                val drag = SliderVerificationPolicy.drag(snapshot)
+                if (!dragInFlight && drag != null) {
+                    if (verificationAttempts >= SliderVerificationPolicy.MAX_ATTEMPTS) break
+                    verificationAttempts += 1
+                    emit(CollectionState.OPENING_DETAIL,
+                        "人机验证第${verificationAttempts}/3轮: $stationName", collectedCount, stationName)
+                    val completed = service.dragVerificationSlider(drag.startX, drag.startY, drag.endX, drag.endY)
+                    AppPreferences.appendLog(context,
+                        "验证拖动第${verificationAttempts}/3轮，手势完成=$completed: $stationName")
+                    dragInFlight = true
+                    actionDeadline = SystemClock.elapsedRealtime() + 10_000L
+                }
+            }
+            if (actionDeadline > 0L && now >= actionDeadline) break
+            var fresh: NodeSnapshot? = null
+            do {
+                delay(150L)
+                if (stopRequested || SystemClock.elapsedRealtime() >= deadline) break
+                fresh = service.freshSnapshot()
+            } while (fresh == null)
+            if (fresh == null) break
+            snapshot = fresh
+        }
+        if (stopRequested) throw CancellationException("验证恢复期间停止采集")
+        skipVerificationStation(service, stationName)
+    }
+
+    private suspend fun skipVerificationStation(
+        service: ChargingAccessibilityService,
+        stationName: String,
+    ): Nothing {
+        AppPreferences.appendLog(context, "验证恢复未完成，已尝试${verificationAttempts}/3轮，跳过: $stationName")
+        if (stopRequested) throw CancellationException("跳站期间停止采集")
+        returnToSearchList(service)
+        if (stopRequested) throw CancellationException("跳站期间停止采集")
+        throw VerificationAttemptsExhaustedException(stationName, verificationAttempts)
+    }
+
+    private fun stopForHumanVerification(
         phrase: String,
         pageText: String,
     ): Nothing {
-        // Do not stop this device. SyncManager releases the current task with
-        // retryable=true; here we only go back to the search list and throw so
-        // the cooldown loop can continue with the next task.
-        stopRequested = false
-        val message = "检测到人机验证($phrase)，释放当前任务并返回列表继续"
-        emit(
-            CollectionState.ERROR,
-            message,
-            collectedCount,
-            "",
-        )
+        // Leave the challenge visible for the operator and require a manual restart.
+        stopRequested = true
+        AppPreferences.setScanning(context, false)
+        val message = "检测到人机验证($phrase)，本机已暂停；请手动完成验证后点击开始采集"
+        AppPreferences.setRemoteStatus(context, "人机验证，等待人工处理", message)
+        emit(CollectionState.STOPPED, message, collectedCount, "")
         AppPreferences.appendLog(context, message)
-        returnToSearchList(service)
         throw HumanVerificationException(
             phrase = phrase,
             pageExcerpt = pageText.replace(whitespaceRegex, " ").take(300),
@@ -2419,8 +2400,8 @@ class CollectionEngine(
                 humanDelay(800L, 1500L)
                 return@repeat
             }
-            checkPageRisk(service, current)
-            if (!isNetworkErrorPage(current)) return current
+            val checked = checkPageRisk(service, current)
+            if (!isNetworkErrorPage(checked)) return checked
 
             val clicked = service.clickNodeByText("刷新重试")
             AppPreferences.appendLog(

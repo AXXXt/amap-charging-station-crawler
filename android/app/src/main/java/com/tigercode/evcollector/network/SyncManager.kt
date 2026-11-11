@@ -10,12 +10,16 @@ import com.tigercode.evcollector.core.model.StationDetail
 import com.tigercode.evcollector.data.CollectorRepository
 import com.tigercode.evcollector.engine.CollectionEngine
 import com.tigercode.evcollector.engine.DetailPageRiskControlException
+import com.tigercode.evcollector.engine.VerificationAttemptsExhaustedException
 import com.tigercode.evcollector.engine.HumanVerificationException
 import com.tigercode.evcollector.engine.SuggestionSearchNotStartedException
 import com.tigercode.evcollector.engine.StationNotFoundException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -40,17 +44,28 @@ class SyncManager(
     private val engine: CollectionEngine,
 ) {
     suspend fun runOnce(): SyncOutcome {
+        return try {
+            runOnceAllowed()
+        } catch (_: FleetStoppedException) {
+            SyncOutcome.FleetStopped
+        }
+    }
+
+    private suspend fun runOnceAllowed(): SyncOutcome {
         return withContext(Dispatchers.IO) {
             val deviceCode = AppPreferences.deviceCode(context)
             val activationCode = AppPreferences.activationCode(context)
-            // Keep the claim mode backward compatible with the deployed API
-            // ("MONITOR" endpoints). The list-vs-detail choice stays local and
-            // travels in the observation payload (collectionMode=LIST_SNAPSHOT)
-            // so an older server can still accept and store the snapshot.
-            val collectionMode = if (AppPreferences.isMonitorMode(context)) "MONITOR" else "NORMAL"
+            val priorityStationMode = AppPreferences.isMonitorMode(context) &&
+                AppPreferences.isPriorityStationMode(context)
+            val collectionMode = when {
+                priorityStationMode -> "MONITOR_AMAP_MIN240_647"
+                AppPreferences.isMonitorMode(context) -> "MONITOR"
+                else -> "NORMAL"
+            }
             var claimedTask: RemoteTaskDto? = null
             var api: ServerApi? = null
             var leaseRenewJob: Job? = null
+            var fleetWatchJob: Job? = null
             val leaseLost = AtomicBoolean(false)
             try {
                 api = RetrofitClient.serverApi(AppPreferences.serverUrl(context), context)
@@ -66,6 +81,7 @@ class SyncManager(
                         capabilities = mapOf(
                             "accessibilityConnected" to ChargingAccessibilityService.isConnected(),
                             "targetPackage" to ChargingAccessibilityService.AMAP_PACKAGE,
+                            "fleetStopSupported" to true,
                             "sdkInt" to Build.VERSION.SDK_INT,
                             "manufacturer" to Build.MANUFACTURER,
                             "model" to Build.MODEL,
@@ -74,6 +90,11 @@ class SyncManager(
                 )
                 if (registerResponse.deviceToken.isNotBlank()) {
                     AppPreferences.saveDeviceToken(context, registerResponse.deviceToken)
+                }
+                if (priorityStationMode &&
+                    (registerResponse.priorityStationScopes?.get("AMAP_MIN240_647") ?: 0) <= 0
+                ) {
+                    throw IllegalStateException("服务器尚未提供高德重点站点循环范围，请先更新服务器")
                 }
                 activeApi.heartbeat(
                     HeartbeatRequest(
@@ -85,11 +106,46 @@ class SyncManager(
                         capabilities = mapOf(
                             "accessibilityConnected" to ChargingAccessibilityService.isConnected(),
                             "targetPackage" to ChargingAccessibilityService.AMAP_PACKAGE,
+                            "fleetStopSupported" to true,
                         ),
                     )
                 )
 
+                val controlApi = FleetControlClient.api(context)
+                FleetControlClient.requireAllowed(context, controlApi)
+                val taskJob = currentCoroutineContext().job
+                fleetWatchJob = kotlinx.coroutines.CoroutineScope(currentCoroutineContext()).launch {
+                    while (isActive) {
+                        delay(3_000L)
+                        try {
+                            val control = FleetControlClient.control(context, controlApi)
+                            if (control.stopRequired || !control.releaseComplete) {
+                                engine.stop()
+                                FleetControlClient.stopAndAcknowledge(context, controlApi, control.stopGeneration)
+                                taskJob.cancel(FleetStoppedException())
+                                return@launch
+                            }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (_: Exception) {
+                            // A transient control request failure is retried in three seconds.
+                        }
+                    }
+                }
                 val claim = activeApi.claimTask(ClaimTaskRequest(deviceCode, collectionMode))
+                if (claim.reason == "FLEET_STOPPED") {
+                    engine.stop()
+                    FleetControlClient.markStopped(context)
+                    try {
+                        val control = claim.fleetControl ?: FleetControlClient.control(context, controlApi)
+                        FleetControlClient.stopAndAcknowledge(context, controlApi, control.stopGeneration)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        // Remain stopped even when the receipt generation cannot be fetched.
+                    }
+                    throw FleetStoppedException()
+                }
                 val task = claim.task
                 claimedTask = task
                 if (task == null) {
@@ -118,12 +174,9 @@ class SyncManager(
                 leaseRenewJob = startLeaseRenewal(activeApi, deviceCode, collectionMode, task, leaseLost)
                 try {
                     val taskStartedAt = System.currentTimeMillis()
-                    val listSnapshotMode =
-                        AppPreferences.isMonitorMode(context) && AppPreferences.isMonitorListMode(context)
-                    val details = if (
-                        task.type == HENAN_POI_LIST_TASK ||
-                        (listSnapshotMode && task.type == HENAN_POI_DETAIL_TASK)
-                    ) {
+                    // The fixed station entry always uses the existing detail flow,
+                    // including LIST tasks issued before the server mode switch.
+                    val details = if (task.type == HENAN_POI_LIST_TASK && !priorityStationMode) {
                         val requestedName = task.stationName.ifBlank { task.keyword }
                         val detail = engine.runStationListSnapshotTask(
                             stationId = task.stationId,
@@ -136,7 +189,8 @@ class SyncManager(
                         listOf(detail)
                     } else if (
                         task.type == SITE_STATION_DETAIL_TASK ||
-                        task.type == HENAN_POI_DETAIL_TASK
+                        task.type == HENAN_POI_DETAIL_TASK ||
+                        (priorityStationMode && task.type == HENAN_POI_LIST_TASK)
                     ) {
                         val requestedName = task.stationName.ifBlank { task.keyword }
                         val detail = engine.runStationTask(
@@ -146,6 +200,7 @@ class SyncManager(
                             latitude = task.stationLatitude,
                             longitude = task.stationLongitude,
                             remoteTaskId = task.id,
+                            dailyTariff = task.dailyTariff,
                         ) ?: throw IllegalStateException("未采集到目标站点: $requestedName")
                         listOf(detail)
                     } else {
@@ -204,6 +259,52 @@ class SyncManager(
                 } finally {
                     leaseRenewJob?.cancelAndJoin()
                     leaseRenewJob = null
+                }
+            } catch (error: VerificationAttemptsExhaustedException) {
+                val task = claimedTask
+                val activeApi = api
+                if (task == null || activeApi == null) {
+                    SyncOutcome.Failed(error.message.orEmpty())
+                } else {
+                    try {
+                        activeApi.completeTask(
+                            task.id,
+                            TaskActionRequest(
+                                deviceCode = deviceCode,
+                                mode = collectionMode,
+                                leaseToken = task.leaseToken,
+                                resultSummary = mapOf(
+                                    "stations" to 0,
+                                    "skipped" to true,
+                                    "stationId" to task.stationId,
+                                    "stationName" to error.stationName,
+                                    "skipReason" to "HUMAN_VERIFICATION_EXHAUSTED",
+                                    "verificationAttempts" to error.attempts,
+                                    "skipMessage" to error.message.orEmpty(),
+                                ),
+                            ),
+                        )
+                        SyncOutcome.Skipped(error.stationName, "人机验证恢复未完成，已跳过本站")
+                    } catch (completionError: Exception) {
+                        if (completionError is CancellationException) throw completionError
+                        try {
+                            activeApi.failTask(
+                                task.id,
+                                TaskActionRequest(
+                                    deviceCode = deviceCode,
+                                    mode = collectionMode,
+                                    leaseToken = task.leaseToken,
+                                    errorCode = "HUMAN_VERIFICATION_EXHAUSTED",
+                                    errorMessage = completionError.message.orEmpty(),
+                                    retryable = false,
+                                ),
+                            )
+                            SyncOutcome.Skipped(error.stationName, "人机验证恢复未完成，本站已结束")
+                        } catch (releaseError: Exception) {
+                            if (releaseError is CancellationException) throw releaseError
+                            SyncOutcome.Failed("本站验证失败，跳过状态未能同步: ${releaseError.message}")
+                        }
+                    }
                 }
             } catch (error: DetailPageRiskControlException) {
                 claimedTask?.let { task ->
@@ -325,6 +426,7 @@ class SyncManager(
                     }
                 }
             } catch (error: CancellationException) {
+                engine.stop()
                 throw error
             } catch (error: Exception) {
                 claimedTask?.let { task ->
@@ -345,6 +447,11 @@ class SyncManager(
                     }
                 }
                 SyncOutcome.Failed(friendlyNetworkError(error))
+            } finally {
+                withContext(NonCancellable) {
+                    fleetWatchJob?.cancelAndJoin()
+                    leaseRenewJob?.cancelAndJoin()
+                }
             }
         }
     }
@@ -376,6 +483,7 @@ class SyncManager(
                 capabilities = mapOf(
                     "accessibilityConnected" to ChargingAccessibilityService.isConnected(),
                     "targetPackage" to ChargingAccessibilityService.AMAP_PACKAGE,
+                            "fleetStopSupported" to true,
                     "sdkInt" to Build.VERSION.SDK_INT,
                     "manufacturer" to Build.MANUFACTURER,
                     "model" to Build.MODEL,
@@ -531,5 +639,6 @@ sealed class SyncOutcome {
         val reason: String,
     ) : SyncOutcome()
     data class Failed(val message: String) : SyncOutcome()
+    object FleetStopped : SyncOutcome()
     object NoTask : SyncOutcome()
 }

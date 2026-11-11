@@ -132,6 +132,19 @@ def _as_int(value: Any, default: int) -> int:
         return default
 
 
+def _is_pile_count(value: Any) -> bool:
+    # Zero is an observed count; blank/invalid values are not observations.
+    return value is not None and re.fullmatch(r"[0-9]+", str(value).strip()) is not None
+
+
+def _has_pile_card_summary(payload: Dict[str, Any]) -> bool:
+    return any(
+        _is_pile_count(payload.get(f"{prefix}{suffix}"))
+        for prefix in ("fast", "super", "slow")
+        for suffix in ("Available", "Total")
+    )
+
+
 def _pile_snapshot_summary(payload: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
     """按逐桩状态统计快充、超充、慢充的空闲/忙碌/未知数量。"""
     summary = {
@@ -600,12 +613,11 @@ class SiteExplorationBridge:
         """Append one dynamic snapshot without affecting the latest-result upsert."""
         # A list-snapshot round can return no price and no pile information at
         # all (for example when the AMap card does not render those fields).
-        # Do not persist an all-zero snapshot: it would pollute the trend chart
-        # and make it look like the station had zero piles / no price.
+        # Do not turn an empty observation into an all-zero snapshot. Explicitly
+        # observed zero counts are valid and still belong in the history.
         has_price = bool(payload.get("currentPrice")) or bool(payload.get("fastPrices")) or bool(payload.get("slowPrices"))
-        has_piles = bool(payload.get("chargingPiles")) or any(
-            payload.get(field)
-            for field in ("fastTotal", "superTotal", "slowTotal", "chargingPileTotal", "chargingPileCount")
+        has_piles = bool(payload.get("chargingPiles")) or _has_pile_card_summary(payload) or any(
+            payload.get(field) for field in ("chargingPileTotal", "chargingPileCount")
         )
         if not has_price and not has_piles:
             return
@@ -623,6 +635,10 @@ class SiteExplorationBridge:
             "fastPrices": payload.get("fastPrices") or [],
             "slowPrices": payload.get("slowPrices") or [],
         }
+        # Keep tariff provenance separate from the live gun-state observation time.
+        for field in ("priceScheduleCapturedAt", "priceScheduleMode", "priceSchedulePlatform"):
+            if payload.get(field) is not None:
+                price_json[field] = payload[field]
         pile_json = payload.get("chargingPiles") or []
         if not isinstance(pile_json, list):
             pile_json = []
@@ -635,7 +651,7 @@ class SiteExplorationBridge:
         snapshot_hash = hashlib.sha256(
             json.dumps(
                 {
-                    "price": price_json,
+                    "price": {key: value for key, value in price_json.items() if not key.startswith("priceSchedule")},
                     "availability": availability_json,
                     "piles": pile_json,
                 },
@@ -699,7 +715,7 @@ class SiteExplorationBridge:
             )
 
     def _merge_latest_result_payload(self, conn, source_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Keep last known prices and only fill missing per-pile details.
+        """Replace live station-card counts while retaining static piles and prices.
 
         Apply the same policy to full details, visible details and list snapshots
         from either collector. Lock the existing latest-result row until commit
@@ -748,26 +764,49 @@ class SiteExplorationBridge:
             if has_text(previous.get("priceTrendTitle")):
                 merged["priceTrendTitle"] = previous["priceTrendTitle"]
 
+        if not has_new_periods:
+            for field in ("priceScheduleCapturedAt", "priceScheduleMode", "priceSchedulePlatform"):
+                if field in previous:
+                    merged[field] = previous[field]
+
+        has_new_summary = _has_pile_card_summary(payload)
         old_piles = previous.get("chargingPiles")
         if isinstance(old_piles, list) and old_piles:
             # Existing pile records are intentionally immutable, including their
             # power/status fields. Later rounds only fill stations without them.
             merged["chargingPiles"] = old_piles
-            if has_text(previous.get("chargingPileTotal")):
+            if not has_new_summary and has_text(previous.get("chargingPileTotal")):
                 merged["chargingPileTotal"] = previous["chargingPileTotal"]
         elif not isinstance(merged.get("chargingPiles"), list):
             merged["chargingPiles"] = []
         if merged.get("chargingPiles"):
             merged["chargingPileCount"] = len(merged["chargingPiles"])
 
-        # List/partial rounds can also omit the aggregate counts and powers.
-        # Keep those values when absent, while allowing fresh aggregates through.
-        for field in (
-            "fastPower", "superPower", "slowPower",
-            "fastTotal", "superTotal", "slowTotal", "chargingPileTotal", "chargingPileCount",
-        ):
-            if not has_text(merged.get(field)) and has_text(previous.get(field)):
-                merged[field] = previous[field]
+        # AMap and Baidu can classify the same guns differently (fast/super).
+        # A fresh card observation replaces all categories as one group, including
+        # absent categories and unknown idle counts. Mixing old and new categories
+        # would count the same guns twice. Price-only uploads keep the last group.
+        for prefix in ("fast", "super", "slow"):
+            for suffix in ("Available", "Total", "Power"):
+                field = f"{prefix}{suffix}"
+                value = payload.get(field)
+                if not has_new_summary and not has_text(value):
+                    value = previous.get(field)
+                merged[field] = "" if value is None else str(value).strip()
+
+        if has_new_summary:
+            totals = [
+                int(str(payload[f"{prefix}Total"]).strip())
+                for prefix in ("fast", "super", "slow")
+                if _is_pile_count(payload.get(f"{prefix}Total"))
+            ]
+            if totals:
+                # This is the live total, independent of retained static details.
+                merged["chargingPileTotal"] = sum(totals)
+        else:
+            for field in ("chargingPileTotal", "chargingPileCount"):
+                if not has_text(merged.get(field)) and has_text(previous.get(field)):
+                    merged[field] = previous[field]
         return merged
 
     def upsert_result(
@@ -865,13 +904,17 @@ class SiteExplorationBridge:
             preserve_if_blank = {
                 "province", "city", "district", "source_site_id", "source_station_id",
                 "requested_name", "matched_station_name", "source_address",
-                # A list-snapshot round may not render price / pile fields.
-                # Keep the last known non-empty values instead of wiping them.
+                # Partial uploads may omit price or other station metadata.
                 "current_price", "parking_fee", "business_hours", "operator",
-                "fast_available", "fast_total", "fast_power",
-                "super_available", "super_total", "super_power",
-                "slow_available", "slow_total", "slow_power",
             }
+            if not _has_pile_card_summary(payload):
+                # Only uploads without a new card observation retain scalar
+                # counts on blank. Fresh observations must also clear old groups.
+                preserve_if_blank.update(
+                    f"{prefix}_{suffix}"
+                    for prefix in ("fast", "super", "slow")
+                    for suffix in ("available", "total", "power")
+                )
             updates = []
             for column in columns:
                 if column in {"source_key", "created_at", "captured_at", "updated_at"}:

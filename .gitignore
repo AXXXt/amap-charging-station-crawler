@@ -32,3 +32,14 @@ Thumbs.db
 
 # Runtime data
 /data/
+
+# Local build archives, credentials and source backups
+*.apk
+*.aab
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+*.bak
+*.bak-*

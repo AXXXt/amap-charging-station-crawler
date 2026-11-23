@@ -19,6 +19,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import java.util.regex.Pattern
 import kotlin.random.Random
+import com.tigercode.evcollector.core.engine.SearchEntryPolicy
+import com.tigercode.evcollector.core.engine.AmapNavigationPolicy
 import com.tigercode.evcollector.core.model.NodeSnapshot
 import com.tigercode.evcollector.core.model.PageKind
 import com.tigercode.evcollector.core.model.Rect as SnapshotRect
@@ -153,13 +155,49 @@ class ChargingAccessibilityService : AccessibilityService() {
         }
     }
 
+    fun inputMethodBounds(): List<SnapshotRect> {
+        val currentWindows = try {
+            windows
+        } catch (error: RuntimeException) {
+            Log.w("EvCollector", "无法读取输入法窗口", error)
+            return emptyList()
+        } ?: return emptyList()
+        return try {
+            currentWindows.filter { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+                .mapNotNull { window ->
+                    val bounds = Rect()
+                    window.getBoundsInScreen(bounds)
+                    if (bounds.isEmpty) null else SnapshotRect(bounds.left, bounds.top, bounds.right, bounds.bottom)
+                }
+        } finally {
+            currentWindows.forEach { it.recycle() }
+        }
+    }
+
+    fun isTapObscuredByKeyboard(x: Int, y: Int): Boolean =
+        SearchEntryPolicy.isTapObscuredByKeyboard(x, y, inputMethodBounds())
+
+    // Only issue Back while an actual IME window is present. Callers wait for
+    // disappearance and rematch; they must not reuse pre-dismissal coordinates.
+    fun hideKeyboardIfShown(): Boolean {
+        if (!isAmapWindowActive() || inputMethodBounds().isEmpty()) return false
+        val dispatched = performGlobalAction(GLOBAL_ACTION_BACK)
+        Log.i("EvCollector", "收起搜索键盘，返回动作=$dispatched")
+        return dispatched
+    }
+
     fun clickAt(x: Int, y: Int): Boolean {
         if (!isAmapWindowActive()) {
             Log.w("EvCollector", "忽略非高德页面坐标点击($x,$y)")
             return false
         }
-        val jitteredX = x + Random.nextInt(-7, 8)
-        val jitteredY = y + Random.nextInt(-7, 8)
+        if (isTapObscuredByKeyboard(x, y)) {
+            Log.w("EvCollector", "取消被输入法遮挡的坐标点击($x,$y)")
+            return false
+        }
+        val jitter = SearchEntryPolicy.CLICK_JITTER_PX
+        val jitteredX = x + Random.nextInt(-jitter, jitter + 1)
+        val jitteredY = y + Random.nextInt(-jitter, jitter + 1)
         val path = Path().apply {
             moveTo(jitteredX.toFloat(), jitteredY.toFloat())
             lineTo(jitteredX.toFloat(), jitteredY.toFloat())
@@ -333,13 +371,11 @@ class ChargingAccessibilityService : AccessibilityService() {
             fun visit(node: AccessibilityNodeInfo): Boolean {
                 val bounds = android.graphics.Rect()
                 node.getBoundsInScreen(bounds)
-                val width = bounds.width()
-                val isTopSearchContainer = node.isClickable &&
-                    bounds.top in 60..280 &&
-                    bounds.bottom <= 320 &&
-                    bounds.left <= 220 &&
-                    bounds.right >= resources.displayMetrics.widthPixels - 220 &&
-                    width >= resources.displayMetrics.widthPixels * 0.55
+                val isTopSearchContainer = AmapNavigationPolicy.isTopSearchBar(
+                    SnapshotRect(bounds.left, bounds.top, bounds.right, bounds.bottom),
+                    node.isClickable,
+                    resources.displayMetrics.widthPixels,
+                )
                 if (isTopSearchContainer) {
                     val clickedByGesture = !bounds.isEmpty && clickAt(bounds.centerX(), bounds.centerY())
                     val clickedByAction = !clickedByGesture && clickNodeOrAncestor(node)

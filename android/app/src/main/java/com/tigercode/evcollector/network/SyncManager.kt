@@ -10,7 +10,8 @@ import com.tigercode.evcollector.core.model.StationDetail
 import com.tigercode.evcollector.data.CollectorRepository
 import com.tigercode.evcollector.engine.CollectionEngine
 import com.tigercode.evcollector.engine.DetailPageRiskControlException
-import com.tigercode.evcollector.engine.VerificationAttemptsExhaustedException
+import com.tigercode.evcollector.engine.AmapSliderRestartException
+import com.tigercode.evcollector.engine.AmapSliderRecoveryStore
 import com.tigercode.evcollector.engine.HumanVerificationException
 import com.tigercode.evcollector.engine.SuggestionSearchNotStartedException
 import com.tigercode.evcollector.engine.StationNotFoundException
@@ -44,6 +45,9 @@ class SyncManager(
     private val engine: CollectionEngine,
 ) {
     suspend fun runOnce(): SyncOutcome {
+        if (AmapSliderRecoveryStore.blocksNewTask(context)) {
+            return SyncOutcome.SliderRestart("滑块恢复或任务释放尚未结束，暂停领取新任务")
+        }
         return try {
             runOnceAllowed()
         } catch (_: FleetStoppedException) {
@@ -67,6 +71,7 @@ class SyncManager(
             var leaseRenewJob: Job? = null
             var fleetWatchJob: Job? = null
             val leaseLost = AtomicBoolean(false)
+            var failureTitle = "同步失败"
             try {
                 api = RetrofitClient.serverApi(AppPreferences.serverUrl(context), context)
                 val activeApi = api
@@ -132,6 +137,9 @@ class SyncManager(
                         }
                     }
                 }
+                failureTitle = "页面恢复失败"
+                engine.prepareForRemoteTask()
+                failureTitle = "同步失败"
                 val claim = activeApi.claimTask(ClaimTaskRequest(deviceCode, collectionMode))
                 if (claim.reason == "FLEET_STOPPED") {
                     engine.stop()
@@ -173,6 +181,7 @@ class SyncManager(
                 )
                 leaseRenewJob = startLeaseRenewal(activeApi, deviceCode, collectionMode, task, leaseLost)
                 try {
+                    failureTitle = "采集失败"
                     val taskStartedAt = System.currentTimeMillis()
                     // The fixed station entry always uses the existing detail flow,
                     // including LIST tasks issued before the server mode switch.
@@ -230,6 +239,7 @@ class SyncManager(
                         summary["stationName"] = task.stationName.ifBlank { task.keyword }
                         summary["stationSequence"] = task.stationSequence
                     }
+                    failureTitle = "上传失败"
                     val uploadedCount = uploadPendingResults(
                         api = activeApi,
                         deviceCode = deviceCode,
@@ -246,6 +256,7 @@ class SyncManager(
                         context,
                         "当前任务结果已由服务端确认: $uploadedCount 条",
                     )
+                    failureTitle = "任务状态更新失败"
                     activeApi.completeTask(
                         task.id,
                         TaskActionRequest(
@@ -260,52 +271,8 @@ class SyncManager(
                     leaseRenewJob?.cancelAndJoin()
                     leaseRenewJob = null
                 }
-            } catch (error: VerificationAttemptsExhaustedException) {
-                val task = claimedTask
-                val activeApi = api
-                if (task == null || activeApi == null) {
-                    SyncOutcome.Failed(error.message.orEmpty())
-                } else {
-                    try {
-                        activeApi.completeTask(
-                            task.id,
-                            TaskActionRequest(
-                                deviceCode = deviceCode,
-                                mode = collectionMode,
-                                leaseToken = task.leaseToken,
-                                resultSummary = mapOf(
-                                    "stations" to 0,
-                                    "skipped" to true,
-                                    "stationId" to task.stationId,
-                                    "stationName" to error.stationName,
-                                    "skipReason" to "HUMAN_VERIFICATION_EXHAUSTED",
-                                    "verificationAttempts" to error.attempts,
-                                    "skipMessage" to error.message.orEmpty(),
-                                ),
-                            ),
-                        )
-                        SyncOutcome.Skipped(error.stationName, "人机验证恢复未完成，已跳过本站")
-                    } catch (completionError: Exception) {
-                        if (completionError is CancellationException) throw completionError
-                        try {
-                            activeApi.failTask(
-                                task.id,
-                                TaskActionRequest(
-                                    deviceCode = deviceCode,
-                                    mode = collectionMode,
-                                    leaseToken = task.leaseToken,
-                                    errorCode = "HUMAN_VERIFICATION_EXHAUSTED",
-                                    errorMessage = completionError.message.orEmpty(),
-                                    retryable = false,
-                                ),
-                            )
-                            SyncOutcome.Skipped(error.stationName, "人机验证恢复未完成，本站已结束")
-                        } catch (releaseError: Exception) {
-                            if (releaseError is CancellationException) throw releaseError
-                            SyncOutcome.Failed("本站验证失败，跳过状态未能同步: ${releaseError.message}")
-                        }
-                    }
-                }
+            } catch (error: AmapSliderRestartException) {
+                deferSliderRestart(claimedTask, deviceCode, collectionMode, error)
             } catch (error: DetailPageRiskControlException) {
                 claimedTask?.let { task ->
                     try {
@@ -429,6 +396,17 @@ class SyncManager(
                 engine.stop()
                 throw error
             } catch (error: Exception) {
+                if (failureTitle == "采集失败") {
+                    try {
+                        engine.recoverAfterCollectionFailure()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (slider: AmapSliderRestartException) {
+                        return@withContext deferSliderRestart(claimedTask, deviceCode, collectionMode, slider)
+                    } catch (recoveryError: Exception) {
+                        AppPreferences.appendLog(context, "采集失败后页面恢复未完成: ${recoveryError.message}")
+                    }
+                }
                 claimedTask?.let { task ->
                     try {
                         api?.failTask(
@@ -446,7 +424,7 @@ class SyncManager(
                         // Local failure is reported through SyncOutcome.
                     }
                 }
-                SyncOutcome.Failed(friendlyNetworkError(error))
+                SyncOutcome.Failed(friendlyNetworkError(error), failureTitle)
             } finally {
                 withContext(NonCancellable) {
                     fleetWatchJob?.cancelAndJoin()
@@ -454,6 +432,18 @@ class SyncManager(
                 }
             }
         }
+    }
+
+    private fun deferSliderRestart(
+        task: RemoteTaskDto?, deviceCode: String, mode: String, error: AmapSliderRestartException,
+    ): SyncOutcome {
+        task?.let {
+            AmapSliderRecoveryStore.rememberLease(context,
+                AmapSliderRecoveryStore.PendingLease(it.id, deviceCode, it.leaseToken, mode))
+        }
+        // A concurrent manual/fleet stop must not re-arm the automatic restart.
+        if (AppPreferences.isScanning(context)) AmapSliderRecoveryStore.request(context)
+        return SyncOutcome.SliderRestart(error.message.orEmpty())
     }
 
     private fun friendlyNetworkError(error: Exception): String {
@@ -632,13 +622,14 @@ class SyncManager(
 
 sealed class SyncOutcome {
     data class Completed(val stationCount: Int) : SyncOutcome()
+    data class SliderRestart(val message: String) : SyncOutcome()
     data class HumanVerification(val message: String) : SyncOutcome()
     data class DetailRiskReleased(val message: String) : SyncOutcome()
     data class Skipped(
         val stationName: String,
         val reason: String,
     ) : SyncOutcome()
-    data class Failed(val message: String) : SyncOutcome()
+    data class Failed(val message: String, val title: String = "同步失败") : SyncOutcome()
     object FleetStopped : SyncOutcome()
     object NoTask : SyncOutcome()
 }

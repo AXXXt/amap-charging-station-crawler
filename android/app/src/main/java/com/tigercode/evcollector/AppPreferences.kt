@@ -119,6 +119,7 @@ object AppPreferences {
             .edit()
             .putBoolean(KEY_SCANNING, scanning)
             .apply()
+        if (!scanning) com.tigercode.evcollector.engine.AmapSliderRecoveryStore.cancel(context)
     }
 
     fun activationCode(context: Context): String =

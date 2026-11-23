@@ -202,4 +202,43 @@ class StationNameMatchingTest {
         assertEquals(yongnaiSuggestion, StationMatcher.bestMatch(snapshot, yongnaiTask)?.description)
     }
 
+    @Test
+    fun bareBrandAndGenericRowsDoNotMatchSpecificParenthesizedTasks() {
+        val cases = listOf(
+            "云快充充电站(红旗岗李建发快速充电站)" to "云快充充电站",
+            "云快充充电站（红旗岗李建发快速充电站）" to "云快充汽车充电站",
+            "云快充充电站(红旗岗李建发快速充电站)" to "云快充充电站(...) ",
+            "国家电网充电站(高寺公共充电站)" to "国家电网汽车充电站",
+            "黑豹能源岛重卡超充电站(元宇宙充电站)" to "黑豹能源岛重卡超充电站",
+            "汽车充电站(红旗岗李建发快速充电站)" to "汽车充电站",
+        )
+        for ((target, label) in cases) {
+            val snapshot = root("""<hierarchy bounds="[0,0][1080,2280]">
+                <node clickable="true" content-desc="$label" bounds="[112,400][840,554]" />
+            </hierarchy>""")
+            assertEquals("normal result: $target / $label", null, StationMatcher.bestMatch(snapshot, target))
+            assertEquals("suggestion: $target / $label", null, StationMatcher.bestSuggestionMatch(snapshot, target))
+        }
+    }
+
+    @Test
+    fun specificSameBrandRowWinsOverBareBrandInBothSearchPaths() {
+        val target = "云快充充电站(红旗岗李建发快速充电站)"
+        val snapshot = root("""<hierarchy bounds="[0,0][1080,2280]">
+            <node clickable="true" content-desc="云快充充电站" bounds="[112,400][840,554]" />
+            <node clickable="true" content-desc="$target" bounds="[112,600][840,754]" />
+        </hierarchy>""")
+        assertEquals(target, StationMatcher.bestMatch(snapshot, target)?.description)
+        assertEquals(target, StationMatcher.bestSuggestionMatch(snapshot, target)?.description)
+    }
+
+    @Test
+    fun shortSpecificNameWithoutParenthesesStillMatchesExactly() {
+        val target = "北环充电站"
+        val snapshot = root("""<hierarchy bounds="[0,0][1080,2280]">
+            <node clickable="true" content-desc="$target" bounds="[112,400][840,554]" />
+        </hierarchy>""")
+        assertEquals(target, StationMatcher.bestMatch(snapshot, target)?.description)
+        assertEquals(target, StationMatcher.bestSuggestionMatch(snapshot, target)?.description)
+    }
 }

@@ -635,8 +635,9 @@ class SiteExplorationBridge:
             "fastPrices": payload.get("fastPrices") or [],
             "slowPrices": payload.get("slowPrices") or [],
         }
-        # Keep tariff provenance separate from the live gun-state observation time.
-        for field in ("priceScheduleCapturedAt", "priceScheduleMode", "priceSchedulePlatform"):
+        # Preserve tariff provenance and missing live-field markers on this snapshot.
+        for field in ("priceScheduleCapturedAt", "priceScheduleMode", "priceSchedulePlatform",
+                      "stationCardComplete", "missingStationCardFields"):
             if payload.get(field) is not None:
                 price_json[field] = payload[field]
         pile_json = payload.get("chargingPiles") or []

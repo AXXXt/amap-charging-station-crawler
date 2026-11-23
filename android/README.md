@@ -53,3 +53,14 @@ APK 输出在 `android\app\build\outputs\apk\debug\app-debug.apk`。
 - 采集运行期间不要执行 `uiautomator dump`，也不要连接 `uiautomator2`。Android 注册 `UiAutomationService` 时会临时解绑普通无障碍服务，表现为采集助手反复出现“已解绑/已销毁”。
 - 日志监控使用 `adb logcat -s EvCollector:V EvCollectorPage:V AndroidRuntime:E`。`EvCollectorPage` 是采集助手通过自身无障碍快照输出的高德页面摘要，不会占用额外的 `UiAutomation` 通道。
 - 查看前台窗口使用 `adb shell dumpsys window`，查看画面使用 `adb exec-out screencap -p`；这两种方式不会干扰采集助手的无障碍连接。
+
+## 2026-11-23 源码同步
+
+当前高德 App 源码为 **0.1.42.27**（versionCode 69）。
+
+- 接入 Shizuku 连接状态、授权及高德地图后台进程关闭核验；检测到滑块时暂停采集并归还租约，关闭地图休息两分钟，重新打开并等待一分钟后继续重点站点详情采集。
+- 联想搜索点击前处理键盘遮挡；排除缺乏有效站点信息的通用站名匹配项。
+- 详情页缺少电桩状态时继续寻找分时电价，并回传缺失字段标记。
+- 共享服务端增加任务释放接口及每轮一次的双向跨平台补采处理；相关源码位于根目录的 `monitor_scheduler.py`、`cross_platform_monitor.py`、`api_server.py` 和 `site_exploration_bridge.py`。
+
+Shizuku 操作和恢复流程见 [地图后台控制](docs/shizuku-map-control.md)。本次源码上传不会自动更新手机 App 或部署服务端。

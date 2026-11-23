@@ -190,6 +190,9 @@ interface ServerApi {
     @POST("api/v1/device-tasks/{taskId}/complete")
     suspend fun completeTask(@Path("taskId") taskId: String, @Body body: TaskActionRequest): Map<String, Any>
 
+    @POST("api/v1/device-tasks/{taskId}/release")
+    suspend fun releaseTask(@Path("taskId") taskId: String, @Body body: TaskActionRequest): Map<String, Any>
+
     @POST("api/v1/device-tasks/{taskId}/fail")
     suspend fun failTask(@Path("taskId") taskId: String, @Body body: TaskActionRequest): Map<String, Any>
 

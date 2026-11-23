@@ -7,6 +7,7 @@ keeps its original behavior.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import secrets
@@ -15,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import pymysql
 import priority_station_scopes
+import cross_platform_monitor as supplements
 
 
 def _env_int(name: str, fallback: int, allow_zero: bool = False) -> int:
@@ -201,6 +203,7 @@ def init_tables(db_config):
             _add_column_if_missing(cursor, "station_monitor_batch", "collection_mode", "VARCHAR(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'DETAIL'")
             _add_column_if_missing(cursor, "station_monitor_batch", "scope_key", "VARCHAR(64) COLLATE utf8mb4_general_ci NOT NULL DEFAULT ''")
             _add_column_if_missing(cursor, "station_monitor_task", "collection_mode", "VARCHAR(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'DETAIL'")
+            cursor.execute(supplements.CREATE_TABLE_SQL)
             _apply_retry_limit(cursor, _now())
         conn.commit()
     finally:
@@ -300,7 +303,7 @@ def task_payload(row):
         "attempt": int(row.get("attempt") or 0),
         "maxAttempts": int(row.get("max_attempts") or MAX_ATTEMPTS),
         "recoveryAttempt": 0,
-        "maxRecoveryAttempts": 2,
+        "maxRecoveryAttempts": 0 if row.get("_supplement") else 2,
         "sourceSiteId": "",
         "sourceSiteOrder": 0,
         "stationId": row.get("amap_poi_id") or "",
@@ -311,6 +314,7 @@ def task_payload(row):
         "stationSequence": int(row.get("sequence_no") or 0),
         "sourcePayload": source_payload,
         "collectionMode": row.get("collection_mode") or "DETAIL",
+        **({"crossPlatform": supplements.metadata(row)} if row.get("_supplement") else {}),
     }
 
 
@@ -346,21 +350,13 @@ def legacy_task(row):
         "source_payload": payload["sourcePayload"],
         "source_sequence": payload["stationSequence"],
         "collection_mode": row.get("collection_mode") or "DETAIL",
+        **({"cross_platform": supplements.metadata(row)} if row.get("_supplement") else {}),
     }
 
 
 def get_task(db_config, task_id):
-    conn = _conn(db_config)
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM station_monitor_task WHERE local_task_id=%s LIMIT 1",
-                (task_id,),
-            )
-            row = cursor.fetchone()
-        return legacy_task(row) if row else None
-    finally:
-        conn.close()
+    row = _get_row(db_config, task_id)
+    return legacy_task(row) if row else None
 
 
 def _reap_expired(db_config):
@@ -704,6 +700,9 @@ def _start_next_round(db_config, batch_id):
                     if int(cursor.fetchone()["active_count"] or 0) > 0:
                         conn.commit()
                         return current_round
+                    if supplements.has_active(cursor, current_round_row["id"], now):
+                        conn.commit()
+                        return current_round
                     cursor.execute(
                         "UPDATE station_monitor_round SET status='COMPLETED', finished_at=%s, updated_at=%s "
                         "WHERE id=%s AND status<>'COMPLETED'",
@@ -765,6 +764,19 @@ def _start_next_round(db_config, batch_id):
 def claim(db_config, device, scope_key=""):
     init_tables(db_config)
     _reap_expired(db_config)
+    if scope_key in supplements.SCOPES:
+        conn = _conn(db_config)
+        try:
+            with conn.cursor() as cursor:
+                extra = supplements.claim(cursor, device, scope_key, _now(), secrets.token_urlsafe(24))
+            conn.commit()
+            if extra:
+                return task_payload(extra), "CROSS_PLATFORM_CLAIMED"
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
     try:
         batch_id = _ensure_active_batch(db_config, scope_key)
     except RuntimeError as error:
@@ -826,14 +838,20 @@ def claim(db_config, device, scope_key=""):
     return None, "QUEUE_EMPTY"
 
 
+def _locked_row(cursor, task_id):
+    if task_id.startswith(supplements.PREFIX):
+        return supplements.get_row(cursor, task_id, lock=True)
+    cursor.execute("SELECT * FROM station_monitor_task WHERE local_task_id=%s LIMIT 1 FOR UPDATE", (task_id,))
+    return cursor.fetchone()
+
+
 def _get_row(db_config, task_id):
     conn = _conn(db_config)
     try:
         with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM station_monitor_task WHERE local_task_id=%s LIMIT 1",
-                (task_id,),
-            )
+            if task_id.startswith(supplements.PREFIX):
+                return supplements.get_row(cursor, task_id)
+            cursor.execute("SELECT * FROM station_monitor_task WHERE local_task_id=%s LIMIT 1", (task_id,))
             return cursor.fetchone()
     finally:
         conn.close()
@@ -859,7 +877,65 @@ def _assert_lease(row, device_id, lease_token):
         raise MonitorTaskError("TASK_LEASE_EXPIRED")
 
 
+
+def release(db_config, task_id, device_id, lease_token):
+    """Return an interrupted lease without failure, transfer, or retry consumption.
+
+    Ownership is checked under the same row lock as the update. An expired
+    lease may still be returned by its owner until the reaper or another claim
+    changes it. Terminal tasks and replaced leases are never reopened.
+    """
+    conn = _conn(db_config)
+    try:
+        conn.begin()
+        with conn.cursor() as cursor:
+            row = _locked_row(cursor, task_id)
+            if row is None:
+                raise MonitorTaskError("TASK_NOT_FOUND")
+            if row["status"] not in {"LEASED", "RUNNING"}:
+                raise MonitorTaskError("TASK_NOT_ACTIVE")
+            if not lease_token or row["lease_device_id"] != device_id or row["lease_token"] != lease_token:
+                raise MonitorTaskError("TASK_LEASE_STALE")
+            now = _now()
+            attempt = max(0, int(row.get("attempt") or 0) - 1)
+            progress_value = _json_object(row.get("progress"))
+            previous = progress_value.get("_scheduledRest")
+            count = int(previous.get("count") or 0) if isinstance(previous, dict) else 0
+            progress_value["_scheduledRest"] = {"at": now, "count": count + 1}
+            serialized = json.dumps(progress_value, ensure_ascii=False)
+            if row.get("_supplement"):
+                stamp = supplements.unix_time(now)
+                cursor.execute(
+                    f"UPDATE {supplements.TABLE} SET status=0,attempt=%s,lease_device_id='',lease_token='',"
+                    "lease_expires_at=0,available_at=%s,started_at=0,finished_at=0,"
+                    "result_summary='{}',progress=%s,updated_at=%s WHERE local_task_id=%s",
+                    (attempt, stamp, serialized, stamp, task_id),
+                )
+                summary = "{}"
+            else:
+                cursor.execute(
+                    "UPDATE station_monitor_task SET status='PENDING',attempt=%s,lease_device_id='',lease_token='',"
+                    "lease_expires_at=NULL,available_at=%s,started_at=NULL,finished_at=NULL,"
+                    "result_summary=NULL,progress=%s,updated_at=%s WHERE local_task_id=%s",
+                    (attempt, now, serialized, now, task_id),
+                )
+                summary = None
+            row.update(status="PENDING", attempt=attempt, lease_device_id="", lease_token="",
+                       lease_expires_at=None, available_at=now, started_at=None, finished_at=None,
+                       result_summary=summary, progress=progress_value, updated_at=now)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    # Deliberately no round advancement, failure counter, or supplement enqueue.
+    return task_payload(row)
+
+
 def ack(db_config, task_id, device_id, lease_token):
+    if task_id.startswith(supplements.PREFIX):
+        return _supplement_action(db_config, task_id, device_id, lease_token, "ack")
     row = _get_row(db_config, task_id)
     _assert_lease(row, device_id, lease_token)
     now = _now()
@@ -883,6 +959,8 @@ def ack(db_config, task_id, device_id, lease_token):
 
 
 def progress(db_config, task_id, device_id, lease_token, progress_value):
+    if task_id.startswith(supplements.PREFIX):
+        return _supplement_action(db_config, task_id, device_id, lease_token, "progress", progress_value)
     row = _get_row(db_config, task_id)
     _assert_lease(row, device_id, lease_token)
     merged = _json_object(row.get("progress"))
@@ -941,124 +1019,217 @@ def _has_historical_data(db_config, source_key):
         conn.close()
 
 
-def complete(db_config, task_id, device_id, lease_token, result_summary):
-    row = _get_row(db_config, task_id)
-    _assert_lease(row, device_id, lease_token)
-    now = _now()
-    summary = result_summary or {}
-    skip_reason = str(summary.get("skipReason") or "").strip().upper()
-    progress = _json_object(row.get("progress"))
-    already_retried = bool(progress.get("_noMatchRetryScheduled"))
+def _has_usable_amap_tariff(snapshot):
+    """Accept actual timed price rows, never an empty sheet or a headline price."""
+    price = _json_object(snapshot.get("price_json"))
+    if price.get("priceSchedulePlatform") != "AMAP":
+        return False
+    for key in ("fastPrices", "slowPrices"):
+        periods = price.get(key)
+        if not isinstance(periods, list):
+            continue
+        for period in periods:
+            if not isinstance(period, dict):
+                continue
+            match = re.fullmatch(r"(\d{1,2}):(\d{2})\s*[-–—~～至]\s*(\d{1,2}):(\d{2})",
+                                 str(period.get("time") or "").replace("：", ":").strip())
+            if not match:
+                continue
+            h1, m1, h2, m2 = map(int, match.groups())
+            if not (0 <= h1 < 24 and 0 <= m1 < 60 and 0 <= h2 <= 24 and
+                    0 <= m2 < 60 and (h2 < 24 or m2 == 0) and h1 * 60 + m1 != h2 * 60 + m2):
+                continue
+            try:
+                value = float(period.get("totalPrice"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(value) and value >= 0:
+                return True
+    return False
 
-    if (
-        skip_reason == "NO_MATCH"
-        and not already_retried
-        and int(row.get("attempt") or 0) < int(row.get("max_attempts") or MAX_ATTEMPTS)
-        and _has_historical_data(db_config, row.get("source_key"))
-    ):
-        retry_attempt = int(row.get("attempt") or 0)
-        retry_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=10)
-        ).strftime("%Y-%m-%d %H:%M:%S")
-        retry_progress = dict(progress)
-        retry_progress["_noMatchRetryScheduled"] = True
-        retry_progress["_noMatchRetryAt"] = now
-        message = (
-            f"NO_MATCH_RETRY: {summary.get('skipMessage') or summary.get('stationName') or ''}"
-        )[:1000]
-        conn = _conn(db_config)
+
+def _has_valid_task_result(cursor, row):
+    """Use this task's own snapshot; Amap may supply tariff without pile status.
+
+    Price-only acceptance is restricted to the actual Amap collecting scope,
+    including Baidu-origin supplements assigned to Amap. It does not mean that
+    live pile fields or a complete full-day tariff schedule were collected.
+    """
+    cursor.execute(
+        "SELECT current_price,pile_total,pile_idle,pile_busy,pile_unknown,price_json "
+        "FROM site_exploration_charging_station_dynamic_history "
+        "WHERE task_id=%s AND source_key=%s",
+        (row["local_task_id"], row["source_key"]),
+    )
+    has_amap_tariff = False
+    for snapshot in cursor.fetchall():
+        has_amap_tariff = has_amap_tariff or _has_usable_amap_tariff(snapshot)
         try:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "UPDATE station_monitor_task SET status='PENDING', attempt=%s, "
-                    "lease_device_id='', lease_token='', lease_expires_at=NULL, "
-                    "available_at=%s, finished_at=NULL, result_summary=NULL, "
-                    "progress=%s, last_error=%s, updated_at=%s "
-                    "WHERE local_task_id=%s AND lease_device_id=%s AND lease_token=%s",
-                    (
-                        retry_attempt,
-                        retry_at,
-                        json.dumps(retry_progress, ensure_ascii=False),
-                        message,
-                        now,
-                        task_id,
-                        device_id,
-                        lease_token,
-                    ),
-                )
-            conn.commit()
-        finally:
-            conn.close()
-        row["status"] = "PENDING"
-        row["attempt"] = retry_attempt
-        row["lease_device_id"] = ""
-        row["lease_token"] = ""
-        row["lease_expires_at"] = None
-        row["available_at"] = retry_at
-        row["result_summary"] = None
-        row["progress"] = retry_progress
-        row["last_error"] = message
-        return task_payload(row)
+            price = float(snapshot["current_price"])
+            total = int(snapshot["pile_total"])
+            idle = int(snapshot["pile_idle"])
+            busy = int(snapshot["pile_busy"])
+            unknown = int(snapshot["pile_unknown"])
+        except (TypeError, ValueError, KeyError, OverflowError):
+            continue
+        if math.isfinite(price) and price >= 0 and total > 0 and 0 <= idle <= total and busy >= 0 and unknown == 0 and idle + busy == total:
+            return True
+    if has_amap_tariff:
+        if row.get("_supplement"):
+            return row.get("target_scope_key") == "AMAP_MIN240_647"
+        cursor.execute("SELECT scope_key FROM station_monitor_batch WHERE id=%s", (row["batch_id"],))
+        batch = cursor.fetchone()
+        return bool(batch and batch.get("scope_key") == "AMAP_MIN240_647")
+    return False
 
+
+def _supports_supplement(cursor, row):
+    cursor.execute("SELECT scope_key FROM station_monitor_batch WHERE id=%s", (row["batch_id"],))
+    batch = cursor.fetchone()
+    return bool(batch and batch.get("scope_key") in supplements.SCOPES)
+
+
+def _missing_station_data(error_code, message):
+    code = str(error_code or "").strip().upper()
+    if code in {"NO_MATCH", "INCOMPLETE_STATION_CARD", "MISSING_STATION_DATA", "NO_STATION_DATA", "NO_VALID_DATA", "MISSING_PRICE", "MISSING_PILE_STATUS"}:
+        return True
+    if code != "COLLECTION_FAILED":
+        return False
+    return any(marker in str(message or "") for marker in (
+        "详情首页数据不完整", "未采集到目标站点", "未获取到电价", "未读取到电价",
+        "未获取到电桩", "未读取到电桩", "缺少实时电价", "缺少空闲/总枪数",
+        "无有效电桩", "详情页无有效数据",
+    ))
+
+
+def _requeue_primary(cursor, row, now, summary, reason):
+    retry_at = (_as_utc(now) + timedelta(seconds=10)).strftime("%Y-%m-%d %H:%M:%S")
+    progress_value = _json_object(row.get("progress"))
+    progress_value["_effectiveResultRetry"] = {"reason": reason, "at": now, "summary": summary}
+    cursor.execute(
+        "UPDATE station_monitor_task SET status='PENDING',lease_device_id='',lease_token='',"
+        "lease_expires_at=NULL,available_at=%s,finished_at=NULL,result_summary=NULL,progress=%s,last_error=%s,updated_at=%s "
+        "WHERE local_task_id=%s",
+        (retry_at, json.dumps(progress_value, ensure_ascii=False), reason[:1000], now, row["local_task_id"]),
+    )
+    row.update(status="PENDING", lease_device_id="", lease_token="", lease_expires_at=None,
+               available_at=retry_at, finished_at=None, result_summary=None, progress=progress_value)
+
+
+def _finish_primary(cursor, row, now, status, summary, message="", supplement_reason=""):
+    extra_id = supplements.enqueue(cursor, row, supplement_reason, now) if supplement_reason else None
+    summary = dict(summary or {})
+    if extra_id:
+        summary["crossPlatformTaskId"] = extra_id
+    cursor.execute(
+        "UPDATE station_monitor_task SET status=%s,result_summary=%s,last_error=%s,lease_device_id='',"
+        "lease_token='',lease_expires_at=NULL,finished_at=%s,updated_at=%s WHERE local_task_id=%s",
+        (status, json.dumps(summary, ensure_ascii=False), message[:1000], now, now, row["local_task_id"]),
+    )
+    counter = "completed_count" if status == "COMPLETED" else "failed_count"
+    cursor.execute(f"UPDATE station_monitor_round SET {counter}={counter}+1,updated_at=%s WHERE id=%s", (now, row["round_id"]))
+    row.update(status=status, result_summary=summary, lease_device_id="", lease_token="",
+               lease_expires_at=None, finished_at=now, last_error=message[:1000])
+
+
+def _supplement_action(db_config, task_id, device_id, lease_token, action, value=None):
     conn = _conn(db_config)
+    terminal = action in {"complete", "fail"}
     try:
+        conn.begin()
         with conn.cursor() as cursor:
-            cursor.execute(
-                "UPDATE station_monitor_task SET status='COMPLETED', result_summary=%s, "
-                "lease_device_id='', lease_token='', lease_expires_at=NULL, finished_at=%s, updated_at=%s "
-                "WHERE local_task_id=%s AND lease_device_id=%s AND lease_token=%s",
-                (json.dumps(summary, ensure_ascii=False), now, now, task_id, device_id, lease_token),
-            )
-            cursor.execute(
-                "UPDATE station_monitor_round SET completed_count=completed_count+1, updated_at=%s WHERE id=%s",
-                (now, row["round_id"]),
-            )
+            row = _locked_row(cursor, task_id)
+            _assert_lease(row, device_id, lease_token)
+            now = _now()
+            if terminal:
+                valid = _has_valid_task_result(cursor, row)
+                summary = value or {}
+                supplements.finish(cursor, row, now, valid, summary, "" if valid else str(summary.get("error") or "NO_VALID_RESULT"))
+            else:
+                merged = None
+                if action == "progress":
+                    merged = _json_object(row.get("progress"))
+                    merged.update(value or {})
+                supplements.renew(cursor, row, now, merged)
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
-    _advance_round(db_config, int(row["batch_id"]))
-    row["status"] = "COMPLETED"
-    row["lease_device_id"] = ""
-    row["lease_token"] = ""
-    row["lease_expires_at"] = None
+    if terminal:
+        _advance_round(db_config, int(row["batch_id"]))
+    return task_payload(row)
+
+
+def complete(db_config, task_id, device_id, lease_token, result_summary):
+    if task_id.startswith(supplements.PREFIX):
+        return _supplement_action(db_config, task_id, device_id, lease_token, "complete", result_summary)
+    conn = _conn(db_config)
+    try:
+        conn.begin()
+        with conn.cursor() as cursor:
+            row = _locked_row(cursor, task_id)
+            _assert_lease(row, device_id, lease_token)
+            now = _now()
+            summary = result_summary or {}
+            skip_reason = str(summary.get("skipReason") or "").strip().upper()
+            supported = _supports_supplement(cursor, row)
+            valid = _has_valid_task_result(cursor, row) if supported else None
+            can_retry = int(row.get("attempt") or 0) < int(row.get("max_attempts") or MAX_ATTEMPTS)
+            # Fixed scopes retry missing effective data even if this station
+            # never had historical data. Legacy modes keep their old policy.
+            legacy_retry = not supported and skip_reason == "NO_MATCH" and not _json_object(row.get("progress")).get("_noMatchRetryScheduled") and _has_historical_data(db_config, row.get("source_key"))
+            if can_retry and ((supported and not valid) or legacy_retry):
+                reason = "NO_MATCH_RETRY" if skip_reason == "NO_MATCH" else "NO_VALID_RESULT_RETRY"
+                _requeue_primary(cursor, row, now, summary, reason)
+                if legacy_retry:
+                    row["progress"]["_noMatchRetryScheduled"] = True
+                    cursor.execute("UPDATE station_monitor_task SET progress=%s WHERE local_task_id=%s", (json.dumps(row["progress"], ensure_ascii=False), task_id))
+            else:
+                reason = ("NO_MATCH" if skip_reason == "NO_MATCH" else "NO_VALID_RESULT") if supported and not valid else ""
+                _finish_primary(cursor, row, now, "COMPLETED", summary, supplement_reason=reason)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    if row["status"] != "PENDING":
+        _advance_round(db_config, int(row["batch_id"]))
     return task_payload(row)
 
 
 def fail(db_config, task_id, device_id, lease_token, error_code, error_message, retryable):
-    row = _get_row(db_config, task_id)
-    _assert_lease(row, device_id, lease_token)
-    now = _now()
-    can_retry = bool(retryable) and int(row.get("attempt") or 0) < int(row.get("max_attempts") or MAX_ATTEMPTS)
-    status = "PENDING" if can_retry else "FAILED"
-    available_at = (
-        datetime.now(timezone.utc) + timedelta(seconds=10)
-    ).strftime("%Y-%m-%d %H:%M:%S") if can_retry else now
     message = f"{error_code or ''}: {error_message or ''}".strip(": ")[:1000]
+    if task_id.startswith(supplements.PREFIX):
+        return _supplement_action(db_config, task_id, device_id, lease_token, "fail", {"error": message})
     conn = _conn(db_config)
     try:
+        conn.begin()
         with conn.cursor() as cursor:
-            cursor.execute(
-                "UPDATE station_monitor_task SET status=%s, lease_device_id='', lease_token='', "
-                "lease_expires_at=NULL, available_at=%s, last_error=%s, "
-                "finished_at=CASE WHEN %s='FAILED' THEN %s ELSE NULL END, updated_at=%s "
-                "WHERE local_task_id=%s AND lease_device_id=%s AND lease_token=%s",
-                (status, available_at, message, status, now, now, task_id, device_id, lease_token),
-            )
-            if status == "FAILED":
-                cursor.execute(
-                    "UPDATE station_monitor_round SET failed_count=failed_count+1, updated_at=%s WHERE id=%s",
-                    (now, row["round_id"]),
-                )
+            row = _locked_row(cursor, task_id)
+            _assert_lease(row, device_id, lease_token)
+            now = _now()
+            supported = _supports_supplement(cursor, row)
+            missing = _missing_station_data(error_code, error_message)
+            valid = _has_valid_task_result(cursor, row) if supported else False
+            can_retry = (bool(retryable) or (supported and missing)) and int(row.get("attempt") or 0) < int(row.get("max_attempts") or MAX_ATTEMPTS)
+            if supported and valid:
+                _finish_primary(cursor, row, now, "COMPLETED", {"effectiveResult": True, "reportedError": message})
+            elif can_retry:
+                _requeue_primary(cursor, row, now, {}, message)
+            else:
+                reason = ("NO_MATCH" if str(error_code).upper() == "NO_MATCH" else "MISSING_STATION_DATA") if supported and missing else ""
+                _finish_primary(cursor, row, now, "FAILED", {}, message, reason)
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
-    if status == "FAILED":
+    if row["status"] != "PENDING":
         _advance_round(db_config, int(row["batch_id"]))
-    row["status"] = status
-    row["lease_device_id"] = ""
-    row["lease_token"] = ""
-    row["lease_expires_at"] = None
-    row["last_error"] = message
     return task_payload(row)
 
 

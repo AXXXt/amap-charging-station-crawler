@@ -2188,6 +2188,10 @@ def _mobile_claim_allowed(request, device):
             raise HTTPException(400, detail="UNKNOWN_MONITOR_SCOPE")
         task, reason = monitor_scheduler.claim(DB_CONFIG, device, scope_key=scope_key)
         if task is not None:
+            if task.get("crossPlatform"):
+                target_scope = task["crossPlatform"]["targetScopeKey"]
+                target_collector = priority_station_scopes.EXPECTED_SCOPES[target_scope][0]
+                task = _with_daily_tariff(task, target_collector)
             _update_monitor_device_task(device["id"], task["id"], "RUNNING")
         return {"task": task, "reason": reason}
     collector = "BAIDU" if mode.startswith("BAIDU") else "AMAP"
@@ -2681,6 +2685,25 @@ def mobile_complete_task(
     _sync_mysql_task(task)
     _sync_henan_task(task)
     return {"task": _mobile_task_payload(task)}
+
+
+
+@app.post("/api/v1/device-tasks/{task_id}/release")
+def mobile_release_task(
+    task_id: str,
+    request: MobileTaskActionRequest,
+    authorization: Optional[str] = Header(None),
+):
+    device = _require_mobile_device(authorization)
+    _validate_device_code(device, request.deviceCode)
+    if not request.mode.strip().upper().startswith("MONITOR"):
+        raise HTTPException(400, detail="TASK_RELEASE_MODE_UNSUPPORTED")
+    try:
+        task = monitor_scheduler.release(DB_CONFIG, task_id, device["id"], request.leaseToken)
+    except monitor_scheduler.MonitorTaskError as error:
+        raise HTTPException(409, detail=str(error))
+    _update_monitor_device_task(device["id"], "", "IDLE")
+    return {"released": True, "task": task}
 
 
 @app.post("/api/v1/device-tasks/{task_id}/fail")

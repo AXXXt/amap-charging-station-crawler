@@ -41,6 +41,16 @@ object StationNameNormalizer {
         return normalized.lowercase()
     }
 
+    /** A brand/category alone cannot identify the specific site in brackets. */
+    fun isUnqualifiedMatchCandidate(targetName: String, candidateName: String): Boolean {
+        val candidate = normalize(candidateName)
+        if (candidate.isEmpty() || candidate in genericNames) return true
+        val opening = targetName.indexOfFirst { it == '(' || it == '（' }
+        if (opening < 0) return false
+        val outerName = normalize(targetName.substring(0, opening))
+        return outerName.isNotEmpty() && candidate == outerName
+    }
+
     /**
      * Persist the fuller of two names. One side can be the rendered,
      * ellipsized card title while the other is the full search query.

@@ -54,6 +54,12 @@ object PageAssessor {
             return PageAssessment(PageKind.PRICE_DETAIL, 0.98, reasons, expectedVisible)
         }
 
+        // A generic POI can show multiple charging recommendations. They are not search results.
+        if (StationDetailScope.hasRecommendations(root) && "在此区域搜索" !in combinedText) {
+            reasons.add("poi_recommendations")
+            return PageAssessment(PageKind.DETAIL, 0.94, reasons, expectedVisible)
+        }
+
         var detailScore = 0
         if ("电站信息" in combinedText) {
             detailScore += 5

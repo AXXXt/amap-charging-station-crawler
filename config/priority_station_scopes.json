@@ -1,11 +1,11 @@
 {
-  "version": "20261111-baidu995-amap223-add73-restored",
-  "description": "Baidu 995 and AMap 223 stations in continuous detail collection. Restore the original 922 Baidu members and permanently add the 73 stations with individual pile details from the completed 113-station discovery trial. Membership is not a certification of minimum 240kW power. Preserve existing source identities, device entry points, and AMap assignment.",
+  "version": "20261119-baidu994-amap224-yuzhou-transfer",
+  "description": "Baidu 994 and AMap 224 stations in continuous detail collection. Retain the 73 stations added from the completed discovery trial and move the renamed Yuzhou Dadao station (B0LU2PQ445) from Baidu to AMap without changing its source identity. Membership is not a certification of minimum 240kW power. Preserve existing device entry points.",
   "scopes": {
     "BAIDU_MIN240_499": {
       "collector": "BAIDU",
       "collection_mode": "DETAIL",
-      "count": 995,
+      "count": 994,
       "stations": [
         {
           "source_key": "007456115cf136b26563a9b0a6fa2e3d5f2c06dff08bd778c7cd82811b501da1",
@@ -42,8 +42,8 @@
         {
           "source_key": "04393798901dece1810a62bd1b15e585313a6055c054314668e8d4a40ebb37b4",
           "source_station_id": "B0LDRSD3WY",
-          "station_name": "云快充充电站(兰考南超充站) 开封市兰考县",
-          "task_name": "云快充超级充电站(兰考南超充站)",
+          "station_name": "云快充汽车充电站(豫电充电站)",
+          "task_name": "云快充汽车充电站(豫电充电站)",
           "city": "信阳市",
           "district": "光山县"
         },
@@ -796,8 +796,8 @@
           "source_station_id": "svr-ed3daf6379",
           "station_name": "云快充超级充电站(伯乐重卡充电站)",
           "task_name": "云快充超级充电站(伯乐重卡充电站)",
-          "city": "河南省",
-          "district": ""
+          "city": "郑州市",
+          "district": "荥阳市"
         },
         {
           "source_key": "3051f847e7f893bb53f0f3e85b469bbfa7b3dbb57e17ac4f5f7949b4085ae11c",
@@ -1444,8 +1444,8 @@
           "source_station_id": "svr-0c26597607",
           "station_name": "新电途充电站(鑫全重卡充电站) 郑州市荥阳市",
           "task_name": "新电途汽车充电站(鑫全重卡充电站)",
-          "city": "河南省",
-          "district": ""
+          "city": "郑州市",
+          "district": "荥阳市"
         },
         {
           "source_key": "5f133a2cdb949840755859eecf3595dda7c647388c6aed8d0fb9e121c40e63a7",
@@ -3180,8 +3180,8 @@
           "source_station_id": "svr-1cc34e87b4",
           "station_name": "云快充超级充电站(强盛重卡充电站)",
           "task_name": "云快充超级充电站(强盛重卡充电站)",
-          "city": "河南省",
-          "district": ""
+          "city": "郑州市",
+          "district": "荥阳市"
         },
         {
           "source_key": "c83b91267ff6b2e38c2f501fe4e50bf83d8496b483aa3c694806f6c7e89b8b56",
@@ -3316,8 +3316,8 @@
           "source_station_id": "svr-8060b75098",
           "station_name": "星星充电汽车充电站(星星充电-河南惠丰能源重卡快速充电站)",
           "task_name": "星星充电汽车充电站(星星充电-河南惠丰能源重卡快速充电站)",
-          "city": "河南省",
-          "district": ""
+          "city": "郑州市",
+          "district": "登封市"
         },
         {
           "source_key": "ce125c8a67630fb2613002d12b884c42b0333840c2c514f0c527077eb948a56f",
@@ -3412,8 +3412,8 @@
           "source_station_id": "amap-7a3dcae3",
           "station_name": "星星充电汽车充电站(星星充电-河南惠丰能源重卡快速充电站2号站)",
           "task_name": "星星充电汽车充电站(星星充电-河南惠丰能源重卡快速充电站2号站)",
-          "city": "河南省",
-          "district": ""
+          "city": "郑州市",
+          "district": "登封市"
         },
         {
           "source_key": "d8e706c2c7fbd791bdfa99872ade56009b26d5078a2512cce3d877eba026bd1a",
@@ -3828,8 +3828,8 @@
           "source_station_id": "amap-5f248649",
           "station_name": "滴滴充电充电站(电无忧重卡超充站) 郑州市新郑市",
           "task_name": "电无忧重卡超充站",
-          "city": "河南省",
-          "district": ""
+          "city": "郑州市",
+          "district": "新郑市"
         },
         {
           "source_key": "f553d54a8c225684fc19bbdb35534a566b5a6d2bcce1d344239f8f02955ac832",
@@ -4102,14 +4102,6 @@
           "task_name": "特来电汽车充电站(特来电许昌梨园转盘南环路重卡充电站)",
           "city": "许昌市",
           "district": "建安区"
-        },
-        {
-          "source_key": "2a386208b358912454d7c54fea479517686a9665262f82f5fe6a6506974a455f",
-          "source_station_id": "B0LU2PQ445",
-          "station_name": "新电途汽车充电站(豫州大道兆瓦超充站)",
-          "task_name": "新电途汽车充电站(豫州大道兆瓦超充站)",
-          "city": "郑州市",
-          "district": "中牟县"
         },
         {
           "source_key": "46227b877a324a888e15b128cb8603d5429a81e719d92bb8bf9b0797a8d571f8",
@@ -4460,7 +4452,7 @@
           "source_station_id": "B0M6PPLBDG",
           "station_name": "特来电汽车充电站(特来电郑州登封S317航鑫重卡充电站)",
           "task_name": "特来电汽车充电站(特来电郑州登封S317航鑫重卡充电站)",
-          "city": "河南省",
+          "city": "郑州市",
           "district": "登封市"
         },
         {
@@ -5538,7 +5530,7 @@
         {
           "source_key": "22e6fe7794aa154f8ed474978d3d355a3f5a7c0ea67a6051d18209c3cf067518",
           "source_station_id": "B0MAV45OJU",
-          "station_name": "云快充超级充电站(闪能重卡超级充电站)",
+          "station_name": "云快充超级充电站(宏宇超级充电站含重卡桩)",
           "task_name": "云快充超级充电站(宏宇超级充电站含重卡桩)",
           "city": "濮阳市",
           "district": "台前县"
@@ -6434,7 +6426,7 @@
         {
           "source_key": "bde9c3fc80746dc19e8bc948a622dd40e0521d0bb9b5467b7d218276921691d6",
           "source_station_id": "B0MGKCKO9U",
-          "station_name": "云快充超级充电站(蔚来重卡超充站)",
+          "station_name": "云快充超级充电站(中帆德新能源超充站)",
           "task_name": "云快充超级充电站(中帆德新能源超充站)",
           "city": "周口市",
           "district": "太康县"
@@ -7348,16 +7340,16 @@
           "source_station_id": "svr-fcdc363d39",
           "station_name": "国家电网汽车充电站(河南省郑州市巩义市310国道宜航汽车销售公司重卡充电站)",
           "task_name": "国家电网汽车充电站(河南省郑州市巩义市310国道宜航汽车销售公司重卡充电站)",
-          "city": "河南省",
-          "district": ""
+          "city": "郑州市",
+          "district": "巩义市"
         },
         {
           "source_key": "43685d30c7626a7bb4d1a8b6f79893b7e3b723e27df602412cabfbb150f2ef11",
           "source_station_id": "svr-1c527835a8",
           "station_name": "新电途汽车充电站(经宏新能源重卡站)",
           "task_name": "新电途汽车充电站(经宏新能源重卡站)",
-          "city": "河南省",
-          "district": ""
+          "city": "郑州市",
+          "district": "新郑市"
         },
         {
           "source_key": "03007329937bd6d318cf0a1fd5dd9487ecc56137a34fb5d931223c6d91bcec27",
@@ -7972,7 +7964,7 @@
     "AMAP_MIN240_647": {
       "collector": "AMAP",
       "collection_mode": "DETAIL",
-      "count": 223,
+      "count": 224,
       "stations": [
         {
           "source_key": "939132b833bc7231287d4eda9fc9131ffa11d4ddd96747b3184ca1c99b71b6a5",
@@ -9699,8 +9691,8 @@
           "source_station_id": "svr-613543ed52",
           "station_name": "通达云重卡超级充电站(巩义市盛泰物流有限公司)",
           "task_name": "通达云重卡超级充电站(巩义市盛泰物流有限公司)",
-          "city": "河南省",
-          "district": ""
+          "city": "郑州市",
+          "district": "巩义市"
         },
         {
           "source_key": "21805761f96c729f8e9631429aa38cbe2e730d16c757fc3444c1e05486293877",
@@ -9757,6 +9749,14 @@
           "task_name": "黑豹能源岛重卡超充电站(元宇宙充电站)(暂停营业)",
           "city": "郑州市",
           "district": "新郑市"
+        },
+        {
+          "source_key": "2a386208b358912454d7c54fea479517686a9665262f82f5fe6a6506974a455f",
+          "source_station_id": "B0LU2PQ445",
+          "station_name": "新电途汽车充电站(豫州大道兆瓦重卡充电站)",
+          "task_name": "新电途汽车充电站(豫州大道兆瓦重卡充电站)",
+          "city": "郑州市",
+          "district": "中牟县"
         }
       ]
     }

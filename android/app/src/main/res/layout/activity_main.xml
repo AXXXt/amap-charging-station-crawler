@@ -98,6 +98,31 @@
             android:text="打开高德地图" />
 
         <TextView
+            android:id="@+id/shizuku_status_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="#E8F3ED"
+            android:padding="12dp"
+            android:textColor="#173D2C"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/shizuku_authorize_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="授权 Shizuku" />
+
+        <Button
+            android:id="@+id/shizuku_stop_map_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:enabled="false"
+            android:text="关闭地图后台" />
+
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"

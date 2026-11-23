@@ -13,6 +13,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.tigercode.evcollector.privileged.ShizukuMapController
 import com.tigercode.evcollector.AppPreferences
 import com.tigercode.evcollector.CollectorKeepAliveService
 import com.tigercode.evcollector.accessibility.ChargingAccessibilityService
@@ -36,6 +37,7 @@ import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
+    private lateinit var shizukuControls: ShizukuControls
     private lateinit var repository: CollectorRepository
     private lateinit var engine: CollectionEngine
 
@@ -83,6 +85,10 @@ class MainActivity : AppCompatActivity() {
         binding.saveConfigButton.setOnClickListener { saveConfig() }
         binding.openAccessibilityButton.setOnClickListener { openAccessibilitySettings() }
         binding.openAmapButton.setOnClickListener { openAmap() }
+        shizukuControls = ShizukuControls(
+            this, binding.shizukuStatusText, binding.shizukuAuthorizeButton,
+            binding.shizukuStopMapButton,
+        ) { AppPreferences.isScanning(this) || engine.isRunning() || fleetStartInProgress || collectionJob?.isActive == true }
         binding.startCollectButton.setOnClickListener { startWithFleetPermission { startCollector() } }
         binding.stopCollectButton.setOnClickListener { stopCollector() }
         binding.syncNowButton.setOnClickListener { startWithFleetPermission { syncNow() } }
@@ -145,6 +151,10 @@ class MainActivity : AppCompatActivity() {
     private var fleetStartInProgress = false
 
     private fun startWithFleetPermission(action: () -> Unit) {
+        if (ShizukuMapController.isBusy) {
+            Toast.makeText(this, "正在关闭地图，请稍候再操作", Toast.LENGTH_SHORT).show()
+            return
+        }
         if (fleetStartInProgress) return
         if (AppPreferences.isScanning(this) || engine.isRunning() || collectionJob?.isActive == true) {
             Toast.makeText(this, "本机正在采集，请先停止后再开始", Toast.LENGTH_SHORT).show()
@@ -235,6 +245,14 @@ class MainActivity : AppCompatActivity() {
                         "详情页风控，任务已释放: ${outcome.message}",
                     )
                 }
+                is SyncOutcome.SliderRestart -> {
+                    val recovery = com.tigercode.evcollector.engine.AmapSliderRecoveryController(this@MainActivity) { }
+                    recovery.releasePendingLease()
+                    AppPreferences.setRemoteStatus(this@MainActivity, "滑块验证恢复", outcome.message)
+                    if (AppPreferences.isScanning(this@MainActivity)) {
+                        CollectorKeepAliveService.resumeAfterCooldown(this@MainActivity)
+                    }
+                }
                 is SyncOutcome.HumanVerification -> {
                     AppPreferences.setScanning(this@MainActivity, false)
                     AppPreferences.setRemoteStatus(
@@ -250,10 +268,10 @@ class MainActivity : AppCompatActivity() {
                 is SyncOutcome.Failed -> {
                     AppPreferences.setRemoteStatus(
                         this@MainActivity,
-                        "同步失败",
+                        outcome.title,
                         outcome.message,
                     )
-                    AppPreferences.appendLog(this@MainActivity, "同步失败: ${outcome.message}")
+                    AppPreferences.appendLog(this@MainActivity, "${outcome.title}: ${outcome.message}")
                 }
                 is SyncOutcome.FleetStopped -> {
                     currentMessage = "收到全部停止指令，需手动开始"
@@ -501,6 +519,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openAmap() {
+        if (com.tigercode.evcollector.engine.AmapSliderRecoveryStore.blocksNewTask(this)) {
+            Toast.makeText(this, "滑块恢复中，请等待恢复结束，或先停止运行", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (ShizukuMapController.isBusy) {
+            Toast.makeText(this, "正在关闭地图，请稍候再操作", Toast.LENGTH_SHORT).show()
+            return
+        }
         val service = ChargingAccessibilityService.current()
         if (service != null) {
             service.launchAmap()
@@ -527,6 +553,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshUi() {
         if (!::binding.isInitialized) return
+        if (::shizukuControls.isInitialized) shizukuControls.refresh()
         val accessibilityConnected = ChargingAccessibilityService.isConnected()
         val accessibilityEnabled = ChargingAccessibilityService.isEnabled(this)
         val scanning = AppPreferences.isScanning(this)

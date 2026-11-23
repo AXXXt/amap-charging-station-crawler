@@ -18,6 +18,7 @@ import androidx.core.content.ContextCompat
 import com.tigercode.evcollector.accessibility.ChargingAccessibilityService
 import com.tigercode.evcollector.data.CollectorRepository
 import com.tigercode.evcollector.engine.CollectionEngine
+import com.tigercode.evcollector.engine.AmapSliderRecoveryController
 import com.tigercode.evcollector.network.FleetControlClient
 import com.tigercode.evcollector.network.FleetGenerationRequest
 import com.tigercode.evcollector.network.FleetStoppedException
@@ -107,7 +108,9 @@ class CollectorKeepAliveService : Service() {
             try {
             // 避免无任务时每 15 秒重复弹 Toast；重新发现并完成任务后会再次提示。
             var waitingToastShown = false
+            val sliderRecovery = AmapSliderRecoveryController(this@CollectorKeepAliveService, ::updateNotification)
             while (isActive && AppPreferences.isScanning(this@CollectorKeepAliveService)) {
+                if (sliderRecovery.step()) continue
                 if (!ChargingAccessibilityService.isConnected()) {
                     val accessibilityEnabled = ChargingAccessibilityService.isEnabled(
                         this@CollectorKeepAliveService,
@@ -203,6 +206,12 @@ class CollectorKeepAliveService : Service() {
                         waitingToastShown = false
                         8_000L
                     }
+                    is SyncOutcome.SliderRestart -> {
+                        AppPreferences.setRemoteStatus(this@CollectorKeepAliveService, "滑块验证恢复", outcome.message)
+                        updateNotification("滑块验证，暂停并重启高德")
+                        waitingToastShown = false
+                        0L
+                    }
                     is SyncOutcome.HumanVerification -> {
                         val message = "本机已暂停，请手动完成验证后点击开始采集"
                         AppPreferences.setScanning(this@CollectorKeepAliveService, false)
@@ -219,11 +228,11 @@ class CollectorKeepAliveService : Service() {
                     is SyncOutcome.Failed -> {
                         AppPreferences.setRemoteStatus(
                             this@CollectorKeepAliveService,
-                            "同步失败",
+                            outcome.title,
                             outcome.message,
                         )
-                        updateNotification("同步失败，等待重试")
-                        showStepToast("同步失败：${outcome.message}")
+                        updateNotification("${outcome.title}，等待重试")
+                        showStepToast("${outcome.title}：${outcome.message}")
                         waitingToastShown = false
                         8_000L
                     }

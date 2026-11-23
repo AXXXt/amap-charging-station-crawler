@@ -45,7 +45,8 @@ class MonitorRetryLimitTests(unittest.TestCase):
                "round_id": 50, "status": "RUNNING", "attempt": attempt, "max_attempts": 2,
                "progress": {"_noMatchRetryScheduled": True} if retried else {}}
         connection = MagicMock()
-        with patch.object(scheduler, "_get_row", return_value=row), \
+        with patch.object(scheduler, "_locked_row", return_value=row), \
+             patch.object(scheduler, "_supports_supplement", return_value=False), \
              patch.object(scheduler, "_assert_lease"), \
              patch.object(scheduler, "_has_historical_data", return_value=history), \
              patch.object(scheduler, "_conn", return_value=connection), \
@@ -77,8 +78,9 @@ class MonitorRetryLimitTests(unittest.TestCase):
     def test_retryable_failure_is_terminal_after_second_attempt(self):
         for attempt, expected in [(1, "PENDING"), (2, "FAILED")]:
             with self.subTest(attempt=attempt):
-                row = {"attempt": attempt, "max_attempts": 2, "batch_id": 11, "round_id": 50}
-                with patch.object(scheduler, "_get_row", return_value=row), \
+                row = {"local_task_id": "task", "attempt": attempt, "max_attempts": 2, "batch_id": 11, "round_id": 50}
+                with patch.object(scheduler, "_locked_row", return_value=row), \
+                     patch.object(scheduler, "_supports_supplement", return_value=False), \
                      patch.object(scheduler, "_assert_lease"), \
                      patch.object(scheduler, "_conn", return_value=MagicMock()), \
                      patch.object(scheduler, "_advance_round") as advance, \

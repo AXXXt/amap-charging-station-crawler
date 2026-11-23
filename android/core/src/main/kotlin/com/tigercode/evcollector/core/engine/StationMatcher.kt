@@ -124,7 +124,6 @@ object StationMatcher {
         stationName: String,
         expectedAddress: String = "",
     ): StationMatch? {
-        val targetName = StationNameNormalizer.normalize(stationName)
         val addressShingles = addressShingles(expectedAddress)
         var best: StationMatch? = null
         var bestRank = Long.MIN_VALUE
@@ -136,8 +135,7 @@ object StationMatcher {
                 val label = description.ifEmpty { text }
                 val values = collectText(node)
                 if (isStationCard(node, label, values, null, root.bounds)) {
-                    val candidateName = StationNameNormalizer.normalize(label)
-                    val score = stationMatchScore(targetName, candidateName)
+                    val score = stationMatchScore(stationName, label)
                     if (score > 0 && node.bounds.isValid) {
                         val candidate = StationMatch(
                             score = score,
@@ -201,7 +199,6 @@ object StationMatcher {
      * [bestMatch] must not be applied here.
      */
     fun bestSuggestionMatch(root: NodeSnapshot, stationName: String): StationMatch? {
-        val targetName = StationNameNormalizer.normalize(stationName)
         val allNodes = mutableListOf<NodeSnapshot>()
         fun collect(node: NodeSnapshot) {
             allNodes.add(node)
@@ -226,8 +223,7 @@ object StationMatcher {
                     val hasStationName =
                         (label.contains("充") && label.contains("站")) || label.contains("电站")
                     if (hasStationName) {
-                        val candidateName = StationNameNormalizer.normalize(label)
-                        val score = stationMatchScore(targetName, candidateName)
+                        val score = stationMatchScore(stationName, label)
                         if (score > 0) {
                             val poiLike = node.bounds.height >= 80 || hasActionSibling(node, allNodes)
                             candidates.add(
@@ -321,7 +317,10 @@ object StationMatcher {
         return values.joinToString("\n")
     }
 
-    private fun stationMatchScore(targetName: String, candidateName: String): Int {
+    private fun stationMatchScore(targetLabel: String, candidateLabel: String): Int {
+        if (StationNameNormalizer.isUnqualifiedMatchCandidate(targetLabel, candidateLabel)) return 0
+        val targetName = StationNameNormalizer.normalize(targetLabel)
+        val candidateName = StationNameNormalizer.normalize(candidateLabel)
         if (targetName.isEmpty() || candidateName.isEmpty()) return 0
         if (candidateName == targetName) return 1000
         if (minOf(targetName.length, candidateName.length) < MIN_PARTIAL_MATCH_LENGTH) return 0

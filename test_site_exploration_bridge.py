@@ -184,6 +184,28 @@ class LatestPileSummaryTests(unittest.TestCase):
         self.assertEqual(values["pile_total"], 0)
         self.assertEqual(json.loads(values["pile_json"]), [])
 
+    def test_tariff_only_snapshot_preserves_missing_live_status_markers(self):
+        self.cursor.fetchone.return_value = None
+        tariff = [{"time": "00:00-24:00", "totalPrice": "0.77"}]
+        observed = {"fastPrices": tariff, "priceSchedulePlatform": "AMAP",
+                    "stationCardComplete": False,
+                    "missingStationCardFields": ["实时电价", "空闲/总枪数"]}
+        SiteExplorationBridge._append_dynamic_snapshot(
+            self.bridge, self.conn, "key", "poi", "obs", "task", "device",
+            "HENAN_POI", "station", observed, 200, 201,
+        )
+        sql, params = self.cursor.execute.call_args.args
+        columns = re.search(r"INSERT INTO .*? \((.*?)\) VALUES", sql).group(1).split(", ")
+        values = dict(zip(columns, params))
+        price = json.loads(values["price_json"])
+        self.assertEqual(tariff, price["fastPrices"])
+        self.assertEqual("AMAP", price["priceSchedulePlatform"])
+        self.assertIs(False, price["stationCardComplete"])
+        self.assertEqual(observed["missingStationCardFields"], price["missingStationCardFields"])
+        self.assertEqual("", values["current_price"])
+        self.assertEqual(0, values["pile_total"])
+        self.assertEqual([], json.loads(values["pile_json"]))
+
     def test_empty_upload_does_not_create_a_zero_history_snapshot(self):
         SiteExplorationBridge._append_dynamic_snapshot(
             self.bridge, self.conn, "key", "poi", "obs", "task", "device",

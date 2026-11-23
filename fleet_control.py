@@ -106,7 +106,7 @@ def release_mysql_leases(conn, now):
     Existing observations/results and terminal tasks are untouched.
     """
     counts = {}
-    tables = ('station_monitor_task', 'henan_heavy_truck_charging_station_task')
+    tables = ('station_monitor_task', 'henan_heavy_truck_charging_station_task', 'station_monitor_supplement_task')
     try:
         with conn.cursor() as cursor:
             for table in tables:
@@ -114,8 +114,17 @@ def release_mysql_leases(conn, now):
                 if not cursor.fetchone():
                     counts[table] = 0
                     continue
+                if table == 'station_monitor_supplement_task':
+                    # A supplemental lease is a single attempt even when stopped.
+                    # Never refund/requeue it or turn it into a reverse transfer.
+                    from cross_platform_monitor import unix_time
+                    stamp = unix_time(now)
+                    cursor.execute(
+                        "UPDATE " + table + " SET status=4,lease_device_id='',lease_token='',lease_expires_at=0, "
+                        "finished_at=%s,updated_at=%s,last_error='FLEET_STOP_RELEASED' "
+                        "WHERE status IN (1,2)", (stamp,stamp))
                 # Recovery tasks must remain on their FAILED recovery queue.
-                if table == 'henan_heavy_truck_charging_station_task':
+                elif table == 'henan_heavy_truck_charging_station_task':
                     cursor.execute(
                         "UPDATE " + table + " SET status=CASE WHEN recovery_attempt>0 THEN 'FAILED' ELSE 'PENDING' END, "
                         "attempt=CASE WHEN recovery_attempt=0 THEN GREATEST(attempt-1,0) ELSE attempt END, "

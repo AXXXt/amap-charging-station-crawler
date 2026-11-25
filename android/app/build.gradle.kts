@@ -12,8 +12,8 @@ android {
         applicationId = "com.tigercode.evcollector"
         minSdk = 26
         targetSdk = 35
-        versionCode = 69
-        versionName = "0.1.42.27"
+        versionCode = 70
+        versionName = "0.1.42.28"
     }
 
     buildTypes {
@@ -39,6 +39,7 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     implementation(project(":core"))
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")

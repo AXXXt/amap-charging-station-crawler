@@ -30,6 +30,7 @@ import com.tigercode.evcollector.network.FleetStopRequest
 import com.tigercode.evcollector.network.SyncManager
 import com.tigercode.evcollector.network.SyncOutcome
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
@@ -74,6 +75,13 @@ class MainActivity : AppCompatActivity() {
             SyncManager(this, repository, engine).uploadLocalResultsOnly()
         }
         engine.addListener(engineListener)
+        com.tigercode.evcollector.network.DeviceCommandClient.attachActivity(this) {
+            engine.stop()
+            startJob?.cancelAndJoin()
+            fleetWatchJob?.cancelAndJoin()
+            collectionJob?.cancelAndJoin()
+            engine.stopForRemote()
+        }
 
         binding.serverUrlInput.setText(AppPreferences.serverUrl(this))
         binding.activationCodeInput.setText(AppPreferences.activationCode(this))
@@ -112,6 +120,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        com.tigercode.evcollector.network.DeviceCommandClient.detachActivity(this)
         refreshHandler.removeCallbacks(refreshRunnable)
         startJob?.cancel()
         fleetWatchJob?.cancel()

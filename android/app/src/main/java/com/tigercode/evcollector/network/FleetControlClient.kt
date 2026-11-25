@@ -15,6 +15,18 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import retrofit2.HttpException
 
+internal fun collectorCapabilities(context: Context): Map<String, Any> = mapOf(
+    "accessibilityConnected" to ChargingAccessibilityService.isConnected(),
+    "targetPackage" to ChargingAccessibilityService.AMAP_PACKAGE,
+    "sdkInt" to Build.VERSION.SDK_INT,
+    "manufacturer" to Build.MANUFACTURER,
+    "model" to Build.MODEL,
+    "fleetStopSupported" to true,
+    "remoteDeviceControl" to 1,
+    "collectionRunning" to AppPreferences.isScanning(context),
+    "collectionMode" to if (AppPreferences.isMonitorMode(context) && AppPreferences.isPriorityStationMode(context)) "PRIORITY_DETAIL" else "OTHER",
+)
+
 class FleetStoppedException : CancellationException("收到全部停止指令")
 
 object FleetControlClient {
@@ -29,12 +41,7 @@ object FleetControlClient {
             appVersion = CollectorVersions.APP_VERSION,
             parserVersion = CollectorVersions.PARSER_VERSION,
             targetAppVersion = "",
-            capabilities = mapOf(
-                "accessibilityConnected" to ChargingAccessibilityService.isConnected(),
-                "targetPackage" to ChargingAccessibilityService.AMAP_PACKAGE,
-                "model" to Build.MODEL,
-                "fleetStopSupported" to true,
-            ),
+            capabilities = collectorCapabilities(context),
         ))
         check(response.deviceToken.isNotBlank()) { "设备注册未返回令牌" }
         AppPreferences.saveDeviceToken(context, response.deviceToken)
@@ -71,7 +78,7 @@ object FleetControlClient {
     fun markStopped(context: Context) {
         AppPreferences.setScanning(context, false)
         CooldownAlarmScheduler.cancel(context)
-        val message = "收到全部停止指令，本机已停止；任务由服务器释放，需手动开始"
+        val message = "收到服务端停采指令，本机已停止；可在监控台或手机上重新开始"
         AppPreferences.setRemoteStatus(context, message)
         AppPreferences.appendLog(context, message)
         Handler(Looper.getMainLooper()).post { Toast.makeText(context, message, Toast.LENGTH_LONG).show() }

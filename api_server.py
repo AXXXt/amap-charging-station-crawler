@@ -7,10 +7,11 @@ api_server.py — 重卡充电站数据API服务
   3. 支持数据导出
   4. MySQL持久化存储
 """
-from fastapi import FastAPI, Query, HTTPException, Header
+from fastapi import FastAPI, Query, HTTPException, Header, Response
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
 import pymysql
 import json
 import os
@@ -19,12 +20,16 @@ import secrets
 import uuid
 import hashlib
 import time
+from pathlib import Path
+from threading import Lock
 from datetime import datetime, timezone, timedelta
 import urllib.parse
 import urllib.request
 import monitor_scheduler
 import priority_station_scopes
 import fleet_control
+import collector_monitor
+import device_control
 from site_exploration_bridge import (
     SiteExplorationBridge,
     parse_mysql_database_url,
@@ -1068,6 +1073,17 @@ class FleetGenerationRequest(BaseModel):
     stopGeneration: int
 
 
+class MonitorDeviceCommandRequest(BaseModel):
+    requestId: str
+    action: Literal["START", "STOP"]
+
+
+class DeviceCommandAckRequest(BaseModel):
+    commandId: int
+    status: Literal["APPLIED", "FAILED"]
+    error: str = ""
+
+
 class MobileClaimRequest(BaseModel):
     deviceCode: str = ""
     mode: str = "NORMAL"
@@ -1267,6 +1283,7 @@ def init_mobile_db():
     )
     conn.commit()
     fleet_control.init_schema(conn)
+    collector_monitor.init_schema(conn)
     conn.commit()
     conn.close()
 
@@ -2113,14 +2130,18 @@ def mobile_stop_all(request: FleetStopRequest, authorization: Optional[str] = He
     device = _require_mobile_device(authorization)
     if not fleet_control.can_control(device):
         raise HTTPException(403, detail="FLEET_CONTROLLER_REQUIRED")
-    request_id = request.requestId.strip()
+    return _stop_collection_fleet(request.requestId, device["id"])
+
+
+def _stop_collection_fleet(request_id, operator):
+    request_id = request_id.strip()
     if not request_id or len(request_id) > 100:
         raise HTTPException(400, detail="INVALID_STOP_REQUEST_ID")
     try:
         with fleet_control.dispatch_guard(MOBILE_DB_PATH):
             conn = mobile_conn()
             try:
-                cached = fleet_control.begin_stop(conn, request_id, device["id"], _mobile_utc())
+                cached = fleet_control.begin_stop(conn, request_id, operator, _mobile_utc())
                 if cached is not None:
                     return cached
                 mysql_counts = {}
@@ -2135,6 +2156,166 @@ def mobile_stop_all(request: FleetStopRequest, authorization: Optional[str] = He
                 conn.close()
     except fleet_control.FleetControlError as error:
         raise HTTPException(409, detail=str(error))
+
+
+_MONITOR_ASSETS = Path(__file__).resolve().parent / "collector-monitor"
+_monitor_ingestion_lock = Lock()
+_monitor_ingestion_cache = None
+_monitor_cache_until = 0.0
+
+
+def _monitor_ingestion():
+    global _monitor_ingestion_cache, _monitor_cache_until
+    with _monitor_ingestion_lock:
+        if time.monotonic() >= _monitor_cache_until:
+            if not _mysql_configured():
+                raise RuntimeError("MONITOR_MYSQL_NOT_CONFIGURED")
+            _monitor_ingestion_cache = collector_monitor.read_ingestion(
+                lambda: pymysql.connect(**{**DB_CONFIG, "read_timeout": 8}, cursorclass=pymysql.cursors.DictCursor),
+                site_exploration_bridge.dynamic_history_table,
+            )
+            _monitor_cache_until = time.monotonic() + 25
+        return _monitor_ingestion_cache
+
+
+def _require_collector_monitor_key(key):
+    expected = os.getenv("COLLECTOR_MONITOR_KEY", "").strip()
+    if not expected:
+        raise HTTPException(503, detail="COLLECTOR_MONITOR_KEY_NOT_CONFIGURED")
+    if not key or not secrets.compare_digest(key.encode("utf-8"), expected.encode("utf-8")):
+        raise HTTPException(401, detail="COLLECTOR_MONITOR_KEY_REQUIRED")
+
+
+@app.get("/station-dashboard", include_in_schema=False)
+@app.get("/collector-monitor", include_in_schema=False)
+def collector_monitor_page():
+    return FileResponse(_MONITOR_ASSETS / "index.html", headers={
+        "Content-Security-Policy": "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        "Cache-Control": "no-cache",
+    })
+
+
+@app.get("/station-dashboard/{asset}", include_in_schema=False)
+@app.get("/collector-monitor/{asset}", include_in_schema=False)
+def collector_monitor_asset(asset: str):
+    if asset not in {"monitor.css", "monitor.js", "public-sans.woff2"}:
+        raise HTTPException(404)
+    return FileResponse(_MONITOR_ASSETS / asset, headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/v1/collector-monitor")
+def collector_monitor_overview(
+    response: Response,
+    x_collector_monitor_key: Optional[str] = Header(None),
+    outcome: Optional[str] = Query(None, max_length=32),
+    device_id: Optional[str] = Query(None, max_length=64),
+    before: Optional[int] = Query(None, gt=0),
+    log_days: Literal["1", "7"] = Query("1"),
+):
+    _require_collector_monitor_key(x_collector_monitor_key)
+    response.headers["Cache-Control"] = "no-store"
+    ingestion, operations = None, None
+    try:
+        ingestion = _monitor_ingestion()
+    except (pymysql.MySQLError, RuntimeError):
+        pass
+    try:
+        operations = collector_monitor.read_operations_db(
+            MOBILE_DB_PATH, outcome=outcome, device_id=device_id, before=before, log_days=int(log_days),
+        )
+    except sqlite3.Error:
+        pass
+    return {"ingestion": ingestion, "operations": operations,
+            "deviceView": collector_monitor.read_device_view(ingestion, operations, MOBILE_DB_PATH)}
+
+
+@app.post("/api/v1/collector-monitor/stop-all")
+def collector_monitor_stop_all(request: FleetStopRequest, x_collector_monitor_key: Optional[str] = Header(None)):
+    _require_collector_monitor_key(x_collector_monitor_key)
+    try:
+        return _stop_collection_fleet(request.requestId, "collector-monitor")
+    except (pymysql.MySQLError, sqlite3.Error):
+        raise HTTPException(503, detail="STOP_RESULT_UNKNOWN_RETRY_SAME_REQUEST")
+
+
+@app.post("/api/v1/collector-monitor/devices/{device_id}/command")
+def collector_monitor_device_command(device_id: str, request: MonitorDeviceCommandRequest,
+                                     x_collector_monitor_key: Optional[str] = Header(None)):
+    _require_collector_monitor_key(x_collector_monitor_key)
+    request_id = request.requestId.strip()
+    if not request_id or len(request_id) > 100:
+        raise HTTPException(400, detail="INVALID_REQUEST_ID")
+    try:
+        with fleet_control.dispatch_guard(MOBILE_DB_PATH):
+            conn = mobile_conn()
+            try:
+                device = conn.execute("SELECT * FROM collector_device WHERE id=?", (device_id,)).fetchone()
+                if device is None:
+                    raise HTTPException(404, detail="DEVICE_NOT_FOUND")
+                try:
+                    capabilities = json.loads(device["capabilities"]) or {}
+                except (ValueError, TypeError):
+                    capabilities = {}
+                if not isinstance(capabilities, dict) or capabilities.get("remoteDeviceControl") != 1:
+                    raise HTTPException(409, detail="DEVICE_APP_UPGRADE_REQUIRED")
+                state = conn.execute("SELECT * FROM fleet_control WHERE id=1").fetchone()
+                if not state["release_complete"]:
+                    raise HTTPException(409, detail="STOP_RELEASE_IN_PROGRESS")
+                command = device_control.begin(conn, device, collector_monitor.device_platform(device),
+                                               request.action, request_id, state["generation"], _mobile_utc())
+                if command["status"] != "QUEUED" or command["release_complete"] and request.action == "STOP":
+                    return {"command": device_control.payload(command)}
+                if request.action == "START":
+                    # An explicit web start restores only this client's dispatch permission.
+                    with conn:
+                        conn.execute("INSERT INTO fleet_device_control(device_id,allowed_generation) VALUES(?,?) "
+                                     "ON CONFLICT(device_id) DO UPDATE SET allowed_generation=excluded.allowed_generation",
+                                     (device_id, state["generation"]))
+                    return {"command": device_control.payload(command)}
+                if _mysql_configured():
+                    mysql = _henan_mysql_conn()
+                    try:
+                        counts = device_control.release_mysql_leases(mysql, device_id, _henan_mysql_utcnow())
+                    finally:
+                        mysql.close()
+                    device_control.record_mysql_release(conn, command["id"], counts)
+                return {"command": device_control.finish_stop(conn, command["id"], _mobile_utc())}
+            finally:
+                conn.close()
+    except device_control.DeviceControlError as error:
+        raise HTTPException(409, detail=str(error))
+    except (pymysql.MySQLError, sqlite3.Error):
+        raise HTTPException(503, detail="COMMAND_RESULT_UNKNOWN_RETRY_SAME_REQUEST")
+
+
+@app.post("/api/v1/devices/me/command-result")
+def mobile_device_command_result(request: DeviceCommandAckRequest, authorization: Optional[str] = Header(None)):
+    device = _require_mobile_device(authorization)
+    try:
+        with fleet_control.dispatch_guard(MOBILE_DB_PATH):
+            conn = mobile_conn()
+            try:
+                control = fleet_control.snapshot(conn, device)
+                result = device_control.acknowledge(conn, device, request.commandId, request.status,
+                                                     request.error, _mobile_utc(), control)
+                return {"command": result}
+            finally:
+                conn.close()
+    except device_control.DeviceControlError as error:
+        raise HTTPException(409, detail=str(error))
+
+
+@app.post("/api/v1/collector-monitor/recovery-events", status_code=204)
+def collector_monitor_recovery_event(event: collector_monitor.RecoveryEvent, authorization: Optional[str] = Header(None)):
+    device = _require_mobile_device(authorization)
+    if collector_monitor.device_platform(device) != "BAIDU":
+        raise HTTPException(403, detail="BAIDU_RECOVERY_TELEMETRY_REQUIRED")
+    conn = mobile_conn()
+    try:
+        collector_monitor.save_event(conn, device["id"], event, int(time.time()))
+    finally:
+        conn.close()
+    return Response(status_code=204)
 
 
 @app.post("/api/v1/devices/me/resume")

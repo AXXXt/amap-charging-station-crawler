@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#ffffff">
+  <title>采集监控台 · 充电站采集</title>
+  <link rel="stylesheet" href="/station-dashboard/monitor.css">
+  <script src="/station-dashboard/monitor.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="frame topbar-inner">
+      <a class="brand" href="#overview"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>充电站采集</a>
+      <div class="toolbar">
+        <button class="operator-button" id="operator" type="button">监控登录</button>
+        <button class="stop-button" id="stop" type="button" disabled><span class="stop-mark" aria-hidden="true"></span><span id="stop-label">停止全部采集</span></button>
+      </div>
+    </div>
+  </header>
+
+  <main class="frame workspace" id="overview">
+    <div class="title-row">
+      <div>
+        <h1>采集监控台</h1>
+        <p id="finding">百度与高德采集的入库、覆盖和恢复情况。</p>
+      </div>
+      <div class="sync-tools">
+        <span id="sync-state" class="sync-state" role="status" data-tone="neutral">等待登录</span>
+        <button id="refresh" type="button" disabled>刷新</button>
+      </div>
+    </div>
+    <div id="preview-banner" class="notice preview-banner" hidden>
+      <span id="preview-note"></span>
+    </div>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <div id="fleet" class="notice" role="status" hidden></div>
+
+    <section class="panel speeds" aria-labelledby="speed-title">
+      <div class="panel-head">
+        <div><h2 id="speed-title">真实入库速度</h2><p id="speed-window">近 30 分钟 · 实际采集端</p></div>
+        <div id="window-picker" class="tab-row" role="group" aria-label="入库速度统计窗口">
+          <button type="button" data-window="10" aria-pressed="false">近 10 分钟</button>
+          <button type="button" data-window="30" aria-pressed="true">近 30 分钟</button>
+          <button type="button" data-window="60" aria-pressed="false">近 60 分钟</button>
+        </div>
+      </div>
+      <div class="speed-grid" id="speed-grid">
+        <div class="metric primary" data-metric="total">
+          <div class="metric-label">两端合计</div>
+          <div class="metric-value"><strong class="digits rate">—</strong><span>站次/小时</span></div>
+          <div class="metric-detail">等待入库数据</div>
+        </div>
+        <div class="metric" data-metric="BAIDU">
+          <div class="metric-label"><i class="platform-dot baidu"></i>百度</div>
+          <div class="metric-value"><strong class="digits rate">—</strong><span>站次/小时</span></div>
+          <div class="metric-detail">等待入库数据</div>
+        </div>
+        <div class="metric" data-metric="AMAP">
+          <div class="metric-label"><i class="platform-dot amap"></i>高德</div>
+          <div class="metric-value"><strong class="digits rate">—</strong><span>站次/小时</span></div>
+          <div class="metric-detail">等待入库数据</div>
+        </div>
+      </div>
+    </section>
+
+      <section class="panel" id="devices" aria-labelledby="devices-title">
+        <div class="panel-head"><div><h2 id="devices-title">采集设备</h2><p id="device-summary">等待设备数据</p></div><span class="quiet">每个客户端单独控制</span></div>
+        <div class="table-scroll" tabindex="0" aria-label="采集设备表格">
+          <table id="device-table" class="device-table">
+            <thead><tr><th scope="col">设备 / 客户端</th><th scope="col">采集模式</th><th scope="col">运行状态</th><th scope="col" class="number" id="device-window">近 30 分钟速度</th><th scope="col">设备心跳</th><th scope="col">最近入库</th><th scope="col">设备操作</th></tr></thead>
+            <tbody><tr><td class="table-empty" colspan="7">等待设备数据</td></tr></tbody>
+          </table>
+        </div>
+        <div id="device-foot" class="panel-foot">百度开始设备调度，高德开始重点站点详情采集。速度按实际入库快照折算。</div>
+      </section>
+
+    <div class="dashboard-grid upper">
+      <section class="panel trend-panel" aria-labelledby="trend-title">
+        <div class="panel-head">
+          <div><h2 id="trend-title">采集速度趋势</h2><p id="trend-description">近 2 小时 · 每 5 分钟折算 · 站次/小时</p></div>
+          <div class="legend" id="trend-legend" hidden>
+            <span><i class="swatch total"></i>两端合计</span>
+            <span><i class="swatch baidu"></i>百度</span>
+            <span><i class="swatch amap"></i>高德</span>
+          </div>
+        </div>
+        <div class="chart-area">
+          <canvas id="trend" aria-label="采集速度走势图，可用左右方向键选取时段" aria-describedby="trend-description chart-readout" role="img" tabindex="0" hidden></canvas>
+          <div id="trend-empty" class="empty">等待入库数据</div>
+          <div class="chart-readout digits" id="chart-readout" hidden>
+            <span id="chart-time"></span>
+            <span class="chart-values">
+              <span>合计 <strong id="chart-total"></strong></span>
+              <span class="baidu">百度 <strong id="chart-baidu"></strong></span>
+              <span class="amap">高德 <strong id="chart-amap"></strong></span>
+            </span>
+          </div>
+        </div>
+      </section>
+      <section class="panel coverage-panel" aria-labelledby="coverage-title">
+        <div class="panel-head">
+          <div><h2 id="coverage-title">本轮站点覆盖</h2><p>按主任务实际入库站点去重</p></div>
+          <span class="quiet" id="batch-note"></span>
+        </div>
+        <div class="coverage-body" id="coverage"></div>
+        <div class="panel-foot" id="round-start">等待轮次数据</div>
+      </section>
+    </div>
+
+    <div class="recovery-row">
+      <section class="panel recovery" id="ai" aria-labelledby="ai-title">
+        <div class="panel-head"><div><h2 id="ai-title">DeepSeek 恢复日志</h2><p id="ai-note">deepseek-v4-flash · 百度采集</p></div></div>
+        <div class="ai-counts" id="ai-counts">
+          <div><strong class="digits" id="ai-calls">—</strong><span>今日已上报调用</span></div>
+          <div><strong class="digits" id="ai-resumed">—</strong><span>恢复续采</span></div>
+          <div><strong class="digits" id="ai-review">—</strong><span>需关注</span></div>
+        </div>
+        <div class="log-filters">
+          <label class="sr-only" for="days-filter">筛选恢复日志日期</label>
+          <select id="days-filter" disabled><option value="1">今天</option><option value="7">近 7 天</option></select>
+          <label class="sr-only" for="device-filter">筛选恢复日志客户端</label>
+          <select id="device-filter" disabled><option value="">全部客户端</option></select>
+          <label class="sr-only" for="outcome-filter">筛选恢复结果</label>
+          <select id="outcome-filter" disabled>
+            <option value="">全部结果</option><option value="RESUMED">恢复续采</option><option value="REQUESTED">等待结果</option>
+            <option value="NEEDS_REVIEW">恢复未完成</option><option value="REJECTED">校验未通过</option>
+            <option value="NO_ACTION">未执行恢复</option><option value="CANCELLED">已取消</option>
+          </select>
+        </div>
+        <div id="logs" class="logs"><div class="empty small">等待上报状态</div></div>
+        <div class="panel-foot" id="more-wrap" hidden><button type="button" id="load-more">查看更早日志</button></div>
+      </section>
+    </div>
+    <footer id="data-note">入库速度按快照折算，同站重复入库计入站次。</footer>
+  </main>
+
+  <dialog id="auth-dialog" aria-labelledby="auth-title">
+    <form id="auth-form">
+      <h2 id="auth-title">连接采集监控台</h2>
+      <p>输入登录密码，查看入库数据并控制采集设备。</p>
+      <label for="monitor-key">登录密码</label>
+      <input id="monitor-key" type="password" autocomplete="current-password" spellcheck="false" maxlength="256" required>
+      <p class="form-error" id="auth-error" role="alert" hidden></p>
+      <div class="dialog-actions"><button id="auth-cancel" type="button">取消</button><button type="submit" id="auth-submit" class="primary-button">登录</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="stop-dialog" aria-labelledby="stop-title">
+    <div class="stop-dialog-body">
+      <h2 id="stop-title">停止全部采集？</h2>
+      <p id="stop-description">百度、高德设备将暂停领取任务。服务端处理在途任务，设备收到指令后回执。可以在设备列表逐台开始，也可以在手机端手动开始。</p>
+      <div class="dialog-actions"><button id="stop-cancel" type="button" autofocus>取消</button><button id="stop-confirm" class="stop-button" type="button">确认停止全部</button></div>
+    </div>
+  </dialog>
+</body>
+</html>

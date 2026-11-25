@@ -47,6 +47,7 @@ class CollectorKeepAliveService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        remoteInstance = this
         createNotificationChannel()
         acquireKeepAliveLock()
         startAsForeground("采集服务正在启动")
@@ -78,6 +79,7 @@ class CollectorKeepAliveService : Service() {
     }
 
     override fun onDestroy() {
+        if (remoteInstance === this) remoteInstance = null
         engine?.stop()
         loopJob?.cancel()
         fleetWatchJob?.cancel()
@@ -357,6 +359,21 @@ class CollectorKeepAliveService : Service() {
     }
 
     companion object {
+        @Volatile private var remoteInstance: CollectorKeepAliveService? = null
+
+        fun isCollectingServiceRunning(): Boolean = remoteInstance?.loopJob?.isActive == true
+
+        suspend fun stopForRemote(context: Context) {
+            val active = remoteInstance ?: return
+            active.engine?.stop()
+            active.fleetWatchJob?.cancelAndJoin()
+            active.loopJob?.cancelAndJoin()
+            active.stopSelf()
+            kotlinx.coroutines.withTimeout(5_000L) {
+                while (remoteInstance === active) delay(25L)
+            }
+        }
+
         private const val CHANNEL_ID = "collector_foreground"
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP = "com.tigercode.evcollector.STOP_COLLECTOR"

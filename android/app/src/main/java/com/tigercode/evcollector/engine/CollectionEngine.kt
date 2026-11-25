@@ -41,6 +41,7 @@ import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -225,6 +226,12 @@ class CollectionEngine(
                 )
             }
         }
+    }
+
+    suspend fun stopForRemote() {
+        stop()
+        activeJob?.cancelAndJoin()
+        activeJob = null
     }
 
     fun stop() {

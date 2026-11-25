@@ -83,14 +83,7 @@ class SyncManager(
                         appVersion = CollectorVersions.APP_VERSION,
                         parserVersion = CollectorVersions.PARSER_VERSION,
                         targetAppVersion = "",
-                        capabilities = mapOf(
-                            "accessibilityConnected" to ChargingAccessibilityService.isConnected(),
-                            "targetPackage" to ChargingAccessibilityService.AMAP_PACKAGE,
-                            "fleetStopSupported" to true,
-                            "sdkInt" to Build.VERSION.SDK_INT,
-                            "manufacturer" to Build.MANUFACTURER,
-                            "model" to Build.MODEL,
-                        ),
+                        capabilities = collectorCapabilities(context),
                     )
                 )
                 if (registerResponse.deviceToken.isNotBlank()) {
@@ -108,11 +101,7 @@ class SyncManager(
                         appVersion = CollectorVersions.APP_VERSION,
                         parserVersion = CollectorVersions.PARSER_VERSION,
                         targetAppVersion = "",
-                        capabilities = mapOf(
-                            "accessibilityConnected" to ChargingAccessibilityService.isConnected(),
-                            "targetPackage" to ChargingAccessibilityService.AMAP_PACKAGE,
-                            "fleetStopSupported" to true,
-                        ),
+                        capabilities = collectorCapabilities(context),
                     )
                 )
 
@@ -470,14 +459,7 @@ class SyncManager(
                 appVersion = CollectorVersions.APP_VERSION,
                 parserVersion = CollectorVersions.PARSER_VERSION,
                 targetAppVersion = "",
-                capabilities = mapOf(
-                    "accessibilityConnected" to ChargingAccessibilityService.isConnected(),
-                    "targetPackage" to ChargingAccessibilityService.AMAP_PACKAGE,
-                            "fleetStopSupported" to true,
-                    "sdkInt" to Build.VERSION.SDK_INT,
-                    "manufacturer" to Build.MANUFACTURER,
-                    "model" to Build.MODEL,
-                ),
+                capabilities = collectorCapabilities(context),
             )
         )
         if (registerResponse.deviceToken.isNotBlank()) {

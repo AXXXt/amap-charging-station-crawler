@@ -28,6 +28,8 @@ import com.tigercode.evcollector.core.model.StationCandidate
 import com.tigercode.evcollector.core.parser.PageAssessor
 
 class ChargingAccessibilityService : AccessibilityService() {
+    private val commandScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate)
+    private var commandJob: kotlinx.coroutines.Job? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     @Volatile
@@ -86,6 +88,8 @@ class ChargingAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        commandJob?.cancel()
+        commandJob = com.tigercode.evcollector.network.DeviceCommandClient.watch(this, commandScope)
         Log.i("EvCollector", "采集助手无障碍服务已连接")
         refreshSnapshot()
     }
@@ -101,6 +105,7 @@ class ChargingAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        commandJob?.cancel()
         mainHandler.removeCallbacks(snapshotRefreshRunnable)
         snapshotRefreshPending = false
         instance = null
@@ -110,6 +115,8 @@ class ChargingAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        commandJob?.cancel()
+        commandScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         mainHandler.removeCallbacks(snapshotRefreshRunnable)
         snapshotRefreshPending = false
         instance = null

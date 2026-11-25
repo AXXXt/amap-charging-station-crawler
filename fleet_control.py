@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import json
 import os
 import sqlite3
+import device_control
 
 
 class FleetControlError(Exception):
@@ -38,6 +39,8 @@ def init_schema(conn):
         );
     """)
 
+    device_control.init_schema(conn)
+
 
 @contextmanager
 def dispatch_guard(mobile_db_path):
@@ -66,12 +69,17 @@ def snapshot(conn, device):
     row = conn.execute('SELECT * FROM fleet_device_control WHERE device_id=?', (device['id'],)).fetchone()
     allowed = row['allowed_generation'] if row else 0
     stopped = row['stopped_generation'] if row else 0
+    command = device_control.active(conn, device['id'], state['generation'])
+    individual_stop = bool(command and command['action'] == 'STOP')
     return {
         'supported': True,
         'stopGeneration': state['generation'],
-        'stopRequired': allowed < state['generation'],
+        'stopRequired': allowed < state['generation'] or individual_stop,
+        'fleetStopRequired': allowed < state['generation'],
+        'deviceStopRequired': individual_stop,
+        'deviceCommand': device_control.payload(command),
         'stoppedGeneration': stopped,
-        'releaseComplete': bool(state['release_complete']),
+        'releaseComplete': bool(state['release_complete']) and (command is None or bool(command['release_complete'])),
         'requestedAt': state['requested_at'],
         'canStopAll': can_control(device),
     }
@@ -96,10 +104,11 @@ def begin_stop(conn, request_id, device_id, now):
         conn.execute("UPDATE fleet_control SET generation=?, request_id=?, requested_by=?, requested_at=?, release_complete=0, released_tasks='{}' WHERE id=1",
                      (generation, request_id, device_id, now))
         conn.execute('INSERT INTO fleet_stop_request(request_id,generation) VALUES(?,?)', (request_id,generation))
+    device_control.cancel_for_fleet_stop(conn)
     return None
 
 
-def release_mysql_leases(conn, now):
+def release_mysql_leases(conn, now, device_id=None):
     """Return active tasks to their queue without consuming a retry.
 
     Table existence is checked for installations using only one queue type.
@@ -122,7 +131,8 @@ def release_mysql_leases(conn, now):
                     cursor.execute(
                         "UPDATE " + table + " SET status=4,lease_device_id='',lease_token='',lease_expires_at=0, "
                         "finished_at=%s,updated_at=%s,last_error='FLEET_STOP_RELEASED' "
-                        "WHERE status IN (1,2)", (stamp,stamp))
+                        "WHERE status IN (1,2)" + (" AND lease_device_id=%s" if device_id else ""),
+                        (stamp,stamp,device_id) if device_id else (stamp,stamp))
                 # Recovery tasks must remain on their FAILED recovery queue.
                 elif table == 'henan_heavy_truck_charging_station_task':
                     cursor.execute(
@@ -131,13 +141,15 @@ def release_mysql_leases(conn, now):
                         "recovery_attempt=GREATEST(recovery_attempt-1,0), "
                         "lease_device_id='',lease_token='',lease_expires_at=NULL,started_at=NULL,finished_at=NULL, "
                         "available_at=%s,updated_at=%s,last_error='FLEET_STOP_RELEASED' "
-                        "WHERE status IN ('LEASED','RUNNING')", (now,now))
+                        "WHERE status IN ('LEASED','RUNNING')" + (" AND lease_device_id=%s" if device_id else ""),
+                        (now,now,device_id) if device_id else (now,now))
                 else:
                     cursor.execute(
                         "UPDATE " + table + " SET status='PENDING',attempt=GREATEST(attempt-1,0), "
                         "lease_device_id='',lease_token='',lease_expires_at=NULL,started_at=NULL,finished_at=NULL, "
                         "available_at=%s,updated_at=%s,last_error='FLEET_STOP_RELEASED' "
-                        "WHERE status IN ('LEASED','RUNNING')", (now,now))
+                        "WHERE status IN ('LEASED','RUNNING')" + (" AND lease_device_id=%s" if device_id else ""),
+                        (now,now,device_id) if device_id else (now,now))
                 counts[table] = cursor.rowcount
         conn.commit()
         return counts
@@ -178,6 +190,7 @@ def resume_device(conn, device, generation):
     if not control['releaseComplete']:
         raise FleetControlError('STOP_RELEASE_IN_PROGRESS')
     with conn:
+        device_control.cancel_for_manual_resume(conn, device['id'])
         conn.execute('INSERT INTO fleet_device_control(device_id,allowed_generation) VALUES(?,?) '
                      'ON CONFLICT(device_id) DO UPDATE SET allowed_generation=excluded.allowed_generation',
                      (device['id'],generation))

@@ -1,5 +1,6 @@
 import json
 import unittest
+from contextlib import ExitStack, nullcontext
 from unittest.mock import MagicMock, patch
 from datetime import datetime
 import daily_tariff_policy as policy
@@ -51,6 +52,89 @@ class ClaimTariffTests(unittest.TestCase):
         conn.close.assert_called_once()
         with patch.object(api_server,'_henan_mysql_conn',side_effect=RuntimeError('unavailable')):
             self.assertIs(api_server._with_daily_tariff(task,'BAIDU'),task)
+
+
+class MonitorClaimTariffTests(unittest.TestCase):
+    def setUp(self):
+        import api_server
+
+        self.api = api_server
+        self.device = {"id": "test-device", "device_code": "test-code"}
+        self.task = api_server.monitor_scheduler.task_payload({
+            "local_task_id": "monitor-task",
+            "amap_poi_id": "B123",
+            "station_name": "Test station",
+            "lease_token": "test-lease",
+        })
+        self.conn = MagicMock()
+        self.cursor = self.conn.cursor.return_value.__enter__.return_value
+        mocks = ExitStack()
+        self.addCleanup(mocks.close)
+        mocks.enter_context(patch.object(api_server, "_require_mobile_device", return_value=self.device))
+        mocks.enter_context(patch.object(api_server.fleet_control, "dispatch_guard", side_effect=lambda _: nullcontext()))
+        mocks.enter_context(patch.object(api_server, "_fleet_snapshot", return_value={
+            "stopRequired": False,
+            "releaseComplete": True,
+        }))
+        self.claim_task = mocks.enter_context(patch.object(
+            api_server.monitor_scheduler, "claim", return_value=(self.task, "MONITOR_CLAIMED"),
+        ))
+        self.update_device = mocks.enter_context(patch.object(api_server, "_update_monitor_device_task"))
+        self.mysql = mocks.enter_context(patch.object(api_server, "_henan_mysql_conn", return_value=self.conn))
+        mocks.enter_context(patch.object(api_server.time, "time", return_value=NOW))
+
+    def claim(self, mode):
+        request = self.api.MobileClaimRequest(mode=mode, deviceCode=self.device["device_code"])
+        return self.api.mobile_claim_task(request, authorization="Bearer test-token")
+
+    def test_fixed_claim_uses_claimed_station_and_scope_platform(self):
+        for scope, platform in (("BAIDU_MIN240_499", "BAIDU"), ("AMAP_MIN240_647", "AMAP")):
+            with self.subTest(platform=platform):
+                self.cursor.fetchall.side_effect = [[], [observation(priceSchedulePlatform=platform)]]
+                first = self.claim("MONITOR_" + scope)
+                later = self.claim("MONITOR_" + scope)
+
+                self.assertIsNone(first["task"].get("dailyTariff"))
+                self.assertEqual(later["task"]["dailyTariff"], {
+                    "capturedAt": (NOW - 3600) * 1000,
+                    "platform": platform,
+                    "fastPrices": [period()],
+                    "slowPrices": [],
+                })
+                self.assertEqual(later["reason"], "MONITOR_CLAIMED")
+                self.assertEqual(later["task"]["leaseToken"], "test-lease")
+                self.claim_task.assert_called_with(self.api.DB_CONFIG, self.device, scope_key=scope)
+                self.update_device.assert_called_with("test-device", "monitor-task", "RUNNING")
+                sql, args = self.cursor.execute.call_args.args
+                self.assertIn("source_key=%s", sql)
+                self.assertIn("'$.priceSchedulePlatform'))=%s", sql)
+                self.assertEqual(args, (self.api.station_source_key("B123"), NOW - 86400, platform))
+
+    def test_fixed_claim_keeps_task_when_cache_cannot_be_used(self):
+        mode = "MONITOR_AMAP_MIN240_647"
+        for row in (
+            observation(priceSchedulePlatform="BAIDU"),
+            observation(NOW - policy.RECHECK_SECONDS, priceSchedulePlatform="AMAP"),
+            observation(priceSchedulePlatform="AMAP", fastPrices=[period("00:00-12:00")]),
+            {"captured_at": NOW, "price_json": "invalid JSON"},
+        ):
+            with self.subTest(row=row):
+                self.cursor.fetchall.return_value = [row]
+                response = self.claim(mode)
+                self.assertEqual(response, {"task": {**self.task, "dailyTariff": None}, "reason": "MONITOR_CLAIMED"})
+
+        self.mysql.side_effect = RuntimeError("cache database unavailable")
+        with patch("sys.stderr"):
+            response = self.claim(mode)
+        self.assertEqual(response, {"task": self.task, "reason": "MONITOR_CLAIMED"})
+        self.assertNotIn("dailyTariff", self.task)
+
+    def test_legacy_monitor_and_empty_queue_do_not_read_cache(self):
+        self.assertEqual(self.claim("MONITOR"), {"task": self.task, "reason": "MONITOR_CLAIMED"})
+        self.claim_task.return_value = (None, "QUEUE_EMPTY")
+        self.assertEqual(self.claim("MONITOR_BAIDU_MIN240_499"), {"task": None, "reason": "QUEUE_EMPTY"})
+        self.mysql.assert_not_called()
+
 
 if __name__=='__main__':
     unittest.main()

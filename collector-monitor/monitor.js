@@ -330,6 +330,7 @@ function renderDevices(view, ingestion, operations) {
   const body = table.createTBody();
 
   function addRow(id, platform, phone, device = null) {
+    if (!Object.hasOwn(platformNames, platform)) platform = 'UNCLASSIFIED';
     const row = body.insertRow();
     row.dataset.appRow = '';
     if (device) row.dataset.device = id;
@@ -352,7 +353,8 @@ function renderDevices(view, ingestion, operations) {
     }
     if (device?.accessibilityConnected === false) state.append(element('span', '请在手机上开启无障碍', 'cell-note state warn'));
     const reading = ingestion?.devices?.[id];
-    const count = ingestion?.total ? reading?.windows?.[platform]?.[intervalMinutes]?.snapshots ?? 0 : null;
+    const windows = platform === 'UNCLASSIFIED' ? reading?.unclassified : reading?.windows?.[platform];
+    const count = ingestion?.total ? windows?.[intervalMinutes]?.snapshots ?? 0 : null;
     const quantity = row.insertCell(); quantity.className = 'number digits';
     quantity.append(element('strong', digits(ratePerHour(count, intervalMinutes))));
     quantity.append(element('span', '站次/小时', 'cell-note'));
@@ -370,12 +372,12 @@ function renderDevices(view, ingestion, operations) {
     if (last && at(last, date) !== at(ingestion?.cutoff, date)) latest.append(element('span', at(last, date), 'cell-note'));
     const controls = row.insertCell(); controls.className = 'device-controls';
     const request = deviceRequests.get(id);
-    if (request && device?.command?.requestId === request.requestId && !request.sending) {
+    if (request && device?.command?.requestId === request.requestId && device.command.releaseComplete !== false && !request.sending) {
       deviceRequests.delete(id); deviceFeedback.delete(id);
     }
     const current = deviceRequests.get(id);
     const actions = element('div', null, 'device-actions');
-    const unsupported = !device?.remoteControlSupported;
+    const unsupported = !device?.remoteControlSupported || !modes[platform];
     for (const action of ['START', 'STOP']) {
       const retry = current?.unknown && current.action === action;
       const button = element('button', retry ? `重试${action === 'START' ? '开始' : '停止'}` : action === 'START' ? '开始' : '停止', action === 'STOP' ? 'device-stop' : 'device-start');

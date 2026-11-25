@@ -2369,10 +2369,10 @@ def _mobile_claim_allowed(request, device):
             raise HTTPException(400, detail="UNKNOWN_MONITOR_SCOPE")
         task, reason = monitor_scheduler.claim(DB_CONFIG, device, scope_key=scope_key)
         if task is not None:
-            if task.get("crossPlatform"):
-                target_scope = task["crossPlatform"]["targetScopeKey"]
-                target_collector = priority_station_scopes.EXPECTED_SCOPES[target_scope][0]
-                task = _with_daily_tariff(task, target_collector)
+            tariff_scope = task["crossPlatform"]["targetScopeKey"] if task.get("crossPlatform") else scope_key
+            if tariff_scope:
+                collector = priority_station_scopes.EXPECTED_SCOPES[tariff_scope][0]
+                task = _with_daily_tariff(task, collector)
             _update_monitor_device_task(device["id"], task["id"], "RUNNING")
         return {"task": task, "reason": reason}
     collector = "BAIDU" if mode.startswith("BAIDU") else "AMAP"

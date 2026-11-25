@@ -41,7 +41,22 @@
 - 两端 App：assembleDebug、testDebugUnitTest、core:test 均通过；高德 146 项、百度 197 项单元测试通过，每端包含 9 项指令处理测试。
 - 浏览器：14 项隔离交互检查通过，包括密码、平台模式、逐台启停、真实回执、幂等重试、全停确认、旧 App/只读限制、故障清理，以及 1440/768/390 像素布局与运行错误检查。
 - 截图与演示由本机隔离接口提供，没有借验收向生产手机发送控制指令。
-- 尚未部署生产，也未安装到现场手机。Linux Nginx 配置必须由部署人员在实际配置合并后执行 nginx -t。
+- 初始交付时未部署生产。2026-11-25 已完成生产切换，手机由使用方升级；百度、高德各一个客户端的停止/恢复均取得真实执行回执，恢复后两端均有新增入库。原 Go 日报后端进程、配置和旧接口保持原样。后续发布仍须在实际 Nginx 配置合并后执行 nginx -t。
+
+## 生产兼容修复同步
+
+本分支已纳入此次生产部署保留的三处修复，后续从本分支打包即可包含，无需额外覆盖补丁：
+
+- 固定 MONITOR 任务领取时返回 dailyTariff，按所领取站点和实际采集平台查缓存；跨端补采继续按目标平台取缓存。缓存缺失、过期、平台不符、分时不完整或查询异常时继续正常派发，严格全天缓存校验保持不变。
+- STOP 释放任务尚未完成时，即使网页刷新读到了同一条指令，也保留原 requestId；网络失败后继续用原编号重试，待服务端释放完成后才清理重试状态。
+- 历史客户端的平台为空或未知时显示“待核实”，禁用远程控制，保留历史登记与来源未明的真实入库统计，避免单条旧记录导致整页刷新失败。
+
+回归验证使用临时设备库及模拟数据库/网络，不向生产手机发送指令。后端共 108 项，网页交互共 5 项；网页测试加载完整 monitor.js，覆盖半完成 STOP 的同编号重试、成功后的清理、正常 START，以及空/未知平台的渲染和计数。网页测试使用 Node.js 原生测试工具，无需 npm 依赖；它不替代真实浏览器布局和手机验收。以下命令应在不含生产 .env 或数据库环境变量的隔离副本中执行。
+
+```bash
+python -m unittest test_collector_monitor test_device_control test_cross_platform_monitor test_monitor_retry_limit test_mobile_dispatch test_fleet_control test_daily_tariff_policy test_site_exploration_bridge -q
+node --test test_collector_monitor_ui.mjs
+```
 
 ## Android 重新构建
 

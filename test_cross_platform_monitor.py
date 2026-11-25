@@ -1,4 +1,4 @@
-"""Offline stateful tests of primary retry, one-shot transfer and round restore.
+"""Offline stateful tests of primary retry, one-shot transfer and independent rounds.
 
 SQLite executes the scheduler transitions; no production connection is used.
 The adapter only translates MySQL placeholders/locking/functions, not behavior.
@@ -316,19 +316,108 @@ class CrossPlatformTests(unittest.TestCase):
         self.assertEqual('FAILED', self.task()['status'])
         self.assertFalse(self.sql('SELECT * FROM station_monitor_supplement_task'))
 
-    def test_transfer_waits_for_supplement_and_restores_original_formal_membership(self):
+    def test_primary_rollover_and_old_round_supplement_in_both_directions(self):
+        for batch, scope in ((10, 'BAIDU_MIN240_499'), (11, 'AMAP_MIN240_647')):
+            with self.subTest(scope=scope):
+                self.exhausted(batch)
+                old_round = self.sql('SELECT status FROM station_monitor_round WHERE id=?', (batch * 10,))[0]
+                self.assertEqual('COMPLETED', old_round['status'])
+                primary, reason = scheduler.claim({}, {'id': 'source-device'}, scope)
+                self.assertEqual('MONITOR_CLAIMED', reason)
+                next_task = self.sql('SELECT batch_id,source_key,round_no FROM station_monitor_task WHERE local_task_id=?',
+                                     (primary['id'],))[0]
+                self.assertEqual({'batch_id': batch, 'source_key': f'source-{batch}', 'round_no': 2}, next_task)
+
+                payload = self.claim_extra(batch)
+                self.assertEqual(batch * 10, payload['crossPlatform']['originRoundId'])
+                scheduler.ack({}, payload['id'], 'target-device', payload['leaseToken'])
+                scheduler.progress({}, payload['id'], 'target-device', payload['leaseToken'], {'step': 'DETAIL'})
+                self.snapshot(task=payload['id'], source=f'source-{batch}')
+                scheduler.complete({}, payload['id'], 'target-device', payload['leaseToken'], {'collected': 1})
+                supplement = self.sql('SELECT status,origin_round_id FROM station_monitor_supplement_task WHERE local_task_id=?',
+                                      (payload['id'],))[0]
+                self.assertEqual({'status': extra.COMPLETED, 'origin_round_id': batch * 10}, supplement)
+                self.assertEqual(2, self.sql('SELECT current_round FROM station_monitor_batch WHERE id=?', (batch,))[0]['current_round'])
+        self.assertEqual(2, len(self.sql('SELECT * FROM station_monitor_batch_station')))
+
+    def test_rollover_respects_configured_primary_interval(self):
+        self.sql('UPDATE station_monitor_batch SET target_interval_minutes=30 WHERE id=11')
         self.exhausted()
-        self.assertEqual(1, scheduler._start_next_round({}, 11))
+        next_task = self.sql('SELECT available_at FROM station_monitor_task WHERE batch_id=11 AND round_no=2')[0]
+        expected = (scheduler._as_utc(self.now) + timedelta(minutes=30)).strftime('%Y-%m-%d %H:%M:%S')
+        self.assertEqual(expected, str(next_task['available_at']))
+        payload, reason = scheduler.claim({}, {'id': 'source-device'}, 'AMAP_MIN240_647')
+        self.assertIsNone(payload)
+        self.assertEqual('QUEUE_EMPTY', reason)
+        self.tick(1800)
+        payload, reason = scheduler.claim({}, {'id': 'source-device'}, 'AMAP_MIN240_647')
+        self.assertEqual('MONITOR_CLAIMED', reason)
+        self.assertIsNotNone(payload)
+        self.assertEqual(extra.PENDING, self.supplement()['status'])
+
+    def test_finite_batch_drains_old_round_supplements_before_closing(self):
+        self.sql('UPDATE station_monitor_batch SET target_rounds=2 WHERE id=11')
+        self.exhausted()
+        primary, reason = scheduler.claim({}, {'id': 'source-device'}, 'AMAP_MIN240_647')
+        self.assertEqual('MONITOR_CLAIMED', reason)
+        self.snapshot(task=primary['id'])
+        scheduler.complete({}, primary['id'], 'source-device', primary['leaseToken'], {'collected': 1})
+        self.assertEqual('ACTIVE', self.sql('SELECT status FROM station_monitor_batch WHERE id=11')[0]['status'])
+        self.assertEqual(2, scheduler._start_next_round({}, 11))
+
         payload = self.claim_extra()
+        self.snapshot(task=payload['id'])
+        scheduler.complete({}, payload['id'], 'target-device', payload['leaseToken'], {'collected': 1})
+        batch = self.sql('SELECT current_round,status FROM station_monitor_batch WHERE id=11')[0]
+        self.assertEqual({'current_round': 2, 'status': 'COMPLETED'}, batch)
+
+    def test_issued_supplement_lease_survives_primary_rollover(self):
+        with patch.object(scheduler, '_advance_round'):
+            self.exhausted()
+        payload = self.claim_extra()
+        self.assertEqual(1, self.sql('SELECT current_round FROM station_monitor_batch WHERE id=11')[0]['current_round'])
+        self.assertEqual(2, scheduler._start_next_round({}, 11))
+        self.assertEqual(extra.LEASED, self.supplement()['status'])
         scheduler.ack({}, payload['id'], 'target-device', payload['leaseToken'])
         scheduler.progress({}, payload['id'], 'target-device', payload['leaseToken'], {'step': 'DETAIL'})
         self.snapshot(task=payload['id'])
         scheduler.complete({}, payload['id'], 'target-device', payload['leaseToken'], {'collected': 1})
         self.assertEqual(extra.COMPLETED, self.supplement()['status'])
-        next_tasks = self.sql('SELECT batch_id,source_key,attempt FROM station_monitor_task WHERE round_no=2')
-        self.assertEqual([{'batch_id': 11, 'source_key': 'source-11', 'attempt': 0}], next_tasks)
-        self.assertEqual(2, len(self.sql('SELECT * FROM station_monitor_batch_station')))
-        self.assertEqual('source-10', self.sql('SELECT source_key FROM station_monitor_batch_station WHERE batch_id=10')[0]['source_key'])
+        self.assertEqual(2, self.sql('SELECT current_round FROM station_monitor_batch WHERE id=11')[0]['current_round'])
+
+    def test_old_round_supplement_follows_parent_batch_pause_and_resume(self):
+        self.exhausted()
+        self.sql("UPDATE station_monitor_batch SET status='PAUSED' WHERE id=11")
+        payload, _ = scheduler.claim({}, {'id': 'target-device'}, 'BAIDU_MIN240_499')
+        self.assertIsNone(payload)
+        self.assertEqual(extra.PENDING, self.supplement()['status'])
+        self.assertIsNone(scheduler._start_next_round({}, 11))
+        self.sql("UPDATE station_monitor_batch SET status='ACTIVE' WHERE id=11")
+        payload = self.claim_extra()
+        self.assertEqual(110, payload['crossPlatform']['originRoundId'])
+
+    def test_finite_batch_closes_after_old_round_supplement_lease_expires(self):
+        self.sql('UPDATE station_monitor_batch SET target_rounds=2 WHERE id=11')
+        self.exhausted()
+        self.claim_extra()
+        primary, reason = scheduler.claim({}, {'id': 'source-device'}, 'AMAP_MIN240_647')
+        self.assertEqual('MONITOR_CLAIMED', reason)
+        self.snapshot(task=primary['id'])
+        scheduler.complete({}, primary['id'], 'source-device', primary['leaseToken'], {'collected': 1})
+        self.assertEqual('ACTIVE', self.sql('SELECT status FROM station_monitor_batch WHERE id=11')[0]['status'])
+        self.tick(extra.LEASE_SECONDS + 1)
+        self.assertIsNone(scheduler._start_next_round({}, 11))
+        self.assertEqual('COMPLETED', self.sql('SELECT status FROM station_monitor_batch WHERE id=11')[0]['status'])
+        self.assertEqual(extra.FAILED, self.supplement()['status'])
+        self.assertEqual('LEASE_EXPIRED', self.supplement()['last_error'])
+
+    def test_supplement_requires_consistent_origin_batch_and_round(self):
+        self.exhausted()
+        self.sql('UPDATE station_monitor_supplement_task SET origin_batch_id=10')
+        payload, _ = scheduler.claim({}, {'id': 'target-device'}, 'BAIDU_MIN240_499')
+        self.assertIsNone(payload)
+        self.assertEqual(extra.PENDING, self.supplement()['status'])
+        self.assertEqual(0, self.supplement()['attempt'])
 
     def test_supplement_failure_is_final_even_retryable_and_cannot_transfer_back(self):
         self.exhausted()
@@ -376,15 +465,16 @@ class CrossPlatformTests(unittest.TestCase):
     def test_unclaimed_supplement_remains_pending_until_target_platform_is_available(self):
         self.exhausted()
         self.tick(3600)
-        self.assertEqual(1, scheduler._start_next_round({}, 11))
+        self.assertEqual(2, scheduler._start_next_round({}, 11))
         self.assertEqual(extra.PENDING, self.supplement()['status'])
         self.assertEqual(0, self.supplement()['attempt'])
         self.claim_extra()
 
     def test_expired_supplement_lease_is_never_requeued(self):
         self.exhausted()
-        payload = self.claim_extra()
+        self.claim_extra()
         self.tick(extra.LEASE_SECONDS + 1)
+        scheduler.claim({}, {'id': 'target-device'}, 'BAIDU_MIN240_499')
         self.assertEqual(2, scheduler._start_next_round({}, 11))
         self.assertEqual(extra.FAILED, self.supplement()['status'])
         self.assertEqual(1, self.supplement()['attempt'])
@@ -399,8 +489,9 @@ class CrossPlatformTests(unittest.TestCase):
 
     def test_supplement_is_not_claimed_by_its_original_platform(self):
         self.exhausted()
-        payload, _ = scheduler.claim({}, {'id': 'source-device'}, 'AMAP_MIN240_647')
-        self.assertIsNone(payload)
+        payload, reason = scheduler.claim({}, {'id': 'source-device'}, 'AMAP_MIN240_647')
+        self.assertEqual('MONITOR_CLAIMED', reason)
+        self.assertNotIn('crossPlatform', payload)
         self.assertEqual(0, self.supplement()['attempt'])
 
 

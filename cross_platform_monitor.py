@@ -126,14 +126,15 @@ def enqueue(cursor, origin, reason, now):
     return task_id
 
 
-def expire(cursor, now, *, round_id=None, scope_key=None):
+def expire(cursor, now, *, batch_id=None, scope_key=None):
     """Never requeue an expired supplement: its single lease was already used."""
     stamp = unix_time(now)
     # Keep expiration on the indexed active slice rather than scanning all
     # completed supplements on every mobile poll.
     filter_sql, filter_params = "", ()
-    if round_id is not None:
-        filter_sql, filter_params = " AND origin_round_id=%s", (round_id,)
+    if batch_id is not None:
+        filter_sql = " AND origin_round_id IN (SELECT id FROM station_monitor_round WHERE batch_id=%s)"
+        filter_params = (batch_id,)
     elif scope_key is not None:
         filter_sql, filter_params = " AND target_scope_key=%s", (scope_key,)
     cursor.execute(
@@ -144,10 +145,14 @@ def expire(cursor, now, *, round_id=None, scope_key=None):
     )
 
 
-def has_active(cursor, round_id, now):
-    expire(cursor, now, round_id=round_id)
-    cursor.execute(f"SELECT COUNT(*) AS count FROM {TABLE} WHERE origin_round_id=%s AND status IN (0,1,2)", (round_id,))
-    return int(cursor.fetchone()["count"]) > 0
+def has_active_for_batch(cursor, batch_id, now):
+    expire(cursor, now, batch_id=batch_id)
+    cursor.execute(
+        f"SELECT 1 FROM station_monitor_round r JOIN {TABLE} s ON s.origin_round_id=r.id "
+        "WHERE r.batch_id=%s AND s.status IN (0,1,2) LIMIT 1",
+        (batch_id,),
+    )
+    return cursor.fetchone() is not None
 
 
 def claim(cursor, device, scope_key, now, token):
@@ -158,11 +163,12 @@ def claim(cursor, device, scope_key, now, token):
     cursor.execute(
         f"SELECT s.local_task_id FROM {TABLE} s "
         "JOIN station_monitor_task t ON t.local_task_id=s.origin_task_id "
+        "AND t.batch_id=s.origin_batch_id AND t.round_id=s.origin_round_id "
         "JOIN station_monitor_batch b ON b.id=s.origin_batch_id "
-        "JOIN station_monitor_round r ON r.id=s.origin_round_id "
+        "JOIN station_monitor_round r ON r.id=s.origin_round_id AND r.batch_id=b.id "
         "WHERE s.target_scope_key=%s AND s.status=0 AND s.attempt=0 AND s.available_at<=%s "
-        "AND b.status='ACTIVE' AND b.current_round=t.round_no "
-        "AND r.status='RUNNING' ORDER BY s.available_at,s.id LIMIT 20",
+        "AND b.status='ACTIVE' AND r.round_no<=b.current_round "
+        "AND r.status IN ('RUNNING','COMPLETED') ORDER BY s.available_at,s.id LIMIT 20",
         (scope_key, stamp),
     )
     row = None

@@ -684,6 +684,8 @@ def _start_next_round(db_config, batch_id):
                 conn.commit()
                 return None
             current_round = int(batch["current_round"] or 0)
+            target_rounds = int(batch["target_rounds"] or 0)
+            is_final_round = 0 < target_rounds <= current_round
             next_available_at = now
             if current_round:
                 cursor.execute(
@@ -700,7 +702,8 @@ def _start_next_round(db_config, batch_id):
                     if int(cursor.fetchone()["active_count"] or 0) > 0:
                         conn.commit()
                         return current_round
-                    if supplements.has_active(cursor, current_round_row["id"], now):
+                    # Drain pending supplements only when closing the whole batch.
+                    if is_final_round and supplements.has_active_for_batch(cursor, batch_id, now):
                         conn.commit()
                         return current_round
                     cursor.execute(
@@ -714,8 +717,7 @@ def _start_next_round(db_config, batch_id):
                     target_at = _as_utc(current_round_row["started_at"]) + timedelta(minutes=interval_minutes)
                     if target_at > _as_utc(now):
                         next_available_at = target_at.strftime("%Y-%m-%d %H:%M:%S")
-                target_rounds = int(batch["target_rounds"] or 0)
-                if target_rounds > 0 and current_round >= target_rounds:
+                if is_final_round:
                     cursor.execute(
                         "UPDATE station_monitor_batch SET status='COMPLETED', finished_at=%s, updated_at=%s WHERE id=%s",
                         (now, now, batch_id),
